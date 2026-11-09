@@ -1,0 +1,5 @@
+get_filename_component(opt_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(opt_llvm "${opt_root}/.work/pdfium-workspace/pdfium/third_party/llvm-build/Release+Asserts/bin")
+set(CMAKE_C_COMPILER "${opt_llvm}/clang-cl.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_CXX_COMPILER "${opt_llvm}/clang-cl.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_LINKER "${opt_llvm}/lld-link.exe" CACHE FILEPATH "" FORCE)

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "dependencies": {
+    "wxWidgets": {
+      "url": "https://github.com/wxWidgets/wxWidgets.git",
+      "revision": "6a42a4b999b127cf28a8b5fe686da6b8ca93a9b8",
+      "version": "3.3.4",
+      "submodules": true
+    },
+    "llama.cpp": {
+      "url": "https://github.com/ggml-org/llama.cpp.git",
+      "revision": "a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5",
+      "required_tokenizer_ancestor": "abeada335e2e78bd3fe63febafab7e900ce75810"
+    },
+    "PDFium": {
+      "url": "https://pdfium.googlesource.com/pdfium.git",
+      "revision": "96b71fa413f9fd9231bdc3e0a09e16ffcc5766f4",
+      "checkout_configuration": "minimal",
+      "transitive_dependencies": "upstream DEPS at this revision"
+    },
+    "depot_tools": {
+      "url": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+      "revision": "96a7c1418eedaa6bea333a8941e8a0078681b4d0"
+    },
+    "SQLite": {
+      "url": "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip",
+      "version": "3.50.4",
+      "sha256": "1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032"
+    },
+    "NotoSansCJKjp-Regular": {
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf",
+      "revision": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+      "license_url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+      "sha256": "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5"
+    }
+  },
+  "model_fixture": {
+    "repository": "pfnet/plamo-3-translate-0.8b-GGUF",
+    "revision": "1cf96ae02133958a20074bfdfab76517bb737d00",
+    "filename": "plamo-3-translate-0.8b-Q4_K_M.gguf",
+    "sha256": "70891ec70dc7ab4205745a38307867c2881b99239f20327927633abfe4bc9ec6",
+    "tokenizer_repository": "pfnet/plamo-3-translate-0.8b",
+    "tokenizer_revision": "8b4d42855622093e610ba9b90c2d2b59f8d5c15d",
+    "license": "PLaMo Community License; model is not distributed with the application"
+  },
+  "patches": [],
+  "validated_build_configurations": {
+    "macos-arm64-release": {
+      "stage": "M0 dependency probe only",
+      "llvm": "llvmorg-24-init-14453-ge063be79-1",
+      "xcode": "27.2 (27B52)",
+      "sdk": "27.2",
+      "deployment_target": "14.0",
+      "executed_os": "27.2",
+      "record": "docs/m0-macos-arm64.md"
+    }
+  }
+}

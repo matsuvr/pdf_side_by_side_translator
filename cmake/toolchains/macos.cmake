@@ -1,0 +1,10 @@
+# Use the same pinned LLVM distribution as the PDFium GN build.
+get_filename_component(opt_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(opt_llvm "${opt_root}/.work/pdfium-workspace/pdfium/third_party/llvm-build/Release+Asserts/bin")
+set(CMAKE_C_COMPILER "${opt_llvm}/clang" CACHE FILEPATH "" FORCE)
+set(CMAKE_CXX_COMPILER "${opt_llvm}/clang++" CACHE FILEPATH "" FORCE)
+set(CMAKE_OBJC_COMPILER "${opt_llvm}/clang" CACHE FILEPATH "" FORCE)
+set(CMAKE_OBJCXX_COMPILER "${opt_llvm}/clang++" CACHE FILEPATH "" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=${opt_llvm}/ld64.lld")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=${opt_llvm}/ld64.lld")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=${opt_llvm}/ld64.lld")

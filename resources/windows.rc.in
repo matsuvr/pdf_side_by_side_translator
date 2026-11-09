@@ -1,0 +1,2 @@
+#include <windows.h>
+201 RCDATA "@OPT_FONT_RESOURCE@"
