@@ -15,7 +15,7 @@ namespace opt {
 namespace {
 std::string utf8(const std::filesystem::path& p){auto s=p.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
 bool formal(std::string_view key){return key.starts_with("sha256:");}
-void export_header(std::ostream& out,Form form){out<<"Offline PDF Translator\nモデル: PLaMo 3 Translate 0.8B\n文体: "<<(form==Form::Plain?"常体":"敬体")
+void export_header(std::ostream& out,Form form){out<<"Offline PDF Translator\nモデル: PLaMo 3 Translate 0.8B\n文体: "<<(form==Form::Plain?"標準文体":"やさしい文体")
     <<"\nPLaMoを翻訳に利用しています。この生成物を利用して学習したモデルにはPLaMoコミュニティライセンス契約が適用されます。"
     <<"\n利用条件: https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/blob/1cf96ae02133958a20074bfdfab76517bb737d00/LICENSE/ja\n\n";}
 void atomic_export(const std::filesystem::path& destination,const std::function<void(std::ostream&)>& writer){

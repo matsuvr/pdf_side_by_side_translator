@@ -37,10 +37,21 @@ def main():
              "# name<TAB>form<TAB>source_utf8_hex<TAB>expected_full_prompt_ids",
              "# BOS is emitted by the template; encode(add_special_tokens=False)."]
     for name, source in cases.items():
-        for form in ("plain", "polite"):
+        for form in ("plain", "easy"):
+            options = {"source_lang": "en", "target_lang": "ja"}
+            if form == "easy":
+                options["target_lang"] = "ja(easy)"
+            else:
+                options["form"] = "plain"
             prompt = tokenizer.apply_chat_template(
                 [{"role": "user", "content": source}], tokenize=False,
-                add_generation_prompt=True, source_lang="en", target_lang="ja", form=form)
+                add_generation_prompt=True, **options)
+            if form == "easy":
+                canonical = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": source}], tokenize=False,
+                    add_generation_prompt=True, source_lang="en", target_lang="ja-easy")
+                if prompt != canonical:
+                    raise RuntimeError("Official ja(easy) alias differs from ja-easy")
             ids = tokenizer.encode(prompt, add_special_tokens=False)
             lines.append("\t".join([name + "-" + form, form, source.encode().hex(), " ".join(map(str, ids))]))
     destination = ROOT / "tests/fixtures/plamo3-pfml3-reference.tsv"

@@ -15,3 +15,5 @@ license texts, regenerate `THIRD_PARTY_NOTICES.txt` and its input lock, and
 repeat final runtime dependency inspection. Do not redistribute GGUF weights
 under this project's MIT License. Model and generated-output terms remain
 separate; see the included PLaMo contract and official model source.
+
+Build instructions are in [docs/development.md](docs/development.md).

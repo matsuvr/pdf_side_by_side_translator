@@ -1,8 +1,8 @@
 # Native input evidence
 
-The app follows DESIGN.md's Primary+Shift+Enter (all pages),
-Primary+G (page number), Primary+, (model settings) and F6/Shift+F6
-bindings. Bare navigation keys stay with their focused native control. Escape
+Current bindings are Ctrl/Command+G (page number), Ctrl/Command+,
+(model settings) and F6/Shift+F6 (focus). Ctrl/Command+Shift+Enter passes
+through to the focused native control in v0.1.1. Bare navigation keys stay with their focused native control. Escape
 closes search or clears a PDF selection; it is not a translation stop shortcut.
 
 Translation key bindings are routed after checking dialog depth and native
@@ -13,6 +13,8 @@ window. Marked text, other windows and menu tracking pass through. This is an
 app-local event monitor, not a system keyboard hook. The public NSTextInputClient
 marked-text state is checked before dispatch. On Windows, the native composition
 string state comes from IMM32 and wx's key hook handles routing.
+
+## Historical native checks (before v0.1.1)
 
 Native macOS testing initially found that Primary+G did not reach the wx hook
 when there was no focused child. After the Cocoa monitor and initial PDF focus

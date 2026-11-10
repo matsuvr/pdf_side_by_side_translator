@@ -138,7 +138,8 @@ def main():
             restored_binary=extracted/binary.name
             if audit_pe(restored_binary)['failures']:raise RuntimeError('Extracted executable dependency audit failed')
         verify_companions(extracted,companion_hashes)
-        if sha256(restored_binary)!=sha256(binary):raise RuntimeError('ZIP round-trip changed executable')
+        packaged_binary=bundle/'Contents/MacOS'/name if mac else staged_binary
+        if sha256(restored_binary)!=sha256(packaged_binary):raise RuntimeError('ZIP round-trip changed executable')
         shutil.move(str(archive),str(payload/archive_name));artifact=payload/archive_name
         manifest={**info,'artifact':artifact.name,'size':artifact.stat().st_size,'sha256':sha256(artifact),
           'files':{name:{'sha256':companion_hashes[name],'size':path.stat().st_size} for name,path in companions.items()},

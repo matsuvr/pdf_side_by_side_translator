@@ -15,7 +15,10 @@ enum class FinishReason {
     Completed, Cancelled, OutputLimit, ContextLimit, EmptyOutput,
     InvalidEncoding, InvalidModelOutput, ModelInputUnsupported, DecodeError, ModelUnavailable
 };
-enum class Form { Plain, Polite };
+// Value 1 belonged to the former polite style; keep it out of easy-mode cache keys.
+enum class Form { Plain=0, Easy=2 };
+inline std::string_view form_setting(Form form){return form==Form::Easy?"easy":"plain";}
+inline Form form_from_setting(std::string_view value){return value=="easy"||value=="polite"?Form::Easy:Form::Plain;}
 class ModelInputUnsupported final : public std::runtime_error {
 public: using std::runtime_error::runtime_error;
 };

@@ -8,6 +8,13 @@ row and cell separators. If the prompt leaves no room for generation, the app
 reports a context limit. Reaching the output limit leaves the page unfinished.
 The current cache profile excludes results produced by the earlier block planner.
 
+The translation menu offers standard and easy Japanese styles. Standard uses
+`target_lang="ja", form="plain"`. Easy uses `target_lang="ja(easy)"`, which the
+pinned official template normalizes to PFML3 `lang=ja-easy` without a `form`
+field. The former `polite` preference migrates to `easy`; its old numeric style
+value remains reserved so those translations cannot be reused as easy Japanese.
+Both styles are checked against full prompt IDs from the official tokenizer.
+
 On Windows x64, the P01 first page completed in one CPU generation (62 prompt
 tokens and 42 output tokens). A 1,285-token prompt for a longer page also
 completed in one generation, including its final sentence. The decoder excludes

@@ -1,3 +1,5 @@
+> Historical validation through v0.1.0. Current behavior and release checks: [implementation status](implementation-status.md).
+
 # Persistence and batch evidence
 
 The app uses one I/O owner thread for SQLite, file fingerprints and UTF-8 export.

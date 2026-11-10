@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / ".work"
 LOCK_PATH = ROOT / "deps/third_party.lock.json"
 TARGETS = ("windows-x64-release", "windows-x64-debug", "macos-arm64-release",
-           "macos-arm64-debug", "macos-x64-release")
+           "macos-arm64-debug")
 
 
 def lock():

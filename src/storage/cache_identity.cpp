@@ -11,7 +11,7 @@ std::string provisional_file_key(const FileSignature& s){
 std::string profile_digest(const ModelProfile& p,Form form,std::uint32_t capacity){
     return CanonicalKey{}.text("profile-id",p.id).number("prompt-version",p.prompt_version).number("chunk-algorithm",p.chunk_algorithm_version)
         .number("completion-version",p.completion_version).number("engine-cache-version",p.engine_cache_version)
-        .text("source-language",p.source_language).text("target-language",p.target_language).number("form",static_cast<unsigned>(form))
+        .text("source-language",p.source_language).text("target-language",form==Form::Easy?"ja-easy":p.target_language).number("form",static_cast<unsigned>(form))
         .number("actual-context",capacity).text("sampling","greedy-printable-bytes-v2").number("batch",512).number("micro-batch",128)
         .text("output-budget","min(remaining-context,max(512,2*source+128))-v2").finish();
 }

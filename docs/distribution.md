@@ -1,3 +1,5 @@
+> Historical validation through v0.1.0. Current behavior and release checks: [implementation status](implementation-status.md).
+
 # Distribution and publication checks
 
 ## Build and package provenance

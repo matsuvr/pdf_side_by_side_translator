@@ -26,7 +26,7 @@ int main(){
         check(first.input.tokens==fake_prompt(*source,request.form).tokens&&first.source_digest==opt::sha256(*source),"Page tokens or digest changed");
         const auto same=opt::ChunkPlanner::prepare(request,8192,prompt);
         check(first.plan_digest==same.plan_digest&&first.chunk_id!=same.chunk_id,"Execution UUID affected semantic identity");
-        request.form=opt::Form::Polite;
+        request.form=opt::Form::Easy;
         check(opt::ChunkPlanner::prepare(request,8192,prompt).prompt_ids_digest!=first.prompt_ids_digest,"Form change reused a different prompt's identity");
         const auto prompt_size=static_cast<std::uint32_t>(first.input.tokens.size());
         const auto near_limit=opt::ChunkPlanner::prepare(request,prompt_size+2,prompt);

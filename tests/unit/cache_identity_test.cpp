@@ -6,7 +6,11 @@ using namespace opt;
 void require(bool v,const char* why){if(!v)throw std::runtime_error(why);}
 int main(){try{
     ModelProfile p;const auto baseline=profile_digest(p,Form::Plain,8192);
-    require(profile_digest(p,Form::Polite,8192)!=baseline,"form included");require(profile_digest(p,Form::Plain,4096)!=baseline,"actual context included");
+    require(profile_digest(p,Form::Easy,8192)!=baseline,"form included");require(profile_digest(p,Form::Plain,4096)!=baseline,"actual context included");
+    require(profile_digest(p,Form::Easy,8192)!=profile_digest(p,static_cast<Form>(1),8192),"easy mode cannot reuse former polite translations");
+    require(form_setting(Form::Easy)=="easy"&&form_from_setting("easy")==Form::Easy,"easy setting round trips");
+    require(form_from_setting("polite")==Form::Easy,"former secondary style migrates to easy mode");
+    require(form_from_setting("plain")==Form::Plain&&form_from_setting("")==Form::Plain,"standard style remains the default");
     auto q=p;q.prompt_version++;require(profile_digest(q,Form::Plain,8192)!=baseline,"prompt version included");
     q=p;q.chunk_algorithm_version=1;require(profile_digest(q,Form::Plain,8192)!=baseline,"old block translations excluded from page cache");
     q=p;q.completion_version++;require(profile_digest(q,Form::Plain,8192)!=baseline,"completion rules included");

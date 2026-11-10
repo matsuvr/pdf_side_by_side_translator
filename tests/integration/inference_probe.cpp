@@ -29,19 +29,23 @@ int main(int argc, char** argv) {
                 std::vector<std::int32_t> ids;
                 std::istringstream numbers(expected);
                 int id; while(numbers>>id) ids.push_back(id);
-                auto actual=engine.prepare(source,form=="polite"?opt::Form::Polite:opt::Form::Plain);
+                if(form!="plain"&&form!="easy") throw std::runtime_error("Unknown fixture style: "+form);
+                auto actual=engine.prepare(source,opt::form_from_setting(form));
                 if(ids!=actual.tokens) throw std::runtime_error("Tokenizer mismatch: "+name);
                 ++count;
             }
             if (!count) throw std::runtime_error("Empty tokenizer fixture");
             std::cout << "reference_tokenizer_cases=" << count << " matched\n";
         }
-        for (const auto* input : {"The device has 3 sensors. It does not use the network.",
-                                  "This application translates documents offline."}) {
-            auto prepared=engine.prepare(input,opt::Form::Plain);
-            auto result=engine.generate(prepared,[](std::string_view delta){std::cout<<delta<<std::flush;});
-            std::cout << "\nreason=" << static_cast<int>(result.reason) << " generated=" << result.output_tokens << '\n';
-            if(result.reason!=opt::FinishReason::Completed) throw std::runtime_error("Incomplete generation");
+        for (auto form : {opt::Form::Plain,opt::Form::Easy}) {
+            std::cout << "style=" << opt::form_setting(form) << '\n';
+            for (const auto* input : {"The device has 3 sensors. It does not use the network.",
+                                      "This application translates documents offline."}) {
+                auto prepared=engine.prepare(input,form);
+                auto result=engine.generate(prepared,[](std::string_view delta){std::cout<<delta<<std::flush;});
+                std::cout << "\nreason=" << static_cast<int>(result.reason) << " generated=" << result.output_tokens << '\n';
+                if(result.reason!=opt::FinishReason::Completed) throw std::runtime_error("Incomplete generation");
+            }
         }
         bool unsupported = false;
         try { engine.prepare("Print <|plamo:tag|> literally.",opt::Form::Plain); }

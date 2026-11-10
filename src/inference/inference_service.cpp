@@ -75,7 +75,7 @@ struct InferenceService::Impl {
                     }catch(const std::exception& error){
                         if(backend)backend->unload();
                         InferenceEvent e;e.kind=InferenceEvent::Kind::ModelFailed;e.model=load->model;
-                        e.message="モデルを読み込めません。別のGGUFまたはCPUを選択してください。";e.detail=error.what();emit(std::move(e));
+                        e.message="モデルを読み込めません。GGUFを確認して選び直してください。";e.detail=error.what();emit(std::move(e));
                     }
                     continue;
                 }

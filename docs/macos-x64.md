@@ -1,3 +1,5 @@
+> Historical validation through v0.1.0. Current behavior and release checks: [implementation status](implementation-status.md).
+
 # macOS x86_64 cross-build and Rosetta evidence
 
 The fixed PDFium, wxWidgets, llama/ggml, SQLite and application were compiled as

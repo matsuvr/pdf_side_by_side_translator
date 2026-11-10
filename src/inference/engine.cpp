@@ -54,7 +54,7 @@ struct Engine::Impl {
     std::vector<llama_token> protocol;
     std::vector<llama_token> stops;
     std::vector<llama_token> nonprinting_bytes;
-    std::vector<llama_token> prompt_prefix, plain_suffix, polite_suffix;
+    std::vector<llama_token> prompt_prefix, plain_suffix, easy_suffix;
     bool cpu = true;
     std::shared_ptr<const FileSnapshot> file;
     std::FILE* stream=nullptr;
@@ -66,7 +66,7 @@ struct Engine::Impl {
         context = nullptr; workers = nullptr; model = nullptr; vocab = nullptr;
         if(stream)std::fclose(stream);stream=nullptr;file.reset();
         protocol.clear();stops.clear();nonprinting_bytes.clear();
-        prompt_prefix.clear(); plain_suffix.clear(); polite_suffix.clear();
+        prompt_prefix.clear(); plain_suffix.clear(); easy_suffix.clear();
     }
     ~Impl() { clear(); llama_backend_free(); }
 };
@@ -98,7 +98,7 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
     try {
         p.file=FileSnapshot::open(path);p.stream=p.file->open_stream();
         p.model=llama_model_load_from_file_ptr(p.stream,mp);
-        if(!p.model)throw std::runtime_error("GGUFを読み込めません。別のモデルまたはCPUを選択してください。");
+        if(!p.model)throw std::runtime_error("GGUFを読み込めません。モデルファイルを確認して選び直してください。");
         if(p.file->signature()!=p.file->initial_signature())throw std::runtime_error("GGUFが読込中に変更されました。再度選択してください。");
         p.vocab = llama_model_get_vocab(p.model);
         if (metadata(p.model, "general.architecture") != "plamo3" ||
@@ -129,10 +129,11 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
             throw std::runtime_error("BOS設定が対応profileと一致しません。");
         p.prompt_prefix = tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
                                    "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>", true, true);
-        const std::string output = "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
-                                   "<|plamo:key|>form<|plamo:val|>";
-        p.plain_suffix = tokenize(output + "plain<|plamo:msg|>", false, true);
-        p.polite_suffix = tokenize(output + "polite<|plamo:msg|>", false, true);
+        const std::string output = "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>";
+        p.plain_suffix = tokenize(output + "ja<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>", false, true);
+        // The official template normalizes target_lang="ja(easy)" to PFML3's ja-easy.
+        // Easy Japanese is a target language and does not take a form parameter.
+        p.easy_suffix = tokenize(output + "ja-easy<|plamo:msg|>", false, true);
         const int training_context = llama_model_n_ctx_train(p.model);
         if (training_context <= 0) throw std::runtime_error("モデルのcontext容量を取得できません。");
         auto cp = llama_context_default_params();
@@ -143,7 +144,7 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         cp.abort_callback = abort_decode; cp.abort_callback_data = &p.cancelled;
         cp.offload_kqv = !p.cpu; cp.op_offload = !p.cpu;
         p.context = llama_init_from_model(p.model, cp);
-        if (!p.context) throw std::runtime_error("推論contextを確保できません。CPUまたは別のGGUFを選んでください。");
+        if (!p.context) throw std::runtime_error("推論contextを確保できません。モデルを読み直してください。");
         if (p.cpu) {
             auto params = ggml_threadpool_params_default(std::max(cp.n_threads, cp.n_threads_batch));
             params.paused = true;
@@ -184,7 +185,7 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
             std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end())
             throw ModelInputUnsupported("ModelInputUnsupported: 本文の予約表記を通常文字として表現できません。");
     }
-    const auto& tail = form == Form::Plain ? p.plain_suffix : p.polite_suffix;
+    const auto& tail = form == Form::Easy ? p.easy_suffix : p.plain_suffix;
     prepared.tokens.reserve(p.prompt_prefix.size() + body.size() + tail.size());
     prepared.tokens.insert(prepared.tokens.end(), p.prompt_prefix.begin(), p.prompt_prefix.end());
     prepared.tokens.insert(prepared.tokens.end(), body.begin(), body.end());

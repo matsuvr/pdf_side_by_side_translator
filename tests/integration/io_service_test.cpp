@@ -32,7 +32,7 @@ int main(){const auto root=std::filesystem::temp_directory_path()/std::filesyste
         {
             IoService service(root/"state",root/"cache",[&](auto e){inbox.push(std::move(e));});
             require(inbox.wait(IoEvent::Kind::Initialized)->persistent,"persistent stores initialized on worker");
-            require(service.settings({{"form","polite"}})&&service.settings({{"auto","off"}}),"independent settings updates accepted");
+            require(service.settings({{"form","easy"}})&&service.settings({{"auto","off"}}),"independent settings updates accepted");
             const auto started=std::chrono::steady_clock::now();
             require(service.open_document(1,"provisional:session:1",file,snapshot),"open request accepted");
             require(std::chrono::steady_clock::now()-started<std::chrono::milliseconds(100),"fingerprint request does not hash on caller");
@@ -42,11 +42,13 @@ int main(){const auto root=std::filesystem::temp_directory_path()/std::filesyste
             // Barrier: export is sequenced after the pending edit and promotion.
             const auto output=root/"translation.txt";require(service.export_current(output,0,"日本語の訳文",PageState::Partial),"UTF-8 export queued");inbox.wait(IoEvent::Kind::Exported);
             require(bytes(output).find("未完了・部分結果")!=std::string::npos&&bytes(output).find("日本語の訳文")!=std::string::npos,"partial export labelled and encoded UTF-8");
-            require(bytes(output).find("文体: 常体")!=std::string::npos&&bytes(output).find("PLaMo 3 Translate 0.8B")!=std::string::npos&&bytes(output).find("学習したモデル")!=std::string::npos,"export retains model, form and output-use notice");
+            require(bytes(output).find("文体: 標準文体")!=std::string::npos&&bytes(output).find("PLaMo 3 Translate 0.8B")!=std::string::npos&&bytes(output).find("学習したモデル")!=std::string::npos,"export retains model, form and output-use notice");
+            require(service.export_current(root/"easy.txt",0,"やさしい日本語の訳文",PageState::Complete,Form::Easy),"easy-mode export queued");inbox.wait(IoEvent::Kind::Exported);
+            require(bytes(root/"easy.txt").find("文体: やさしい文体")!=std::string::npos,"easy-mode export uses the selected style label");
             service.stop();service.join();require(service.done(),"worker drains durable mutations on stop");
         }
         {
-            Store store(root/"state",root/"cache");require(store.settings().at("form")=="polite"&&store.settings().at("auto")=="off","settings coalescing never loses unrelated changes");
+            Store store(root/"state",root/"cache");require(store.settings().at("form")=="easy"&&store.settings().at("auto")=="off","settings coalescing never loses unrelated changes");
             auto value=store.document("sha256:"+sha256(input),native);require(value.overrides.size()==1&&*value.overrides[0].source=="利用者の原文","edit committed and promoted despite hash completion race");
         }
         Inbox second;

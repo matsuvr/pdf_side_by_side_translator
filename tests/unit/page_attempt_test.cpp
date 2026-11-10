@@ -40,8 +40,8 @@ int main(){try{
     PageAttempt rejected(stamp,"conditions",source,Form::Plain,false,corrupt);
     require(rejected.snapshot().id!=corrupt.id&&rejected.state()!=PageState::Complete,"manifest missing coverage rejected");
     const auto edit=std::make_shared<const std::string>("Edited first line.\nIt continues here.");
-    PageAttempt edited(stamp,"new-style",PageAttempt::source(layout,edit),Form::Polite,false,resumed.snapshot());
-    r=edited.next_request();require(r&&*r->source==*edit&&r->form==Form::Polite,"edited page and form must replace the extracted input");
+    PageAttempt edited(stamp,"new-style",PageAttempt::source(layout,edit),Form::Easy,false,resumed.snapshot());
+    r=edited.next_request();require(r&&*r->source==*edit&&r->form==Form::Easy,"edited page and form must replace the extracted input");
     PageAttempt empty(stamp,"none",PageAttempt::source(layout,std::make_shared<const std::string>(" \n")),Form::Plain);
     require(empty.state()==PageState::NoText&&!empty.next_request(),"blank edit must not fall back to original");
     PageAttempt control(stamp,"control",source,Form::Plain);
