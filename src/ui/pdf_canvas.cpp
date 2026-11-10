@@ -234,7 +234,7 @@ void PdfCanvas::paint(wxPaintEvent&){
                 gc->SetBrush(wxBrush(colour));const auto [a,b]=*range;
                 for(const auto source:source_ranges(*layout_,std::min(a,b),std::max(a,b)))
                     for(std::uint64_t i=source.first;i<static_cast<std::uint64_t>(source.first)+source.count&&i<layout_->glyphs.size();++i){
-                        const auto& g=layout_->glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds)continue;
+                        const auto& g=layout_->glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds||g.unicode_continuation)continue;
                         const auto p=transform_->pdf_to_page_px.apply({g.bounds.left,g.bounds.bottom});
                         const auto q=transform_->pdf_to_page_px.apply({g.bounds.right,g.bounds.top});
                         gc->DrawRectangle(origin_.x+std::min(p.x,q.x)/scale_,origin_.y+std::min(p.y,q.y)/scale_,

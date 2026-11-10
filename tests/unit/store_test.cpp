@@ -21,6 +21,7 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
         {
             Store store(s,c,1);require(store.state_persistent()&&store.cache_persistent(),"databases on disk");
             store.settings({{"form","plain"},{"model","日本語/model.gguf"}});
+            {Store second(s,c);require(!second.state_persistent()&&!second.cache_persistent(),"second owner uses isolated memory instead of clearing active pins");second.settings({{"form","secondary"}});require(store.settings().at("form")=="plain","second owner cannot overwrite first owner state");}
             store.save_override(provisional,"","fixture.pdf",{0,3,std::string("old edit")});
             store.save_override(provisional,"","fixture.pdf",{0,5,std::string("latest edit")});
             store.save_override(provisional,"","fixture.pdf",{0,4,std::string("late old edit")});

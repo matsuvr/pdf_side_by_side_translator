@@ -68,7 +68,7 @@ struct PdfEvent {
 class PdfService {
 public:
     using Delivery=std::function<void(std::shared_ptr<const PdfEvent>)>;
-    explicit PdfService(Delivery delivery);
+    explicit PdfService(Delivery delivery,std::filesystem::path font_resource_directory={});
     ~PdfService();
     PdfService(const PdfService&)=delete;
     PdfService& operator=(const PdfService&)=delete;

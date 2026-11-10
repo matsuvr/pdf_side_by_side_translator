@@ -1,4 +1,5 @@
 #include "pdf/pdf_service.hpp"
+#include "pdf/font_adapter.hpp"
 #include "platform/mapped_file.hpp"
 #include "pdf/layout.hpp"
 #include "fpdfview.h"
@@ -88,6 +89,7 @@ struct Library {Library(){FPDF_LIBRARY_CONFIG c{};c.version=2;FPDF_InitLibraryWi
 struct PdfService::Impl {
     struct OpenRequest {DocumentEpoch epoch;std::filesystem::path path;std::string password;};
     Delivery delivery;
+    std::filesystem::path font_directory;
     std::mutex mutex;
     std::condition_variable cv;
     std::optional<OpenRequest> opening;
@@ -99,7 +101,7 @@ struct PdfService::Impl {
     std::atomic<std::uint64_t> request_generation{0};
     std::atomic<DocumentEpoch> requested_document{0};
     std::thread worker;
-    explicit Impl(Delivery callback):delivery(std::move(callback)),worker([this]{run();}){}
+    explicit Impl(Delivery callback,std::filesystem::path fonts):delivery(std::move(callback)),font_directory(std::move(fonts)),worker([this]{run();}){}
     ~Impl(){stopping=true;cv.notify_one();if(worker.joinable())worker.join();}
     void emit(PdfEvent event){delivery(std::make_shared<const PdfEvent>(std::move(event)));}
 
@@ -127,6 +129,7 @@ struct PdfService::Impl {
     void run() noexcept {
         try {
             Library library;
+            PdfFontAdapter font_adapter(font_directory);
             std::unique_ptr<MappedFile> file;
             FPDF_DOCUMENT document=nullptr;
             std::list<std::pair<PageIndex,std::shared_ptr<Page>>> pages;
@@ -245,7 +248,7 @@ struct PdfService::Impl {
                         operation_page=search_request->page;operation_query=search_request->generation;
                         if(!file||file->signature()!=file->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
                         auto layout=search_request->cached_layout;
-                        if(!layout||layout->page!=operation_page||layout->layout_version!=1)
+                        if(!layout||layout->page!=operation_page||layout->layout_version!=PageLayout::current_version)
                             layout=extract_page(*get_page(operation_page),operation_page,stopping,requested_document,epoch).layout;
                         PdfEvent e;e.kind=PdfEvent::Kind::SearchResult;e.document=epoch;e.page=operation_page;
                         e.query_generation=search_request->generation;e.layout=layout;
@@ -288,7 +291,7 @@ struct PdfService::Impl {
         finished=true;
     }
 };
-PdfService::PdfService(Delivery callback):impl_(std::make_unique<Impl>(std::move(callback))){}
+PdfService::PdfService(Delivery callback,std::filesystem::path fonts):impl_(std::make_unique<Impl>(std::move(callback),std::move(fonts))){}
 PdfService::~PdfService()=default;
 void PdfService::open(DocumentEpoch epoch,const std::filesystem::path& path,std::string password){
     std::lock_guard lock(impl_->mutex);impl_->opening=Impl::OpenRequest{epoch,path,std::move(password)};

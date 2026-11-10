@@ -65,8 +65,11 @@ forced resume, promotion replay, native-object replacement, edit/hash races,
 schema recovery, pins and eviction, session cache boundaries, export safety and
 shutdown durability. Large-document memory/latency, native long-text viewport
 restoration and Windows/Intel behavior still need their recorded acceptance
-checks. The active-document pin has been tested with one Store owner; concurrent
-independent app instances are not yet an acceptance claim.
+checks. The state directory has an OS-held writer lease. A second Store owner
+uses isolated memory state and cache with an unsaved indication, so it cannot
+clear another active instance's pins or overwrite that instance's state. This
+is tested with two simultaneous owners; full two-process native UI acceptance
+is not yet claimed.
 
 Windows text-anchor and viewport handling follows the public Rich Edit contract
 for [EM_CHARFROMPOS](https://learn.microsoft.com/en-us/windows/win32/controls/em-charfrompos)

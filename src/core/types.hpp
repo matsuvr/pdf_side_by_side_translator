@@ -46,6 +46,8 @@ struct GlyphRecord {
     double font_size=0,angle_radians=0;
     std::uint32_t font_id=0;
     bool generated=false,valid_bounds=false,unicode_map_error=false;
+    std::uint32_t source_count=1;
+    bool unicode_continuation=false;
 };
 enum class BlockKind { Heading, Paragraph, Caption, Equation, Table, Margin, Unknown, Edited };
 struct TextLine {
@@ -66,7 +68,8 @@ struct TextBlock {
 struct PageLayout {
     enum class Availability { TextAvailable, NoTextLayer, UnicodeUnavailable, NoTranslatableText };
     PageIndex page=0;
-    std::uint32_t layout_version=1;
+    static constexpr std::uint32_t current_version=2;
+    std::uint32_t layout_version=current_version;
     std::vector<GlyphRecord> glyphs;
     std::vector<TextBlock> blocks;
     std::string reading_text_utf8;

@@ -6,6 +6,16 @@
 #include <chrono>
 #include <set>
 #include <thread>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace opt {
 namespace {
@@ -35,6 +45,38 @@ template<class Enum,class Array> Enum parse(std::string_view name,const Array& n
 std::string profile_key(const CacheContext& c){return CanonicalKey{}.text("model",c.model_key).text("profile",c.profile_digest).finish();}
 std::string semantic_key(const AttemptChunk& c){return CanonicalKey{}.text("plan",c.plan_digest).number("actual-output-limit",c.output_limit).finish();}
 bool valid_hash(std::string_view text){return text.size()==64&&std::all_of(text.begin(),text.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');});}
+// One disk writer owns cache pins. A second process gets an isolated in-memory
+// Store instead of clearing the first process's pins or replacing its cache.
+class StoreLease {
+#ifdef _WIN32
+    HANDLE file_=INVALID_HANDLE_VALUE;
+#else
+    int file_=-1;
+#endif
+public:
+    bool acquire(const std::filesystem::path& directory){
+        std::error_code error;std::filesystem::create_directories(directory,error);if(error)return false;
+        const auto path=directory/"storage.lock";
+#ifdef _WIN32
+        file_=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+        if(file_==INVALID_HANDLE_VALUE)return false;
+        FILE_ATTRIBUTE_TAG_INFO info{};
+        if(!GetFileInformationByHandleEx(file_,FileAttributeTagInfo,&info,sizeof(info))||(info.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)){CloseHandle(file_);file_=INVALID_HANDLE_VALUE;return false;}
+#else
+        file_=::open(path.c_str(),O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0600);if(file_<0)return false;
+        struct stat info{};
+        if(fstat(file_,&info)!=0||!S_ISREG(info.st_mode)||flock(file_,LOCK_EX|LOCK_NB)!=0){::close(file_);file_=-1;return false;}
+#endif
+        return true;
+    }
+    ~StoreLease(){
+#ifdef _WIN32
+        if(file_!=INVALID_HANDLE_VALUE)CloseHandle(file_);
+#else
+        if(file_>=0)::close(file_);
+#endif
+    }
+};
 constexpr const char* state_schema=R"SQL(
 CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE document_state(document_hash TEXT PRIMARY KEY,last_path TEXT NOT NULL,page_index INTEGER NOT NULL,modified_at INTEGER NOT NULL);
@@ -65,9 +107,12 @@ struct Store::Impl {
     std::thread::id owner=std::this_thread::get_id();
     std::string pinned;
     std::string session=new_uuid();
+    StoreLease lease;
+    bool memory_only=false;
     void owns()const{if(owner!=std::this_thread::get_id())throw std::logic_error("SQLite owner thread mismatch");}
     sqlite3* open(const std::filesystem::path& directory,const char* filename,const char* schema,bool disposable,bool& persistent){
         sqlite3* db=nullptr;const auto file=directory/filename;bool future=false;
+        if(memory_only){check(sqlite3_open_v2(":memory:",&db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),db);sql(db,schema);return db;}
         try{
             std::filesystem::create_directories(directory);
             check(sqlite3_open_v2(utf8(file).c_str(),&db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),db);
@@ -115,6 +160,8 @@ struct Store::Impl {
         }
     }
     Impl(std::filesystem::path s,std::filesystem::path c,std::uint64_t bytes):limit(bytes){
+        memory_only=!lease.acquire(s);
+        if(memory_only)messages.push_back("Storage directory is unavailable or another app instance owns it; this instance uses isolated memory state and cache");
         state=open(s,"state.sqlite3",state_schema,false,state_disk);cache=open(c,"cache.sqlite3",cache_schema,true,cache_disk);
         sql(cache,"DELETE FROM active_documents");
     }

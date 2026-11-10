@@ -1,0 +1,29 @@
+{
+  "origin": "Original geometric font and authored Unicode expectations",
+  "P06-unicode.pdf": {
+    "page_count": 1,
+    "contains": [
+      "office",
+      "café",
+      "é",
+      "👩‍💻",
+      "hyphen",
+      "re-enter"
+    ],
+    "excludes": [
+      "�",
+      "ﬁ",
+      "­"
+    ],
+    "surrogate_mapping": [
+      "👩",
+      "💻"
+    ]
+  },
+  "P06-japanese-fallback.pdf": {
+    "page_count": 1,
+    "contains": [
+      "日本語の読書と翻訳"
+    ]
+  }
+}

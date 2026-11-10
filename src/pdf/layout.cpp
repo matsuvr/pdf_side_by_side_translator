@@ -143,7 +143,7 @@ void append_fragment(TextBlock& block,const Fragment& fragment,const LayoutOptio
                 adjacent=true;
                 for(auto i=first+1;i<last;++i){
                     if(space(raw[i].unicode))blanks.push_back({i,1});
-                    else if(raw[i].unicode!=0xad){adjacent=false;blanks.clear();break;}
+                    else if(raw[i].unicode!=0xad&&!raw[i].unicode_continuation){adjacent=false;blanks.clear();break;}
                 }
             }
             // Ink bounds contain side bearings: they are not glyph advances.
@@ -152,7 +152,7 @@ void append_fragment(TextBlock& block,const Fragment& fragment,const LayoutOptio
             else if(!adjacent&&gap>fragment.height*options.word_gap&&
                     (!(wide(c)&&wide(previous->glyph->unicode))||gap>fragment.height*0.8))append(block," ",{});
         }
-        append(block,normalized(c),{{item.glyph->index,1}});previous=&item;
+        append(block,normalized(c),{{item.glyph->index,item.glyph->source_count}});previous=&item;
     }
     PdfRect rect=fragment.items.front().glyph->bounds;
     for(const auto& item:fragment.items){const auto r=item.glyph->bounds;rect={std::min(rect.left,r.left),std::min(rect.bottom,r.bottom),std::max(rect.right,r.right),std::max(rect.top,r.top)};}
@@ -231,16 +231,36 @@ std::string folded(std::string_view text){std::string out(text);for(char& c:out)
 PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Affine2D matrix,double width,double height) const{
     PageLayout result;result.page=page;result.glyphs=std::move(glyphs);result.pdf_to_layout=matrix;
     if(result.glyphs.empty())return result;
+    // The pinned PDFium can expose UTF-16 surrogate code units as two character
+    // records for one ToUnicode mapping, even on platforms with 32-bit wchar_t.
+    // Keep both original PDF indices while emitting one valid UTF-8 scalar.
+    for(std::size_t i=0;i<result.glyphs.size();++i){
+        auto& g=result.glyphs[i];if(g.unicode_continuation)continue;
+        if(g.unicode>=0xd800&&g.unicode<=0xdbff&&i+1<result.glyphs.size()){
+            auto& next=result.glyphs[i+1];
+            if(next.unicode>=0xdc00&&next.unicode<=0xdfff&&next.index==g.index+1&&next.font_id==g.font_id&&
+               std::hypot(next.origin.x-g.origin.x,next.origin.y-g.origin.y)<0.01){
+                g.unicode=0x10000+((g.unicode-0xd800)<<10)+(next.unicode-0xdc00);g.source_count=2;
+                next.unicode_continuation=true;
+                if(next.valid_bounds){if(!g.valid_bounds)g.bounds=next.bounds;else g.bounds={std::min(g.bounds.left,next.bounds.left),std::min(g.bounds.bottom,next.bounds.bottom),std::max(g.bounds.right,next.bounds.right),std::max(g.bounds.top,next.bounds.top)};g.valid_bounds=true;}
+                continue;
+            }
+        }
+        if(g.unicode>=0xd800&&g.unicode<=0xdfff){g.unicode=0xfffd;g.unicode_map_error=true;}
+    }
     std::array<std::vector<Item>,4> directions;
     std::vector<double> heights;
-    bool unicode_available=false,usable_visible_text=false;
+    bool unicode_available=false,usable_visible_text=false,visible_character=false;
     const double unit=(std::hypot(matrix.a,matrix.b)+std::hypot(matrix.c,matrix.d))/2;
     for(const auto& g:result.glyphs){
-        if(g.unicode&&g.unicode!=0xfffd&&!g.unicode_map_error)unicode_available=true;
-        if(!g.valid_bounds||space(g.unicode))continue;
+        if(g.unicode_continuation)continue;
+        if(!g.valid_bounds)continue;
         const auto p0=matrix.apply({g.bounds.left,g.bounds.bottom}),p1=matrix.apply({g.bounds.right,g.bounds.top});
         Rect visible{std::min(p0.x,p1.x),std::min(p0.y,p1.y),std::max(p0.x,p1.x),std::max(p0.y,p1.y)};
         if(visible.right<=0||visible.left>=width||visible.bottom<=0||visible.top>=height)continue;
+        visible_character=true;
+        if(g.unicode&&g.unicode!=0xfffd&&!g.unicode_map_error)unicode_available=true;
+        if(space(g.unicode))continue;
         if(g.unicode&&g.unicode!=0xfffd&&g.unicode!=0xad&&!g.unicode_map_error)usable_visible_text=true;
         auto origin=matrix.apply(g.origin);
         const auto along=matrix.apply({g.origin.x+std::cos(g.angle_radians),g.origin.y+std::sin(g.angle_radians)});
@@ -319,7 +339,7 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
         for(auto m:block.reading_mapping){m.utf8_begin+=offset;m.utf8_end+=offset;result.reading_mapping.push_back(std::move(m));}
         for(auto line:block.lines){line.utf8_begin+=offset;line.utf8_end+=offset;result.lines.push_back(line);}
     }
-    result.availability=!unicode_available?PageLayout::Availability::UnicodeUnavailable:
+    result.availability=!visible_character?PageLayout::Availability::NoTranslatableText:!unicode_available?PageLayout::Availability::UnicodeUnavailable:
         usable_visible_text&&has_model_block?PageLayout::Availability::TextAvailable:PageLayout::Availability::NoTranslatableText;
     return result;
 }
@@ -372,7 +392,7 @@ std::size_t nearest_text_position(const PageLayout& layout,PdfPoint point){
     double best=std::numeric_limits<double>::infinity();std::size_t result=begin;
     for(auto m=first;m!=layout.reading_mapping.end()&&m->utf8_begin<end;++m)for(const auto range:m->source_ranges){
         for(std::uint64_t i=range.first;i<static_cast<std::uint64_t>(range.first)+range.count&&i<layout.glyphs.size();++i){
-            const auto& g=layout.glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds||space(g.unicode))continue;
+            const auto& g=layout.glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds||space(g.unicode)||g.unicode_continuation)continue;
             const auto box=rect(g.bounds);const auto d=distance(box);
             if(d<best){
                 best=d;

@@ -207,7 +207,7 @@ struct ApplicationController::Impl {
         pdf=std::make_unique<PdfService>([this](auto event){
             if(event->document!=wanted_epoch.load())return;
             if(inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(PDF_WAKE));
-        });
+        },native_path(wxStandardPaths::Get().GetResourcesDir()));
         inference=std::make_unique<InferenceService>([this](auto event){
             if(event->model!=wanted_model.load())return;
             if(inference_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(INFERENCE_WAKE));
@@ -468,7 +468,8 @@ struct ApplicationController::Impl {
                 frame->SetSize(wxRect(wxPoint(std::clamp(static_cast<int>(x),area.x,area.GetRight()-size.x+1),std::clamp(static_cast<int>(y),area.y,area.GetBottom()-size.y+1)),size));
                 if(value("window-maximized")=="1")frame->Maximize();
             }
-            if(!event.warnings.empty())frame->SetStatusText(wxS("保存データの一部を読み込めません。現在の操作は続けられます。"),0);
+            if(!event.persistent)frame->SetStatusText(wxS("保存先を利用できません。変更はこの起動中だけ保持されます。"),0);
+            else if(!event.warnings.empty())frame->SetStatusText(wxS("保存データの一部を読み込めません。現在の操作は続けられます。"),0);
             if(!model_path.empty())load_model(true);break;
         }
         case IoEvent::Kind::DocumentLoaded:
