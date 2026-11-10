@@ -1,0 +1,6 @@
+#pragma once
+namespace opt::product {
+inline constexpr auto name="@OPT_PRODUCT_NAME@";
+inline constexpr auto version="@OPT_VERSION@";
+inline constexpr auto bundle_id="@OPT_BUNDLE_ID@";
+}

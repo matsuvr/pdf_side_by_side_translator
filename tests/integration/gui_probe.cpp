@@ -86,6 +86,10 @@ public:
         if (!opt::register_private_font(std::filesystem::u8path(wxStandardPaths::Get().GetResourcesDir().ToUTF8().data()),font_error))
             wxLogWarning("同梱フォントの登録に失敗しました: %s",wxString::FromUTF8(font_error));
         frame_=new wxFrame(nullptr,wxID_ANY,"Offline PDF Translator — 依存関係検証",wxDefaultPosition,wxSize(1280,860));
+        auto menu=new wxMenu;
+        menu->Append(wxID_EXIT,"終了\tCtrl+Q");
+        auto bar=new wxMenuBar;bar->Append(menu,"ファイル");frame_->SetMenuBar(bar);
+        frame_->Bind(wxEVT_MENU,[this](wxCommandEvent&){frame_->Close();},wxID_EXIT);
         auto split=new wxSplitterWindow(frame_);
         auto left=new wxScrolledWindow(split); left->SetScrollRate(10,10);
         auto ls=new wxBoxSizer(wxVERTICAL);

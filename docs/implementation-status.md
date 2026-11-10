@@ -14,7 +14,7 @@ validated release. DESIGN.md is the acceptance specification.
 | Milestone | Status | Evidence |
 | --- | --- | --- |
 | M0 static dependency probes | Mac arm64 probe verified; cross-platform acceptance pending | [Evidence](m0-macos-arm64.md) |
-| M1 reading interface | Pending | |
+| M1 reading interface | Implemented on Mac arm64; initial sash fix and broader fixture checks remain | Native page navigation, 200% zoom, rotation and fit-page visually verified; async PDF tests passed |
 | M2 layout, selection, search | Pending | |
 | M3 real-model translation | Pending | |
 | M4 persistence and batch | Pending | |
