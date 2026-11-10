@@ -22,6 +22,7 @@
 #include <wx/splitter.h>
 #include <wx/stdpaths.h>
 #include <wx/textdlg.h>
+#include <wx/numdlg.h>
 #include <wx/wrapsizer.h>
 #include <wx/clipbrd.h>
 #include <wx/checkbox.h>
@@ -36,14 +37,15 @@
 #include <set>
 #include <limits>
 #include <chrono>
+#include <utility>
 
 namespace opt {
 namespace {
 wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(INFERENCE_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(IO_WAKE,wxThreadEvent);
-enum class Command { Open, Close, Previous, Next, GoPage, FocusPage, FitWidth, FitPage, Zoom, Left, Right, Equal, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Translate, Retranslate, TranslateAll, Stop, Automatic, Plain, Polite, ModelSettings, CpuRetry, ExportPage, ExportComplete, ClearCache, Help, About, Quit };
-enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,FitPage,Zoom,Left,Right,Equal,Help,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch,Translate,Retranslate,TranslateAll,Stop,Automatic,Plain,Polite,ModelSettings,CpuRetry,ExportPage,ExportComplete,ClearCache };
+enum class Command { Open, Close, Previous, Next, GoPage, FocusPage, FitWidth, FitPage, Zoom, Left, Right, Equal, TextSize, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Translate, Retranslate, TranslateAll, Stop, Automatic, Plain, Polite, ModelSettings, CpuRetry, ExportPage, ExportComplete, ClearCache, Help, About, Quit };
+enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,FitPage,Zoom,Left,Right,Equal,TextSize,Help,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch,Translate,Retranslate,TranslateAll,Stop,Automatic,Plain,Polite,ModelSettings,CpuRetry,ExportPage,ExportComplete,ClearCache };
 struct ModalScope {unsigned& depth;explicit ModalScope(unsigned& value):depth(value){++depth;}~ModalScope(){--depth;}};
 bool copy_text(std::string_view text){
     if(!wxTheClipboard->Open())return false;
@@ -137,6 +139,10 @@ struct ApplicationController::Impl {
     wxMenu* recent_menu=nullptr;
     std::optional<ReadingPosition> last_saved_position;
     std::optional<std::pair<PageIndex,std::size_t>> pending_text_anchor;
+    int text_size=14;
+    struct ResizeAnchor {DocumentEpoch document;PageIndex page;std::size_t offset;};
+    std::optional<ResizeAnchor> resize_text_anchor;
+    bool resize_restore_queued=false;
     ModelState model_state=ModelState::Unconfigured;
     ModelEpoch model_epoch=0;
     SettingsRevision settings_revision=1;
@@ -186,7 +192,7 @@ struct ApplicationController::Impl {
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){begin_search(false,false);},search_timer.GetId());
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){begin_translation();},translate_timer.GetId());
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){if(translation_dirty)refresh_translation();},stream_timer.GetId());
-        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){save_reading_position();},position_timer.GetId());
+        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){save_reading_position();update_window_title();},position_timer.GetId());
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){advance_batch();},batch_timer.GetId());
         pdf=std::make_unique<PdfService>([this](auto event){
             if(event->document!=wanted_epoch.load())return;
@@ -252,7 +258,13 @@ struct ApplicationController::Impl {
         if(attempt){attempt->interrupt();save_attempt();attempt.reset();}visible_attempt.reset();attempt_view_only=false;
         translation_dirty=false;
     }
-    void storage_result(bool accepted){if(!accepted){storage_warning=true;frame->SetStatusText(wxS("保存待ちの件数が上限に達しました。この変更は未保存です。"),0);}}
+    void update_window_title(){
+        if(!frame)return;auto title=wxString::FromUTF8(product::name);
+        if(document_state!=DocumentState::Empty&&!path.empty())title=display_path(path.filename())+wxS(" — ")+title;
+        if(storage_warning)title+=wxS(" [未保存の変更あり]");
+        if(frame->GetTitle()!=title)frame->SetTitle(title);
+    }
+    void storage_result(bool accepted){if(!accepted){storage_warning=true;update_window_title();frame->SetStatusText(wxS("保存待ちの件数が上限に達しました。この変更は未保存です。"),0);}}
     void save_attempt(){if(io&&attempt)storage_result(io->save_attempt(attempt_context,attempt->snapshot()));}
     void request_source(PageIndex target){
         if(loaded_sources.contains(target)||requested_sources.contains(target))return;
@@ -272,7 +284,7 @@ struct ApplicationController::Impl {
         const auto bytes=model_path.u8string();
         std::map<std::string,std::string> values{{"model-path",std::string(reinterpret_cast<const char*>(bytes.data()),bytes.size())},
             {"backend",backend_preference==BackendPreference::Cpu?"cpu":"auto"},{"form",form==Form::Plain?"plain":"polite"},{"auto-translate",auto_translate?"1":"0"},
-            {"zoom-mode",std::to_string(static_cast<unsigned>(canvas->zoom_mode()))},{"zoom-percent",std::to_string(canvas->zoom_percent())}};
+            {"zoom-mode",std::to_string(static_cast<unsigned>(canvas->zoom_mode()))},{"zoom-percent",std::to_string(canvas->zoom_percent())},{"text-size",std::to_string(text_size)}};
         if(split->GetClientSize().x>0)values["split-ratio"]=std::to_string(static_cast<double>(split->GetSashPosition())/split->GetClientSize().x);
         values["window-maximized"]=frame->IsMaximized()?"1":"0";
         if(!frame->IsMaximized()&&!frame->IsIconized()){
@@ -281,6 +293,20 @@ struct ApplicationController::Impl {
             values["window-x"]=std::to_string(position.x);values["window-y"]=std::to_string(position.y);
         }
         storage_result(io->settings(std::move(values)));
+    }
+    void set_text_size(int size){
+        const auto anchor=text_logical_anchor(*translation);
+        long begin=0,end=0;translation->GetSelection(&begin,&end);
+        text_size=size;auto font=translation->GetFont();font.SetPointSize(size);translation->SetFont(font);
+        translation->SetSelection(begin,end);restore_text_logical_anchor(*translation,anchor);
+    }
+    void capture_resize_anchor(){if(!resize_text_anchor)resize_text_anchor=ResizeAnchor{epoch,page,text_logical_anchor(*translation)};}
+    void restore_after_resize(){
+        if(resize_restore_queued)return;resize_restore_queued=true;
+        owner.CallAfter([this]{
+            resize_restore_queued=false;auto anchor=std::exchange(resize_text_anchor,{});
+            if(frame&&!closing&&anchor&&anchor->document==epoch&&anchor->page==page)restore_text_logical_anchor(*translation,anchor->offset);
+        });
     }
     void refresh_translation(){
         translation_dirty=false;const auto* shown=current_attempt();if(!shown)return;
@@ -459,6 +485,8 @@ struct ApplicationController::Impl {
             auto_translate=value("auto-translate")!="0";form=value("form")=="polite"?Form::Polite:Form::Plain;
             backend_preference=value("backend")=="cpu"?BackendPreference::Cpu:BackendPreference::Automatic;
             model_path=native_path(wxString::FromUTF8(value("model-path")));
+            long saved_text_size=0;
+            if(wxString::FromUTF8(value("text-size")).ToLong(&saved_text_size)&&saved_text_size>=6&&saved_text_size<=72)set_text_size(static_cast<int>(saved_text_size));
             double number=0;
             if(wxString::FromUTF8(value("split-ratio")).ToDouble(&number)&&std::isfinite(number)&&number>=0.15&&number<=0.85)split->SetSashPosition(static_cast<int>(split->GetClientSize().x*number));
             long mode=0;double percent=100;
@@ -610,16 +638,20 @@ struct ApplicationController::Impl {
         text->OSXEnableAutomaticQuoteSubstitution(false);text->OSXEnableAutomaticDashSubstitution(false);
 #endif
         auto buttons=new wxBoxSizer(wxHORIZONTAL);
+        bool use_auto=existing==overrides.end();
+        text->Bind(wxEVT_TEXT,[&](wxCommandEvent&){use_auto=false;});
         auto reset=new wxButton(&dialog,wxID_REVERT_TO_SAVED,wxS("自動抽出へ戻す"));buttons->Add(reset,0,wxALL,frame->FromDIP(4));buttons->AddStretchSpacer();
         buttons->Add(new wxButton(&dialog,wxID_CANCEL,wxS("キャンセル")),0,wxALL,frame->FromDIP(4));
-        auto use=new wxButton(&dialog,wxID_OK,wxS("この原文を使う"));use->SetDefault();buttons->Add(use,0,wxALL,frame->FromDIP(4));root->Add(buttons,0,wxEXPAND|wxALL,frame->FromDIP(4));
-        reset->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){dialog.EndModal(wxID_REVERT_TO_SAVED);});
+        auto save=new wxButton(&dialog,wxID_OK,wxS("保存"));save->SetDefault();buttons->Add(save,0,wxALL,frame->FromDIP(4));
+        auto retranslate=new wxButton(&dialog,wxID_APPLY,wxS("保存して再翻訳"));buttons->Add(retranslate,0,wxALL,frame->FromDIP(4));root->Add(buttons,0,wxEXPAND|wxALL,frame->FromDIP(4));
+        retranslate->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){dialog.EndModal(wxID_APPLY);});
+        reset->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){text->ChangeValue(wxString::FromUTF8(layout.reading_text_utf8));use_auto=true;});
         dialog.SetSizer(root);dialog.CentreOnParent();text->SetFocus();
         const int choice=show_modal(dialog);
         if(editing_document!=epoch)return;
-        if(choice==wxID_OK)overrides[editing_page]=std::make_shared<const std::string>(text->GetValue().ToStdString(wxConvUTF8));
-        else if(choice==wxID_REVERT_TO_SAVED)overrides.erase(editing_page);
-        else return;
+        if(choice!=wxID_OK&&choice!=wxID_APPLY)return;
+        if(use_auto)overrides.erase(editing_page);
+        else overrides[editing_page]=std::make_shared<const std::string>(text->GetValue().ToStdString(wxConvUTF8));
         auto& revision=source_revisions[editing_page];revision=std::max(revision+1,static_cast<SourceRevision>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count()));
         locally_edited.insert(editing_page);
         if(io&&!native_document_key.empty()){
@@ -628,7 +660,7 @@ struct ApplicationController::Impl {
             storage_result(io->save_override(epoch,native_document_key,document_key,path,std::move(value)));
             frame->SetStatusText(wxS("翻訳用原文を更新しました。保存しています…"),0);
         }else frame->SetStatusText(wxS("翻訳用原文はこのセッション内だけで保持されています。"),0);
-        stop_batch(true);if(editing_page==page){invalidate_translation();schedule_translation();}
+        stop_batch(true);if(editing_page==page){invalidate_translation();schedule_translation(choice==wxID_APPLY,choice==wxID_APPLY);}
     }
     void route(int id,Command command){
         frame->Bind(wxEVT_MENU,[this,command](wxCommandEvent&){execute(command);},id);
@@ -777,6 +809,11 @@ struct ApplicationController::Impl {
         }
         case Command::Left:canvas->rotate(-1);break;case Command::Right:canvas->rotate(1);break;
         case Command::Equal:split->SetSashPosition(split->GetClientSize().x/2);break;
+        case Command::TextSize:{
+            wxNumberEntryDialog dialog(frame,wxS("訳文の文字サイズをポイントで指定してください。"),wxS("文字サイズ (6〜72)"),wxS("訳文の文字サイズ"),text_size,6,72);
+            if(show_modal(dialog)==wxID_OK){preferences_touched=true;set_text_size(static_cast<int>(dialog.GetValue()));save_preferences();}
+            break;
+        }
         case Command::Copy:case Command::SelectAll:
             if(auto* native=wxDynamicCast(wxWindow::FindFocus(),wxTextCtrl)){if(command==Command::Copy)native->Copy();else native->SelectAll();}
             else if(wxWindow::FindFocus()==canvas){if(command==Command::Copy)canvas->copy_selection();else canvas->select_all();}
@@ -822,11 +859,16 @@ struct ApplicationController::Impl {
             reading_touched=true;const auto exporting_page=page;const auto* shown=current_attempt();
             const auto text=command==Command::ExportPage&&shown?shown->display_text():std::string{};
             const auto state=shown?shown->state():PageState::NotStarted;
+            const auto exporting_form=form;
             CacheContext context;context.document_key=document_key;context.model_key=model_key;context.profile_digest=profile_digest(model_profile,form,model_capacity);
+            if(command==Command::ExportPage&&state!=PageState::Complete){
+                wxMessageDialog partial(frame,wxS("このページの訳文は未完了です。部分結果と明記して書き出します。"),wxS("部分結果を書き出す"),wxOK|wxCANCEL|wxICON_INFORMATION);
+                partial.SetOKLabel(wxS("部分結果を含めて書き出す"));if(show_modal(partial)!=wxID_OK)break;
+            }
             wxFileDialog dialog(frame,wxS("訳文をUTF-8テキストへ書き出す"),{},wxS("translation.txt"),wxS("テキスト (*.txt)|*.txt"),wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
             if(show_modal(dialog)!=wxID_OK)break;
-            if(command==Command::ExportPage)storage_result(io->export_current(native_path(dialog.GetPath()),exporting_page,text,state));
-            else storage_result(io->export_complete(native_path(dialog.GetPath()),std::move(context)));break;
+            if(command==Command::ExportPage)storage_result(io->export_current(native_path(dialog.GetPath()),exporting_page,text,state,exporting_form));
+            else storage_result(io->export_complete(native_path(dialog.GetPath()),std::move(context),exporting_form));break;
         }
         case Command::ClearCache:stop_batch(true);if(io)storage_result(io->clear_cache());break;
         case Command::Help:{
@@ -842,6 +884,7 @@ struct ApplicationController::Impl {
         std::string error;
         const bool font_ok=register_private_font(native_path(wxStandardPaths::Get().GetResourcesDir()),error);
         frame=new wxFrame(nullptr,wxID_ANY,wxString::FromUTF8(product::name));
+        if(font_ok){auto font=frame->GetFont();font.SetFaceName("Noto Sans CJK JP");frame->SetFont(font);}
         auto area=wxDisplay(0U).GetClientArea();auto size=frame->FromDIP(wxSize(1280,860));
         frame->SetSize(wxSize(std::min(size.x,area.width),std::min(size.y,area.height)));frame->Centre();
         frame->SetMinSize(frame->FromDIP(wxSize(640,400)));
@@ -854,6 +897,7 @@ struct ApplicationController::Impl {
         auto view_menu=new wxMenu;
         view_menu->Append(FitWidth,wxS("幅に合わせる"));view_menu->Append(FitPage,wxS("ページ全体"));
         view_menu->Append(Left,wxS("左回転"));view_menu->Append(Right,wxS("右回転"));view_menu->Append(Equal,wxS("左右を均等にする"));
+        view_menu->Append(TextSize,wxS("訳文の文字サイズ…"));
 #ifdef __WXMAC__
         view_menu->Append(FocusPage,wxS("ページ番号へ (⌘G)"));
         view_menu->Append(Previous,wxS("前のページ\tCtrl+["));view_menu->Append(Next,wxS("次のページ\tCtrl+]"));
@@ -883,6 +927,7 @@ struct ApplicationController::Impl {
         route(Open,Command::Open);route(Close,Command::Close);route(Previous,Command::Previous);route(Next,Command::Next);
         route(GoPage,Command::GoPage);route(FitWidth,Command::FitWidth);route(FitPage,Command::FitPage);route(Zoom,Command::Zoom);
         route(FocusPage,Command::FocusPage);
+        route(TextSize,Command::TextSize);
         route(Left,Command::Left);route(Right,Command::Right);route(Equal,Command::Equal);route(Help,Command::Help);route(About,Command::About);
         route(wxID_COPY,Command::Copy);route(wxID_SELECTALL,Command::SelectAll);route(wxID_EXIT,Command::Quit);
         route(CopySource,Command::CopySource);route(EditSource,Command::EditSource);
@@ -964,6 +1009,10 @@ struct ApplicationController::Impl {
             if(e.CanVeto())e.Veto();
         });
         headings();frame->Show();frame->Layout();split->SetSashPosition(split->GetClientSize().x/2);
+        frame->Bind(wxEVT_SIZING,[this](wxSizeEvent& e){capture_resize_anchor();e.Skip();});
+        frame->Bind(wxEVT_SIZE,[this](wxSizeEvent& e){capture_resize_anchor();restore_after_resize();e.Skip();});
+        split->Bind(wxEVT_SPLITTER_SASH_POS_CHANGING,[this](wxSplitterEvent& e){capture_resize_anchor();e.Skip();});
+        split->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED,[this](wxSplitterEvent& e){restore_after_resize();e.Skip();});
         native_shortcuts=std::make_unique<NativeShortcutMonitor>(*frame,[this](ShortcutKey key,ShortcutContext state){return handle_shortcut(key,state);});
         stream_timer.Start(50);
         position_timer.Start(1000);

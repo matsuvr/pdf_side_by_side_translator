@@ -67,4 +67,16 @@ inline bool has_usable_text(std::string_view text){
     for(const auto scalar:utf8_scalars(text))if(!unicode_space(scalar.value)&&scalar.value!=0xfffd)return true;
     return false;
 }
+// Native text widgets cannot faithfully display embedded NUL or terminal
+// controls. Keep ordinary whitespace and the original generated UTF-8 intact.
+inline std::size_t unsupported_text_control(std::string_view text){
+    for(std::size_t i=0;i<text.size();++i){
+        const auto c=static_cast<unsigned char>(text[i]);
+        if((c<0x20&&c!='\t'&&c!='\n'&&c!='\r')||c==0x7f)return i;
+    }
+    return std::string_view::npos;
+}
+inline bool valid_translation(std::string_view text){
+    return unsupported_text_control(text)==std::string_view::npos&&has_usable_text(text);
+}
 }

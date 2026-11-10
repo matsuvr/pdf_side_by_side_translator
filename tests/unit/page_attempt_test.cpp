@@ -49,5 +49,11 @@ int main(){try{
     PageAttempt empty(stamp,"none",{{"blank",BlockKind::Paragraph,std::make_shared<const std::string>(" \n"),false}},Form::Plain);
     require(empty.state()==PageState::NoText&&!empty.next_request(),"whitespace never invokes inference");
     require(source_split_boundary("👩‍👩‍👧‍👦")==0,"one ZWJ cluster not split for retry");
+    PageAttempt control(stamp,"control",{blocks.front()},Form::Plain);
+    r=control.next_request();p=prepare(*r);control.prepared(p);
+    const std::string unsafe("prefix\0hidden",13);
+    require(!control.delta(p->stamp,unsafe),"control bytes cannot enter native stream");
+    control.finished(p->stamp,{FinishReason::Completed,unsafe,3});
+    require(control.state()==PageState::Partial&&control.snapshot().chunks.front().text=="prefix"&&control.snapshot().chunks.front().reason==FinishReason::InvalidModelOutput,"NUL output cannot become a completed chunk");
     std::cout<<"attempt coverage, forced resume, split replacement and stale events passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

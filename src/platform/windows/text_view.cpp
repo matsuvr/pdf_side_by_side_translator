@@ -1,4 +1,5 @@
 #include "platform/text_view.hpp"
+#include "platform/text_format.hpp"
 #include <wx/textctrl.h>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -13,12 +14,12 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
     SendMessageW(handle,EM_EXGETSEL,0,(LPARAM)&selection);SendMessageW(handle,EM_GETSCROLLPOS,0,(LPARAM)&position);
     GetScrollInfo(handle,SB_VERT,&scroll);
     const bool follow=!reset&&selection.cpMin==selection.cpMax&&scroll.nPos+static_cast<int>(scroll.nPage)>=scroll.nMax-2;
+    const auto old_display=rich_edit_text(before),new_display=rich_edit_text(after);
     std::size_t common=0;
-    if(!reset){while(common<std::min(before.size(),after.size())&&before[common]==after[common])++common;
-        while(common<after.size()&&common>0&&(static_cast<unsigned char>(after[common])&0xc0)==0x80)--common;}
-    const auto prefix=wxString::FromUTF8(after.data(),common).ToStdWstring();
-    auto suffix=wxString::FromUTF8(after.data()+common,after.size()-common).ToStdWstring();
-    std::replace(suffix.begin(),suffix.end(),L'\n',L'\r');
+    if(!reset){while(common<std::min(old_display.size(),new_display.size())&&old_display[common]==new_display[common])++common;
+        while(common<new_display.size()&&common>0&&(static_cast<unsigned char>(new_display[common])&0xc0)==0x80)--common;}
+    const auto prefix=wxString::FromUTF8(new_display.data(),common).ToStdWstring();
+    const auto suffix=wxString::FromUTF8(new_display.data()+common,new_display.size()-common).ToStdWstring();
     CHARRANGE tail{static_cast<LONG>(prefix.size()),-1};
     SendMessageW(handle,WM_SETREDRAW,FALSE,0);SendMessageW(handle,EM_SETREADONLY,FALSE,0);
     SendMessageW(handle,EM_EXSETSEL,0,(LPARAM)&tail);SendMessageW(handle,EM_REPLACESEL,FALSE,(LPARAM)suffix.c_str());
@@ -36,7 +37,7 @@ std::size_t text_logical_anchor(wxTextCtrl& control){
     return control.GetRange(0,static_cast<long>(at)).ToUTF8().length();
 }
 void restore_text_logical_anchor(wxTextCtrl& control,std::size_t offset){
-    const auto bytes=control.GetValue().ToUTF8();offset=std::min(offset,bytes.length());
+    const auto value=control.GetValue();const auto bytes=value.ToUTF8();offset=std::min(offset,bytes.length());
     while(offset>0&&offset<bytes.length()&&(static_cast<unsigned char>(bytes.data()[offset])&0xc0)==0x80)--offset;
     const auto at=wxString::FromUTF8(bytes.data(),offset).ToStdWstring().size();const auto handle=(HWND)control.GetHandle();
     const auto target=SendMessageW(handle,EM_EXLINEFROMCHAR,0,static_cast<LPARAM>(at));

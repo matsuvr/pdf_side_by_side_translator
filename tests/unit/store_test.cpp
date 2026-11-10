@@ -86,6 +86,18 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
             store.prepare_cache_promotion(false,provisional_context.document_key,formal_context.document_key);store.prepare_cache_promotion(true,provisional_context.model_key,formal_context.model_key);}
         {Store store(directory/"crash-state",directory/"crash-cache");auto saved=store.attempt(formal_context);require(saved&&saved->id==crash_id&&saved->bypass_cache,"interrupted cross-database promotion recovers forced attempt");
             require(store.promoted_key(true,provisional_context.model_key)==formal_context.model_key,"native signature alias survives missing state fingerprint commit");}
+        // Persist a completion from a clock in the future, then restart at the
+        // host's present clock. A new forced attempt still owns this condition.
+        const auto clock_state=directory/"clock-state",clock_cache=directory/"clock-cache";
+        {Store store(clock_state,clock_cache);PageAttempt a({1,0,1,1,1},full.condition_key(),blocks,Form::Plain);
+            auto r=a.next_request();auto p=prepare(*r);a.prepared(p);a.finished(p->stamp,{FinishReason::Completed,"完成した訳文。",3});store.save_attempt(full,a.snapshot());
+            auto unsafe=a.snapshot();unsafe.chunks.front().text=std::string("prefix\0hidden",13);bool rejected=false;
+            try{store.save_attempt(full,unsafe);}catch(const std::invalid_argument&){rejected=true;}require(rejected,"invalid display controls cannot enter completed cache");}
+        sqlite3_open(path_text(clock_cache/"cache.sqlite3").c_str(),&db);
+        require(sqlite3_exec(db,"UPDATE page_attempts SET modified_at=2100000000000000000",nullptr,nullptr,nullptr)==SQLITE_OK,"future timestamp fixture");sqlite3_close(db);
+        {Store store(clock_state,clock_cache);PageAttempt forced({2,0,1,1,1},full.condition_key(),blocks,Form::Plain,true);store.save_attempt(full,forced.snapshot());
+            require(store.attempt(full)->id==forced.snapshot().id,"clock rollback cannot select older completed attempt");
+            require(store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("future-clock old attempt exported");})==0,"clock rollback cannot export superseded completion");}
         std::filesystem::remove_all(directory);std::cout<<"durable state, canonical promotion, forced resume, pinning and recovery passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<" (fixtures at "<<directory<<")\n";return 1;}
 }

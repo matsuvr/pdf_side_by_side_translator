@@ -30,6 +30,10 @@ struct GenerationResult {
     std::string text;
     std::uint32_t output_tokens = 0;
 };
+struct InferenceRuntime {
+    std::uint32_t context=0,batch=0,micro_batch=0;
+    std::int32_t threads=0,batch_threads=0;
+};
 class InferenceBackend {
 public:
     virtual ~InferenceBackend()=default;
@@ -41,6 +45,7 @@ public:
     virtual std::uint32_t capacity() const=0;
     virtual std::string backend() const=0;
     virtual std::shared_ptr<const FileSnapshot> file_snapshot() const=0;
+    virtual InferenceRuntime runtime()const{return {};}
 };
 // All methods, including construction and destruction, belong to one inference thread.
 // Cancellation is the sole cross-thread input.
@@ -59,6 +64,7 @@ public:
     std::uint32_t capacity() const override;
     std::string backend() const override;
     std::shared_ptr<const FileSnapshot> file_snapshot() const override;
+    InferenceRuntime runtime()const override;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

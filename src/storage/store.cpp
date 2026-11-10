@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <limits>
 #include <set>
 #include <thread>
 #ifdef _WIN32
@@ -110,6 +111,13 @@ struct Store::Impl {
     std::string session=new_uuid();
     StoreLease lease;
     bool memory_only=false;
+    std::int64_t state_clock=0,cache_clock=0;
+    static std::int64_t tick(std::int64_t& clock){
+        if(clock==std::numeric_limits<std::int64_t>::max())throw std::runtime_error("Persisted update sequence is exhausted");
+        return clock=std::max(now(),clock+1);
+    }
+    std::int64_t state_time(){return tick(state_clock);}
+    std::int64_t cache_time(){return tick(cache_clock);}
     void owns()const{if(owner!=std::this_thread::get_id())throw std::logic_error("SQLite owner thread mismatch");}
     sqlite3* open(const std::filesystem::path& directory,const char* filename,const char* schema,bool disposable,bool& persistent){
         sqlite3* db=nullptr;const auto file=access_path(directory/filename);bool future=false;
@@ -164,6 +172,11 @@ struct Store::Impl {
         memory_only=!lease.acquire(s);
         if(memory_only)messages.push_back("Storage directory is unavailable or another app instance owns it; this instance uses isolated memory state and cache");
         state=open(s,"state.sqlite3",state_schema,false,state_disk);cache=open(c,"cache.sqlite3",cache_schema,true,cache_disk);
+        // An earlier session may have run with a clock ahead of this one.
+        // Sequence persisted changes above that high-water mark so a new forced
+        // attempt always supersedes an older completed attempt after restart.
+        {Statement q(state,"SELECT MAX(t) FROM(SELECT modified_at AS t FROM document_state UNION ALL SELECT modified_at FROM source_overrides UNION ALL SELECT modified_at FROM pending_source_overrides)");if(q.step())state_clock=q.number(0);}
+        {Statement q(cache,"SELECT MAX(t) FROM(SELECT modified_at AS t FROM page_attempts UNION ALL SELECT created_at FROM completed_chunks UNION ALL SELECT last_used_at FROM completed_chunks)");if(q.step())cache_clock=q.number(0);}
         sql(cache,"DELETE FROM active_documents");
     }
     ~Impl(){if(cache)sqlite3_close(cache);if(state)sqlite3_close(state);}
@@ -195,9 +208,9 @@ SavedDocument Store::document(std::string key,std::string_view provisional,bool 
 }
 void Store::save_override(std::string_view provisional,std::string_view key,std::string_view path,const SavedOverride& v){
     impl_->owns();if(v.source)utf8_scalars(*v.source);Transaction tx(impl_->state);
-    {Statement q(impl_->state,"INSERT INTO pending_source_overrides VALUES(?,?,?,?,?,?,?) ON CONFLICT(provisional_key,page_index) DO UPDATE SET last_path=excluded.last_path,source_utf8=excluded.source_utf8,use_auto_source=excluded.use_auto_source,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=pending_source_overrides.source_revision");q.text(1,provisional).number(2,v.page).text(3,path);if(v.source)q.text(4,*v.source);else q.null(4);q.number(5,!v.source).number(6,v.revision).number(7,now()).step();}
+    {Statement q(impl_->state,"INSERT INTO pending_source_overrides VALUES(?,?,?,?,?,?,?) ON CONFLICT(provisional_key,page_index) DO UPDATE SET last_path=excluded.last_path,source_utf8=excluded.source_utf8,use_auto_source=excluded.use_auto_source,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=pending_source_overrides.source_revision");q.text(1,provisional).number(2,v.page).text(3,path);if(v.source)q.text(4,*v.source);else q.null(4);q.number(5,!v.source).number(6,v.revision).number(7,impl_->state_time()).step();}
     if(!key.empty()){
-        if(v.source){Statement q(impl_->state,"INSERT INTO source_overrides VALUES(?,?,?,?,?) ON CONFLICT(document_hash,page_index) DO UPDATE SET source_utf8=excluded.source_utf8,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=source_overrides.source_revision");q.text(1,key).number(2,v.page).text(3,*v.source).number(4,v.revision).number(5,now()).step();}
+        if(v.source){Statement q(impl_->state,"INSERT INTO source_overrides VALUES(?,?,?,?,?) ON CONFLICT(document_hash,page_index) DO UPDATE SET source_utf8=excluded.source_utf8,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=source_overrides.source_revision");q.text(1,key).number(2,v.page).text(3,*v.source).number(4,v.revision).number(5,impl_->state_time()).step();}
         else{Statement q(impl_->state,"DELETE FROM source_overrides WHERE document_hash=? AND page_index=? AND source_revision<=?");q.text(1,key).number(2,v.page).number(3,v.revision).step();}
     }tx.commit();
 }
@@ -206,7 +219,7 @@ void Store::promote_overrides(std::string_view provisional,std::string_view hash
     std::vector<SavedOverride> values;
     {Statement q(impl_->state,"SELECT page_index,source_revision,source_utf8,use_auto_source FROM pending_source_overrides WHERE provisional_key=?");q.text(1,provisional);while(q.step())values.push_back({static_cast<PageIndex>(q.number(0)),static_cast<SourceRevision>(q.number(1)),q.number(3)?std::nullopt:std::optional(q.text(2))});}
     for(const auto& v:values){
-        if(v.source){Statement q(impl_->state,"INSERT INTO source_overrides VALUES(?,?,?,?,?) ON CONFLICT(document_hash,page_index) DO UPDATE SET source_utf8=excluded.source_utf8,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=source_overrides.source_revision");q.text(1,hash).number(2,v.page).text(3,*v.source).number(4,v.revision).number(5,now()).step();}
+        if(v.source){Statement q(impl_->state,"INSERT INTO source_overrides VALUES(?,?,?,?,?) ON CONFLICT(document_hash,page_index) DO UPDATE SET source_utf8=excluded.source_utf8,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=source_overrides.source_revision");q.text(1,hash).number(2,v.page).text(3,*v.source).number(4,v.revision).number(5,impl_->state_time()).step();}
         else{Statement q(impl_->state,"DELETE FROM source_overrides WHERE document_hash=? AND page_index=? AND source_revision<=?");q.text(1,hash).number(2,v.page).number(3,v.revision).step();}
         Statement clear(impl_->state,"DELETE FROM pending_source_overrides WHERE provisional_key=? AND page_index=? AND source_revision=?");clear.text(1,provisional).number(2,v.page).number(3,v.revision).step();
     }
@@ -219,7 +232,7 @@ void Store::promote_overrides(std::string_view provisional,std::string_view hash
 }
 void Store::save_position(std::string_view key,std::string_view path,const ReadingPosition& p){
     impl_->owns();Transaction tx(impl_->state);
-    {Statement q(impl_->state,"INSERT INTO document_state VALUES(?,?,?,?) ON CONFLICT(document_hash) DO UPDATE SET last_path=excluded.last_path,page_index=excluded.page_index,modified_at=excluded.modified_at");q.text(1,key).text(2,path).number(3,p.page).number(4,now()).step();}
+    {Statement q(impl_->state,"INSERT INTO document_state VALUES(?,?,?,?) ON CONFLICT(document_hash) DO UPDATE SET last_path=excluded.last_path,page_index=excluded.page_index,modified_at=excluded.modified_at");q.text(1,key).text(2,path).number(3,p.page).number(4,impl_->state_time()).step();}
     {Statement q(impl_->state,"INSERT INTO page_state VALUES(?,?,?,?,?) ON CONFLICT(document_hash,page_index) DO UPDATE SET pdf_anchor_x=excluded.pdf_anchor_x,pdf_anchor_y=excluded.pdf_anchor_y,text_anchor=excluded.text_anchor");q.text(1,key).number(2,p.page);if(p.pdf_anchor)q.real(3,p.pdf_anchor->x).real(4,p.pdf_anchor->y);else q.null(3).null(4);q.number(5,p.text_anchor).step();}
     tx.commit();
 }
@@ -236,18 +249,18 @@ void Store::save_attempt(const CacheContext& context,const AttemptSnapshot& data
     Transaction tx(impl_->cache);
     {Statement q(impl_->cache,"INSERT INTO page_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET document_key=excluded.document_key,page_index=excluded.page_index,profile_key=excluded.profile_key,source_digest=excluded.source_digest,force_retranslate=excluded.force_retranslate,plan_complete=excluded.plan_complete,status=excluded.status,modified_at=excluded.modified_at,model_key=excluded.model_key,profile_digest=excluded.profile_digest,condition_key=excluded.condition_key,plan_generation=excluded.plan_generation,override_digest=excluded.override_digest");
         q.text(1,data.id).text(2,context.document_key).number(3,context.page).text(4,profile_key(context)).text(5,context.source_digest)
-            .number(6,data.bypass_cache).number(7,data.planning_complete).text(8,page_names.at(static_cast<unsigned>(data.state))).number(9,now())
+            .number(6,data.bypass_cache).number(7,data.planning_complete).text(8,page_names.at(static_cast<unsigned>(data.state))).number(9,impl_->cache_time())
             .text(10,context.model_key).text(11,context.profile_digest).text(12,data.condition_key).number(13,data.plan).text(14,context.override_digest).step();}
     {Statement q(impl_->cache,"DELETE FROM attempt_chunks WHERE attempt_id=?");q.text(1,data.id).step();}
     std::uint32_t ordinal=0;
     for(const auto& c:data.chunks){
         std::string cache_key;
         if(c.state==LeafState::Complete){
-            utf8_scalars(c.text);if(c.reason!=FinishReason::Completed||!has_usable_text(c.text)||c.source_digest.empty()||c.prompt_digest.empty())throw std::invalid_argument("Incomplete chunk cannot be cached");
+            utf8_scalars(c.text);if(c.reason!=FinishReason::Completed||!valid_translation(c.text)||c.source_digest.empty()||c.prompt_digest.empty())throw std::invalid_argument("Incomplete chunk cannot be cached");
             const auto semantic=semantic_key(c);cache_key=completed_cache_key(context,semantic);
             Statement q(impl_->cache,"INSERT INTO completed_chunks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET text_utf8=excluded.text_utf8,byte_size=excluded.byte_size,last_used_at=excluded.last_used_at,session_key=excluded.session_key");
             q.text(1,cache_key).text(2,context.document_key).number(3,context.page).text(4,profile_key(context)).text(5,c.block_id).number(6,1).number(7,ordinal)
-                .text(8,c.source_digest).text(9,c.prompt_digest).text(10,c.text).number(11,c.text.size()+1024).number(12,now()).number(13,now())
+                .text(8,c.source_digest).text(9,c.prompt_digest).text(10,c.text).number(11,c.text.size()+1024).number(12,impl_->cache_time()).number(13,impl_->cache_time())
                 .text(14,context.model_key).text(15,context.profile_digest).text(16,context.source_digest).text(17,semantic).text(18,impl_->session).step();
         }
         Statement q(impl_->cache,"INSERT INTO attempt_chunks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -272,14 +285,14 @@ std::optional<AttemptSnapshot> Store::attempt(const CacheContext& context){
         c.target_tokens=q.number(10);c.source_tokens=q.number(11);c.prompt_tokens=q.number(12);c.output_limit=q.number(13);c.output_tokens=q.number(14);c.plan=q.number(15);
         if(q.number(16)<0||q.number(16)>static_cast<int>(FinishReason::ModelUnavailable)||q.number(18)<0||q.number(18)>static_cast<int>(BlockKind::Edited))return {};
         c.reason=static_cast<FinishReason>(q.number(16));c.split_retry=q.number(17);c.kind=static_cast<BlockKind>(q.number(18));
-        if(c.state==LeafState::Complete){try{utf8_scalars(c.text);if(!has_usable_text(c.text))return {};}catch(...){return {};}}
+        if(c.state==LeafState::Complete){try{utf8_scalars(c.text);if(!valid_translation(c.text))return {};}catch(...){return {};}}
         data.chunks.push_back(std::move(c));
     }return data;
 }
 std::optional<std::string> Store::completed(const CacheContext& context,const PreparedChunk& chunk,bool same_session_only){
     impl_->owns();const auto key=completed_cache_key(context,chunk_semantic_key(chunk));std::optional<std::string> result;
-    {Statement q(impl_->cache,"SELECT text_utf8 FROM completed_chunks WHERE cache_key=? AND source_digest=? AND prompt_ids_digest=? AND (?=0 OR session_key=?)");q.text(1,key).text(2,chunk.source_digest).text(3,chunk.prompt_ids_digest).number(4,same_session_only).text(5,impl_->session);if(q.step()){auto text=q.text(0);try{utf8_scalars(text);if(has_usable_text(text))result=std::move(text);}catch(...){}}}
-    if(result){Statement q(impl_->cache,"UPDATE completed_chunks SET last_used_at=? WHERE cache_key=?");q.number(1,now()).text(2,key).step();}return result;
+    {Statement q(impl_->cache,"SELECT text_utf8 FROM completed_chunks WHERE cache_key=? AND source_digest=? AND prompt_ids_digest=? AND (?=0 OR session_key=?)");q.text(1,key).text(2,chunk.source_digest).text(3,chunk.prompt_ids_digest).number(4,same_session_only).text(5,impl_->session);if(q.step()){auto text=q.text(0);try{utf8_scalars(text);if(valid_translation(text))result=std::move(text);}catch(...){}}}
+    if(result){Statement q(impl_->cache,"UPDATE completed_chunks SET last_used_at=? WHERE cache_key=?");q.number(1,impl_->cache_time()).text(2,key).step();}return result;
 }
 void Store::promote_cache(bool model,std::string_view from,std::string_view to){
     impl_->owns();if(from==to)return;Transaction tx(impl_->cache);
@@ -323,7 +336,7 @@ std::size_t Store::for_each_complete_page(std::string_view doc,std::string_view 
         while(q.step()){
             const auto block=q.text(0),status=q.text(1);auto body=q.text(2);if(status=="complete"&&body.empty())body=q.text(4);
             if(status!="complete"&&status!="source-only"){valid=false;break;}
-            try{utf8_scalars(body);if(status=="complete"&&!has_usable_text(body))valid=false;}catch(...){valid=false;break;}
+            try{utf8_scalars(body);if(status=="complete"&&!valid_translation(body))valid=false;}catch(...){valid=false;break;}
             if(block!=prior){if(!text.empty())text+="\n\n";prior=block;
                 if(status=="source-only"&&q.number(3)==static_cast<int>(BlockKind::Table))text+="［表・原文］\n";
                 if(status=="source-only"&&q.number(3)==static_cast<int>(BlockKind::Equation))text+="［数式・原文］\n";}

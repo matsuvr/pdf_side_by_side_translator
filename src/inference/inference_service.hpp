@@ -12,6 +12,7 @@ struct InferenceEvent {
     ModelProfile profile;
     std::string backend,message,detail,delta;
     std::uint32_t context_capacity=0;
+    InferenceRuntime runtime;
     std::shared_ptr<const FileSnapshot> file;
     std::shared_ptr<const PreparedChunk> chunk;
     GenerationResult result;

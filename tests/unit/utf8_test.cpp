@@ -1,4 +1,5 @@
 #include "core/utf8.hpp"
+#include "platform/text_format.hpp"
 #include <iostream>
 #include <stdexcept>
 
@@ -8,6 +9,12 @@ int main() {
         opt::Utf8Stream s;
         check(s.push("abc\xe6")=="abc");
         check(!s.complete());
+        check(opt::valid_translation("通常の訳文。\t\r\n続き"));
+        check(!opt::valid_translation(std::string("text\0hidden",11)));
+        check(!opt::valid_translation("text\x1b[31m"));
+        check(!opt::valid_translation("text\x7f"));
+        check(opt::rich_edit_text("a\r\nb\nc\rd")=="a\rb\rc\rd");
+        check(opt::rich_edit_text("途中\r")==opt::rich_edit_text("途中\r\n"));
         check(s.push("\x97").empty());
         check(s.push("\xa5\xf0\x9f")=="日");
         check(s.push("\x98\x80")=="😀");

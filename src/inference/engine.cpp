@@ -65,6 +65,10 @@ struct Engine::Impl {
 Engine::Engine(std::atomic_bool& c) : impl_(std::make_unique<Impl>(c)) {}
 Engine::~Engine() = default;
 void Engine::unload() { impl_->clear(); }
+InferenceRuntime Engine::runtime()const{
+    const auto* c=impl_->context;if(!c)return {};
+    return {llama_n_ctx(c),llama_n_batch(c),llama_n_ubatch(c),llama_n_threads(impl_->context),llama_n_threads_batch(impl_->context)};
+}
 
 void Engine::load(const std::filesystem::path& path, bool cpu_only) {
     unload();
@@ -222,6 +226,11 @@ GenerationResult Engine::generate(const PreparedInput& input,
         }
         try {
             auto complete = decoder.push(piece(p.vocab, token, false));
+            const auto control=unsupported_text_control(complete);
+            if(control!=std::string::npos){
+                result.text.append(complete,0,control);pending_delta.append(complete,0,control);
+                result.reason=FinishReason::InvalidModelOutput;break;
+            }
             result.text += complete; pending_delta += complete;
         } catch (const Utf8Error&) { result.reason = FinishReason::InvalidEncoding; break; }
         catch (const std::exception&) {result.reason=FinishReason::DecodeError;break;}

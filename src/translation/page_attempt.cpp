@@ -48,7 +48,7 @@ PageAttempt::PageAttempt(WorkStamp base,std::string key,std::vector<AttemptBlock
             std::size_t at=0;
             for(const auto& c:saved->chunks)if(c.block_id==b.id&&leaf(c)){
                 if(c.begin!=at||c.end<=c.begin||c.end>b.source->size()||
-                   (c.state==LeafState::Complete&&(!has_usable_text(c.text)||c.source_digest!=sha256(std::string_view(*b.source).substr(c.begin,c.end-c.begin)))))valid=false;
+                   (c.state==LeafState::Complete&&(!valid_translation(c.text)||c.source_digest!=sha256(std::string_view(*b.source).substr(c.begin,c.end-c.begin)))))valid=false;
                 if(c.state==LeafState::Complete)utf8_scalars(c.text);
                 if(c.state==LeafState::SourceOnly&&c.text!=b.source->substr(c.begin,c.end-c.begin))valid=false;
                 at=c.end;
@@ -99,7 +99,8 @@ bool PageAttempt::delta(const WorkStamp& stamp,std::string_view text){
     if(!accepts(stamp))return false;
     // Service delivers valid complete UTF-8 prefixes. Keep the boundary honest
     // for injected backends and future adapters too.
-    utf8_scalars(text);data_.chunks[*active_].text.append(text);return true;
+    utf8_scalars(text);if(unsupported_text_control(text)!=std::string_view::npos)return false;
+    data_.chunks[*active_].text.append(text);return true;
 }
 bool PageAttempt::split_limited(std::size_t index){
     auto& parent=data_.chunks[index];
@@ -123,7 +124,9 @@ bool PageAttempt::split_limited(std::size_t index){
 bool PageAttempt::finished(const WorkStamp& stamp,const GenerationResult& result){
     if(!accepts(stamp))return false;
     const auto index=*active_;auto& c=data_.chunks[index];c.text=result.text;c.reason=result.reason;c.output_tokens=result.output_tokens;
-    if(result.reason==FinishReason::Completed){
+    const auto control=unsupported_text_control(c.text);
+    if(control!=std::string::npos){c.text.resize(control);c.reason=FinishReason::InvalidModelOutput;c.state=c.text.empty()?LeafState::Failed:LeafState::Partial;}
+    else if(result.reason==FinishReason::Completed){
         try{utf8_scalars(result.text);c.state=has_usable_text(result.text)?LeafState::Complete:LeafState::Failed;}
         catch(const Utf8Error&){c.state=LeafState::Failed;c.reason=FinishReason::InvalidEncoding;c.text.clear();}
         if(c.state==LeafState::Failed&&c.reason==FinishReason::Completed)c.reason=FinishReason::EmptyOutput;

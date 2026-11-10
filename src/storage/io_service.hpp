@@ -34,8 +34,8 @@ public:
     bool save_attempt(CacheContext context,AttemptSnapshot data);
     bool read_attempt(CacheContext context,std::uint64_t request,DocumentEpoch document);
     bool lookup(CacheContext context,std::shared_ptr<const PreparedChunk> chunk);
-    bool export_current(std::filesystem::path path,PageIndex page,std::string text,PageState state);
-    bool export_complete(std::filesystem::path path,CacheContext context);
+    bool export_current(std::filesystem::path path,PageIndex page,std::string text,PageState state,Form form=Form::Plain);
+    bool export_complete(std::filesystem::path path,CacheContext context,Form form=Form::Plain);
     bool clear_cache();
     void stop()noexcept;
     bool done()const noexcept;

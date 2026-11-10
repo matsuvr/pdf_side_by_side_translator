@@ -67,7 +67,7 @@ struct InferenceService::Impl {
                             loaded_model=load->model;
                         }
                         InferenceEvent e;e.kind=InferenceEvent::Kind::ModelReady;e.model=load->model;e.backend=backend->backend();
-                        e.context_capacity=backend->capacity();e.file=backend->file_snapshot();
+                        e.context_capacity=backend->capacity();e.runtime=backend->runtime();e.file=backend->file_snapshot();
                         e.seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();emit(std::move(e));
                     }catch(const std::exception& error){
                         if(backend)backend->unload();

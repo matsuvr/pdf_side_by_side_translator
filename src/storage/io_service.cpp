@@ -15,6 +15,7 @@ namespace opt {
 namespace {
 std::string utf8(const std::filesystem::path& p){auto s=p.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
 bool formal(std::string_view key){return key.starts_with("sha256:");}
+void export_header(std::ostream& out,Form form){out<<"Offline PDF Translator\nモデル: PLaMo 3 Translate 0.8B\n文体: "<<(form==Form::Plain?"常体":"敬体")<<"\n\n";}
 void atomic_export(const std::filesystem::path& destination,const std::function<void(std::ostream&)>& writer){
     auto temporary=destination;temporary+=std::filesystem::path(".tmp-"+new_uuid());
     try{
@@ -171,16 +172,16 @@ bool IoService::lookup(CacheContext context,std::shared_ptr<const PreparedChunk>
     return impl_->enqueue("",[p=impl_.get(),context=std::move(context),chunk=std::move(chunk)](Store& store){IoEvent e;e.kind=IoEvent::Kind::CacheResult;e.stamp=chunk->stamp;
         try{auto resolved=p->resolve(context);e.cached_text=store.completed(resolved,*chunk,!formal(resolved.document_key)||!formal(resolved.model_key));}catch(const std::exception& error){e.detail=error.what();}p->emit(std::move(e));});
 }
-bool IoService::export_current(std::filesystem::path path,PageIndex page,std::string text,PageState state){
-    return impl_->enqueue("",[p=impl_.get(),path=std::move(path),page,text=std::move(text),state](Store&){
-        atomic_export(path,[&](std::ostream& out){out<<"# "<<page+1<<"ページ — "<<(state==PageState::Complete?"完了":"未完了・部分結果")<<"\n\n"<<text<<'\n';});
+bool IoService::export_current(std::filesystem::path path,PageIndex page,std::string text,PageState state,Form form){
+    return impl_->enqueue("",[p=impl_.get(),path=std::move(path),page,text=std::move(text),state,form](Store&){
+        atomic_export(path,[&](std::ostream& out){export_header(out,form);out<<"# "<<page+1<<"ページ — "<<(state==PageState::Complete?"完了":"未完了・部分結果")<<"\n\n"<<text<<'\n';});
         IoEvent e;e.kind=IoEvent::Kind::Exported;e.message="訳文を書き出しました。";p->emit(std::move(e));});
 }
-bool IoService::export_complete(std::filesystem::path path,CacheContext context){
-    return impl_->enqueue("",[p=impl_.get(),path=std::move(path),context=std::move(context)](Store& store){
+bool IoService::export_complete(std::filesystem::path path,CacheContext context,Form form){
+    return impl_->enqueue("",[p=impl_.get(),path=std::move(path),context=std::move(context),form](Store& store){
         const auto resolved=p->resolve(context);std::size_t count=0;
         const auto native=p->native_keys.find(resolved.document_key);
-        atomic_export(path,[&](std::ostream& out){count=store.for_each_complete_page(resolved.document_key,resolved.model_key,resolved.profile_digest,[&](PageIndex page,std::string_view text){out<<"# "<<page+1<<"ページ — 完了\n\n"<<text<<"\n\n";},native==p->native_keys.end()?std::string_view{}:std::string_view(native->second));if(!count)throw std::runtime_error("No completed pages to export");});
+        atomic_export(path,[&](std::ostream& out){export_header(out,form);out<<"完成したページのみを収録しています。未完了ページは含みません。\n\n";count=store.for_each_complete_page(resolved.document_key,resolved.model_key,resolved.profile_digest,[&](PageIndex page,std::string_view text){out<<"# "<<page+1<<"ページ — 完了\n\n"<<text<<"\n\n";},native==p->native_keys.end()?std::string_view{}:std::string_view(native->second));if(!count)throw std::runtime_error("No completed pages to export");});
         IoEvent e;e.kind=IoEvent::Kind::Exported;e.message=std::to_string(count)+"ページの完成訳を書き出しました。";p->emit(std::move(e));});
 }
 bool IoService::clear_cache(){return impl_->enqueue("",[p=impl_.get()](Store& store){store.clear_cache();IoEvent e;e.kind=IoEvent::Kind::CacheCleared;p->emit(std::move(e));});}
