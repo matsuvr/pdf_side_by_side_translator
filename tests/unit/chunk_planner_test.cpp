@@ -13,40 +13,32 @@ opt::PreparedInput fake_prompt(std::string_view source,opt::Form form){
 }
 int main(){
     try{
-        auto count=[](std::string_view source){return opt::utf8_scalars(source).size();};
-        const auto source=std::make_shared<const std::string>("First sentence. Second sentence has 3 values, and a final clause. 日本語の文。 é 😀");
-        opt::ChunkRequest request;request.block_id="paragraph";request.source=source;request.target_source_tokens=18;
-        std::string restored;unsigned chunks=0;
-        while(request.begin<source->size()){
-            auto chunk=opt::ChunkPlanner::prepare(request,32,fake_prompt,count);
-            check(!chunk.failure&&chunk.source_begin==request.begin&&chunk.source_end>chunk.source_begin,"Planner did not advance a complete source range");
-            check(chunk.input.tokens.size()+chunk.input.output_limit<=32,"Final prompt exceeded actual context");
-            const auto text=source->substr(chunk.source_begin,chunk.source_end-chunk.source_begin);
-            check(chunk.input.tokens==fake_prompt(text,request.form).tokens,"Budgeted token vector differs from execution vector");
-            check(chunk.source_digest==opt::sha256(text),"Source digest does not describe the actual slice");
-            restored+=text;request.begin=chunk.source_end;++chunks;
-        }
-        check(restored==*source&&chunks>1,"Source bytes were lost, overlapped or truncated");
-        request.begin=0;request.target_source_tokens=1024;
-        const auto first=opt::ChunkPlanner::prepare(request,12,fake_prompt,count);
-        check(!first.failure&&first.input.tokens.size()+first.input.output_limit<=12,"Small context was not adaptively split");
-        const auto same=opt::ChunkPlanner::prepare(request,12,fake_prompt,count);
-        check(first.plan_digest==same.plan_digest&&first.prompt_ids_digest==same.prompt_ids_digest&&first.chunk_id!=same.chunk_id,"Stable semantic plan and execution identity were conflated");
+        const auto source=std::make_shared<const std::string>(std::string(5000,'x')+"\n\nSecond paragraph: 日本語 é 👩‍👩‍👧‍👦");
+        opt::ChunkRequest request;request.block_id="page";request.source=source;
+        unsigned calls=0;
+        auto prompt=[&](std::string_view text,opt::Form form){
+            check(text==*source,"Model received only part of the page");
+            ++calls;
+            return fake_prompt(text,form);
+        };
+        const auto first=opt::ChunkPlanner::prepare(request,8192,prompt);
+        check(calls==1&&!first.failure&&first.source_begin==0&&first.source_end==source->size(),"Full page was not prepared once");
+        check(first.input.tokens==fake_prompt(*source,request.form).tokens&&first.source_digest==opt::sha256(*source),"Page tokens or digest changed");
+        const auto same=opt::ChunkPlanner::prepare(request,8192,prompt);
+        check(first.plan_digest==same.plan_digest&&first.chunk_id!=same.chunk_id,"Execution UUID affected semantic identity");
         request.form=opt::Form::Polite;
-        check(opt::ChunkPlanner::prepare(request,12,fake_prompt,count).prompt_ids_digest!=first.prompt_ids_digest,"Form change reused a different prompt's identity");
-        request.source=std::make_shared<const std::string>("👩‍👩‍👧‍👦 tail");request.target_source_tokens=3;request.form=opt::Form::Plain;
-        const auto family=opt::ChunkPlanner::prepare(request,64,fake_prompt,count);
-        check(request.source->substr(0,family.source_end)=="👩‍👩‍👧‍👦","Soft target split a ZWJ cluster that fits the context");
-        request.source=std::make_shared<const std::string>("éx");request.target_source_tokens=1;
-        check(opt::ChunkPlanner::prepare(request,64,fake_prompt,count).source_end==std::string("é").size(),"Combining sequence was unnecessarily split");
-        request.source=std::make_shared<const std::string>("A literal <|plamo:tag|> marker.");request.target_source_tokens=1024;
-        const auto reserved=opt::ChunkPlanner::prepare(request,8192,fake_prompt,count);
-        check(reserved.failure==opt::FinishReason::ModelInputUnsupported&&reserved.source_end==request.source->size(),"Unsupported input was rewritten or lost");
-        request.source=std::make_shared<const std::string>("x");
-        check(opt::ChunkPlanner::prepare(request,3,fake_prompt,count).failure==opt::FinishReason::ContextLimit,"Impossible single-scalar prompt was labelled ready");
+        check(opt::ChunkPlanner::prepare(request,8192,prompt).prompt_ids_digest!=first.prompt_ids_digest,"Form change reused a different prompt's identity");
+        const auto prompt_size=static_cast<std::uint32_t>(first.input.tokens.size());
+        const auto near_limit=opt::ChunkPlanner::prepare(request,prompt_size+2,prompt);
+        check(!near_limit.failure&&near_limit.input.output_limit==2,"Output reservation should use remaining context");
+        const auto too_long=opt::ChunkPlanner::prepare(request,prompt_size,prompt);
+        check(too_long.failure==opt::FinishReason::ContextLimit&&too_long.source_end==source->size(),"Oversized page was truncated or accepted");
+        request.source=std::make_shared<const std::string>("A literal <|plamo:tag|> marker.");
+        const auto reserved=opt::ChunkPlanner::prepare(request,8192,fake_prompt);
+        check(reserved.failure==opt::FinishReason::ModelInputUnsupported,"Reserved input was accepted");
         request.source=std::make_shared<const std::string>(" \t　� ");
-        const auto no_text=opt::ChunkPlanner::prepare(request,3,fake_prompt,count);
+        const auto no_text=opt::ChunkPlanner::prepare(request,3,prompt);
         check(no_text.source_only&&!no_text.failure&&no_text.input.tokens.empty(),"Whitespace/replacement-only input was sent to the model");
-        std::cout<<"Chunk coverage, actual context, immutable prompt IDs, grapheme preferences and unsupported input checks passed\n";
+        std::cout<<"Full-page prompts, actual context, stable identity and unsupported input checks passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

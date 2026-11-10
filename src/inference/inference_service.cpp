@@ -31,7 +31,10 @@ struct InferenceService::Impl {
     }
     ~Impl(){stop();if(worker.joinable())worker.join();}
     void emit(InferenceEvent event){delivery(std::make_shared<const InferenceEvent>(std::move(event)));}
-    void stop() noexcept{stopping=true;cancelled=true;cv.notify_one();}
+    void stop() noexcept{
+        std::lock_guard lock(mutex);
+        stopping=true;cancelled=true;cv.notify_one();
+    }
     void run() noexcept{
         try{
             std::unique_ptr<InferenceBackend> backend;
@@ -80,8 +83,7 @@ struct InferenceService::Impl {
                     try{
                         if(!backend)throw std::runtime_error("Model unavailable");
                         auto chunk=std::make_shared<const PreparedChunk>(ChunkPlanner::prepare(plan->request,backend->capacity(),
-                            [&](std::string_view source,Form form){return backend->prepare(source,form);},
-                            [&](std::string_view source){return backend->tokenize(source,false,false).size();}));
+                            [&](std::string_view source,Form form){return backend->prepare(source,form);}));
                         {
                             std::lock_guard lock(mutex);if(plan->serial!=serial||cancelled.load())continue;phase=Phase::Prepared;
                         }
@@ -127,7 +129,8 @@ struct InferenceService::Impl {
 InferenceService::InferenceService(Delivery delivery,Factory factory):impl_(std::make_unique<Impl>(std::move(delivery),std::move(factory))){}
 InferenceService::~InferenceService()=default;
 void InferenceService::load(ModelEpoch epoch,std::filesystem::path path,BackendPreference preference){
-    std::lock_guard lock(impl_->mutex);impl_->cancelled=true;impl_->desired_model=epoch;impl_->loaded_model=0;
+    std::lock_guard lock(impl_->mutex);if(impl_->stopping)return;
+    impl_->cancelled=true;impl_->desired_model=epoch;impl_->loaded_model=0;
     impl_->loading=Impl::Load{epoch,std::move(path),preference,++impl_->serial};
     impl_->planning.reset();impl_->execution.reset();impl_->desired_work.reset();impl_->phase=Impl::Phase::None;impl_->cv.notify_one();
 }

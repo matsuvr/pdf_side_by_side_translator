@@ -84,7 +84,7 @@ Windows 10／11を想定して開始し、M0で実際に使うSDK・依存が対
 |---|---|
 | PDF | ファイルを開く、ドラッグ＆ドロップ、単一ページ表示、前後移動、ページ番号指定 |
 | 読書 | 幅に合わせる、ページ全体、倍率指定、表示回転、原文の選択・コピー・文書内検索 |
-| 翻訳 | 現在ページの自動翻訳、明示的な現在ページ翻訳／再翻訳、全ページ翻訳、停止、再試行 |
+| 翻訳 | 現在ページの自動翻訳、再翻訳、全ページ翻訳 |
 | 訳文 | 逐次表示、選択・コピー、ページ単位の表示、文字サイズ変更 |
 | 抽出の救済 | ページごとの翻訳用原文の確認・編集・保存・再翻訳 |
 | モデル | ローカルGGUF選択、非同期ロード、対応profile検査、MacのCPU選択 |
@@ -125,20 +125,22 @@ SQLiteは小さな組み込み部品として追加する。CLI、共有ライ�
 | 領域 | 部品と内容 |
 |---|---|
 | メイン | `wxFrame`。タイトルは「ファイル名 — Offline PDF Translator」 |
-| メニュー | OS標準のファイル／編集／表示／翻訳／ヘルプ |
-| 操作バー | `wxPanel`とsizer。PDFを開く、前後ページ、ページ番号、ズーム、翻訳、停止、モデル設定 |
+| メニュー | OS標準のファイル／編集／表示／翻訳／モデル設定／ヘルプ |
+| 操作バー | 左端に「PDFを開く」 |
 | 中央 | `wxSplitterWindow`で左：原文、右：訳文 |
-| 左 | 短い見出し、`PdfCanvas`、必要時のみ検索バー |
-| 右 | ページ・翻訳状態の見出し、`wxTextCtrl`、必要時のみ再試行等の操作 |
+| 左 | 「原文」の見出しにページ番号入力と総ページ数、PDF倍率。狭い幅では倍率を折り返す。その下に左右のページ移動ボタンと`PdfCanvas`、必要時のみ検索バー |
+| 右 | 翻訳状態の見出し、訳文の`wxTextCtrl` |
 | 最下部 | `wxStatusBar`。ページ状態、モデル／backend、全ページ処理の進行 |
+
+文書を開く前の右枠には「Built with PLaMo」、モデル提供元、PLaMoコミュニティライセンス契約へのリンクを表示する。リンクはEXEまたは.appの隣の `PLaMo-Community-ja.txt` を読み、アプリ内で本文を開く。配布物にも同ファイルを含める。文書を閉じるとこの表示へ戻る。
 
 初回ウィンドウサイズは1280×860 DIPを目安とし、現在の作業領域へ収める。前回のサイズ・位置・最大化状態・分割比率を復元する。画面外に記録されていた場合は現在のモニター内へ戻す。左右は初回50:50。区切りのドラッグで変更でき、メニューの「左右を均等にする」で戻せる。
 
-操作バーは狭い幅では二段にする。主要なボタンには文字ラベルを付け、操作を横に切り捨てない。ペイン間の区切りと4〜8 DIP程度の余白で整理する。カード状のパネル、装飾的な大余白、大きな角丸は使用しない。
+ページ移動ボタンは原文の左右端の高さ中央に置き、PDFと重ならないようにする。矢印に操作名とツールチップを付ける。
 
 ### 5.2 左右の関係
 
-左右は常に同じ物理ページ番号を表示する。縦スクロール、PDF倍率、訳文字サイズは独立する。訳文の長さは原文と一致しないため、スクロール比率による強制同期は実装しない。
+左右は常に同じ物理ページを表示する。縦スクロール、PDF倍率、訳文字サイズは独立する。訳文の長さは原文と一致しないため、スクロール比率による強制同期は実装しない。
 
 初めて訪れるページは両側の先頭を表示し、再訪時はそれぞれの読書位置を復元する。検索結果への移動では検索位置を優先する。ページ変更後、新しい画像がまだできていなければ読込表示を出す。前ページの画像と新ページの訳文を組み合わせない。
 
@@ -149,7 +151,8 @@ SQLiteは小さな組み込み部品として追加する。CLI、共有ライ�
 | ファイル | PDFを開く、最近開いたPDF、現在ページの訳文を書き出す、完了した訳文をまとめて書き出す、文書を閉じる、終了 |
 | 編集 | コピー、全選択、PDF内を検索、ページの原文をコピー、翻訳用原文を確認・編集 |
 | 表示 | 幅に合わせる、ページ全体、倍率、右回転、左回転、訳文の文字サイズ、左右を均等にする |
-| 翻訳 | このページを翻訳、このページを最初から再翻訳、全ページを翻訳、停止、自動翻訳、文体、モデル設定 |
+| 翻訳 | このページを最初から再翻訳、全ページを翻訳、自動翻訳、文体 |
+| モデル設定 | モデルを選択、CPUでモデルを読み直す |
 | ヘルプ | 操作方法、診断情報をコピー、ライセンス、このアプリについて |
 
 「操作方法」と「ライセンス」はアプリに内蔵したテキストをネイティブダイアログで表示する。ヘルプを開くためにネット接続しない。
@@ -185,11 +188,11 @@ enum class PageState {
 
 初期値はON。モデルが利用可能になったら、最新の現在ページを対象にする。ページ移動は150ms程度の短いdebounceで最新の要求へまとめ、連続移動中のページを全て翻訳し始めない。モデルロード完了時に古いページへ戻さない。
 
-停止を押したら、現在の翻訳と全ページ処理を停止し、そのページ・原文revisionについて自動翻訳を抑制する。停止直後に自動翻訳が勝手に再開してはならない。明示的な翻訳要求、別ページへの移動、または自動翻訳のOFF→ONで抑制を解除する。
+キャッシュ消去直後は同じページ・原文revisionの自動翻訳を抑制する。明示的な再翻訳、別ページへの移動、または自動翻訳のOFF→ONで抑制を解除する。
 
 ### 6.2 全ページ翻訳
 
-メニュー／ボタンから明示的に開始する。単一の推論キューを使い、別のモデルやcontextをページごとに作らない。現在ページを優先し、その後に未完了ページを物理ページ順で処理する。全ページ分の文字列やjobを一度にメモリへ積まない。
+「翻訳」メニューまたはショートカットから開始する。単一の推論キューを使い、別のモデルやcontextをページごとに作らない。現在ページを優先し、その後に未完了ページを物理ページ順で処理する。全ページ分の文字列やjobを一度にメモリへ積まない。
 
 現在ページへ移動したら、そのページの未完了作業を優先する。全ページ走査のcursorは保持し、優先作業の後に再開する。停止でcursorの自動再開を止める。再度「全ページ」を実行すれば、同じ翻訳条件の完了cacheを使って未完了分を処理する。
 
@@ -249,7 +252,6 @@ enum class PageState {
 | ページ番号へ | Primary＋G |
 | 検索 | Primary＋F |
 | コピー／全選択 | Primary＋C／A |
-| 現在ページを翻訳 | Primary＋Enter |
 | 全ページを翻訳 | Primary＋Shift＋Enter |
 | モデル設定 | Primary＋, |
 | 原文・訳文・操作バーのフォーカス移動 | F6／Shift＋F6 |
@@ -410,7 +412,7 @@ UTF-8 byte offset、Unicode scalar offset、PDFiumの文字index、wxTextCtrl位
 
 block内のmappingは、それぞれreading text／translation input内の局所byte offsetを指す。PageLayoutのreading mappingはページ全体のreading text内のoffsetを指す。両者を混用しない。Edited blockは細かなPDF文字mappingを持たない。
 
-`JobId` は実行するchunk試行、`PageAttemptId` はページの翻訳試行、`PlanGeneration` は実行中の分割計画の世代を識別する。再分割したらplan世代を更新する。アルゴリズムの版を表す `chunk_algorithm_version` と、実際の入力から計算する安定digestも別に持つ。セッションの増分世代番号を永続cache keyに使わない。
+`JobId` は実行するchunk試行、`PageAttemptId` はページの翻訳試行、`PlanGeneration` は実行計画の世代を識別する。アルゴリズムの版を表す `chunk_algorithm_version` と、実際の入力から計算する安定digestも別に持つ。セッションの増分世代番号を永続cache keyに使わない。
 
 ## 11. スレッド所有権とサービス契約
 
@@ -486,9 +488,9 @@ PDF処理は現在の可視tile、明示的な原文操作、現在ページ抽�
 
 ### 12.3 終了
 
-終了要求で新規操作を止め、全workerのcancel flagを立て、待機queueを起こす。PDFは進行中renderを閉じてhandleを順に破棄する。推論は安全なdecode境界から抜けてmodel等を破棄する。I/Oは確定済み保存をtransaction単位で終える。
+終了要求を受けたら直ちにウィンドウを隠し、PDFと推論を中断する。読書位置・設定・途中の訳文を保存キューへ渡し、GUIのイベントループを終了する。通常はI/Oが確定済みの保存を終え、各workerが後始末をしてからプロセスが終了する。
 
-worker終了確認後にjoinし、最後にevent receiverとGUIを破棄する。GUIの通常イベント処理を長時間止めてjoinしない。終了中も必要な状態表示を維持する。threadを強制終了したり、生きたcontextを別threadから解放したりしない。
+GUIやworkerが応答しない場合も、終了要求の受理から2秒で独立したスレッドがプロセスを終了する。この場合、まだコミットされていない変更は次回起動時に復元されないことがある。
 
 ---
 
@@ -603,7 +605,7 @@ UI寸法には適切に `FromDIP()` を使う。sizerのbest sizeへ再度DPIを
 
 raw記録には保持してよいが、通常のreading textとtranslation inputでは有効ページ境界との交差を考慮し、CropBox外に完全に隠れた文字を混ぜない。部分的に見える文字の元bboxは保持し、ハイライトを表示領域でclipする。bboxのない生成空白・改行は、残した文字の関係から配置する。
 
-抽出結果は内部的に `TextAvailable`、`NoTextLayer`、`UnicodeUnavailable`、`NoTranslatableText` を区別する。文字記録があるのにUnicodeが取れないページを、画像だけのPDFと断定しない。置換記号と空白だけをモデルへ送らない。数式等を原文表示するだけのページもrun内で確定させる。一部を取得できれば利用可能な範囲を処理し、原文編集を利用できる。
+抽出結果は内部的に `TextAvailable`、`NoTextLayer`、`UnicodeUnavailable`、`NoTranslatableText` を区別する。文字記録があるのにUnicodeが取れないページを、画像だけのPDFと断定しない。置換記号と空白だけをモデルへ送らない。数式や表だけのページも抽出できた全文を翻訳入力に使う。一部を取得できれば利用可能な範囲を処理し、原文編集を利用できる。
 
 ### 15.2 テキストを用途別に保持する
 
@@ -642,7 +644,7 @@ Unicodeが取れない文字は位置情報と異常を残し、必要な表示�
 
 ### 15.5 数式・表・図
 
-図の実体は左のPDFで表示し、captionは翻訳する。独立数式・表として確実に分類できたblockは、右側へ原文テキストと「数式／表：原文を参照」の区切りを置き、セルや記号を勝手に一つの自然文へ連結しない。画像を右のプレーンテキスト欄へ埋め込む処理は作らない。
+図の実体は左のPDFで表示し、captionは翻訳する。独立数式・表の文字も読順どおりにページの翻訳入力へ含める。表の行とセルの区切りを保つ。画像を右のプレーンテキスト欄へ埋め込む処理は作らない。
 
 分類が曖昧なら通常の独立blockとして残し、入力を編集できるようにする。本文中の式は原文のUnicodeを保ってモデルへ渡す。初版では独自placeholderを大量挿入する仕組みや数式再組版を追加しない。LLM出力が数式を完全に保存すると保証せず、厳密な表記の根拠は常に左の原文に置く。
 
@@ -719,7 +721,7 @@ const auto output_header =
 
 実装はprotocol部分と本文部分を区別する。protocolのspecial tokenはvocabから解決する。本文の `parse_special=false` を出発点にするが、このflagだけでモデル固有tokenizerでも必ず予約tokenを回避できるとは保証しない。通常本文について構築した全token列を公式referenceと比較し、予約表記のある本文では生成されたID・CONTROL／EOG属性・detokenize結果を別途確認する。[S23]
 
-BOSはprofileの仕様に従って一度だけ追加し、segment側は `add_special=false` で自動追加しない。protocol境界以外で本文を不必要に分割してtoken列を変えない。M0で通常の本文として表現できる方式を確認できれば固定する。上流の正式対応が必要なケースが残るなら、そのchunkだけを `ModelInputUnsupported` として原文を保持し、他のblockとPDF閲覧は利用できる。原文を黙って書き換えたり、独自のescape文法を追加したりしない。この扱いは実際に選んだprofileの表現限界に限定し、一般的な文章の制限へ広げない。
+BOSはprofileの仕様に従って一度だけ追加し、segment側は `add_special=false` で自動追加しない。protocol境界以外で本文を不必要に分割してtoken列を変えない。M0で通常の本文として表現できる方式を確認できれば固定する。上流の正式対応が必要なケースが残るなら、そのページを `ModelInputUnsupported` として原文を保持し、他のページの翻訳とPDF閲覧を続けられる。原文を黙って書き換えたり、独自のescape文法を追加したりしない。この扱いは実際に選んだprofileの表現限界に限定し、一般的な文章の制限へ広げない。
 
 token IDの数値を手書きしない。vocabから解決したtokenが期待するmarkerであることを確認する。生成時の `<|plamo:tag|>`、`<|plamo:bos|>`、profileに対応するEOGは停止条件とし、訳文へ追加しない。profileは通常本文token、正常停止token、予期しないprotocol tokenを区別する。予期しないCONTROL tokenを `token_to_piece(special=false)` で黙って消して成功にはせず、`InvalidModelOutput` としてpartialを残す。実token ID・属性で判断し、普通の出力文字列がmarker風に見えるだけで削除しない。
 
@@ -738,8 +740,8 @@ modelは選択やbackendが変わるまで保持する。contextはmodel、conte
 | 項目 | 初期値・方針 |
 |---|---|
 | 実行時context | 8192 tokenを出発点。modelが許す容量以下にする |
-| chunkの目安 | 原文約1024 token以下を優先。最終判定は実token数 |
-| 出力予約 | `max(512, 2 × source_tokens + 128)` を目安、初期上限4096 |
+| 翻訳単位 | 物理ページの全文を1回で渡す |
+| 出力予約 | `max(512, 2 × source_tokens + 128)` と最終promptを除いた残りcontext容量の小さい方 |
 | sampling | greedy。温度やseedの調整UIは初版に置かない |
 | prompt batch | 論理batch512、microbatch128を出発点に計測 |
 | CPU thread | `hw <= 1 ? 1 : min(8, hw - 1)` を初期値。hw取得失敗の0を先に扱いunsigned減算を避ける |
@@ -754,17 +756,16 @@ Metal初期化やmodel配置に失敗した場合、自動モードではGPUのm
 
 ### 18.2 ChunkPlan
 
-段落を基本単位とし、無関係な段落を一つの巨大promptへ詰めない。段落が大きい場合は文、句、単語、最後にUTF-8のscalar境界の順で分割する。ASCII byteの適当な長さで切らない。可能なら結合文字やZWJ sequenceを分けず、避けられない場合も不正UTF-8を作らない。
-
-分割ごとに**最終prompt**をtokenizeし、次を満たすことを確認する。
+読順を復元したページ全文を一つのpromptに含める。原文を編集したページでは編集後の全文を使う。
+ページごとに最終promptのtoken数を求め、次を満たすことを確認する。
 
 ```text
 final_prompt_tokens + reserved_output_tokens <= actual_context_capacity
 ```
 
-収まらなければ入力chunkを小さくする。原文、末尾、templateを黙って切り捨てない。BOS、protocol、文体指定のtokenも含める。文字数からの推定だけで最終判定しない。
+BOS、protocol、文体指定を含めた全文のpromptでcontextを使い切った場合は、当該ページに `ContextLimit` を表示する。
 
-`ChunkPlan` はblock ID、chunk algorithm version、実行plan世代、各chunkの原文byte範囲、実token数、生成上限、source digestを保持する。各実行対象を `PreparedChunk` として確定し、最終promptのtoken vector、停止token集合、prompt IDsの安定digestも保持する。予算判定と本番decodeに同じtoken vectorを使い、実行時に文字列へ戻して別の設定で再tokenizeしない。初版は重複overlapを入れない。翻訳済みchunkの連結で原文の一部を二重に訳さない。
+`PreparedChunk` は1ページの原文範囲、生成上限、停止token集合、原文とprompt IDsのdigestを保持する。予算判定とdecodeに同じtoken vectorを使う。
 
 ```cpp
 // InferenceService内の値型。llamaのhandleを外へ出さない。
@@ -783,13 +784,13 @@ struct PreparedChunk {
 };
 ```
 
-出力上限へ達したら `OutputLimit` とし、当該chunkをより小さく分割して一度自動再試行する。新しいplan世代とchunk IDを付け、旧planの遅延差分を除外する。元のpartialは新しい成功結果で置き換える対象として扱い、両方を連結しない。変更していない完了chunkはsource範囲とprompt digestの一致を確認して新planへ引き継げる。再試行でも完了できなければPartialと理由を表示し、当該全ページrunでは確定させて次pageへ進む。原文を無言で捨てて成功にしない。
+出力上限へ達したら `OutputLimit` とし、生成できた訳文を部分結果として表示する。再試行時はページ全文を渡す。全ページ翻訳では未完了を記録して次のページへ進む。
 
 ### 18.3 APIの寿命と状態初期化
 
 `InferenceService` がbackend初期化、`llama_model`、`llama_context`、sampler、再利用batch、cancel flag、UTF-8 decoderを所有する。実際のAPI名・返値はlockした `llama.h` に合わせてadapter内へ閉じ込める。[S9]
 
-chunk開始時に推論memoryとsamplerを初期化する。現行APIなら `llama_memory_clear(llama_get_memory(ctx), true)` 等を使い、KVだけを手で消したつもりにならない。途中で停止したstateを次のchunkへ持ち越さない。prefix cacheや複数sequenceの同時batchingは、初版の正しさが確認できた後の最適化とする。
+chunk開始時に `llama_memory_clear(llama_get_memory(ctx), false)` でPLaMo 3のKVセルをすべて無効化する。次の入力は位置0から評価し、停止した生成の続きを参照しない。greedy samplingでは表示できないASCII制御文字を表すbyte tokenを候補から外し、残るlogitsで最大値を取る最初のtokenを選ぶ。改行・タブは使用できる。
 
 ### 18.4 Decodeの流れ
 
@@ -862,13 +863,9 @@ struct ChunkResult {
 };
 ```
 
-chunkのCompletedだけを永続翻訳cacheへ保存する。Cancelled、OutputLimit、ContextLimit、失敗、空出力は完成cacheへ入れない。partialはセッション内で表示する。ページがCompleteになるのは、翻訳対象の全chunkが完了し、原文のまま表示するblockも配置できたとき。
+ページ全文の生成がCompletedに達した場合だけ、完成訳を永続cacheへ保存する。partialはセッション内で表示する。
 
-同じblock内のchunkは順に生成する。既に完了したchunkを再利用して、未完了chunkから再開できる。中断したtoken列やcontextを保存して途中からdecodeを再開する機能は初版に入れない。中断したchunk自体は最初から生成する。
-
-「このページを翻訳」は未完了部分を処理する。「このページを最初から再翻訳」は新しいPageAttemptIdを作り、その試行でcache読出しをbypassする。生成済みchunkと予定chunkをattempt manifestで追跡し、その試行の全対象が完了するまでCompleteにしない。
-
-強制再翻訳を中断して再開する場合も、当該attemptで完成したchunkだけを完成済みとして引き継ぐ。未生成部分を旧attemptのcacheで補って新試行をCompleteにしない。旧訳を参照可能に保持することと、今回の完了判定を分ける。attemptとchunk状態はcache DBへtransactionで保存し、再起動後の再開にも同じ意味を保つ。文体・原文変更では別の条件・attemptとして扱う。
+現在ページの自動翻訳は保存済みの完成訳を再利用できる。未完了ならページ全文から再試行する。「このページを最初から再翻訳」は新しいPageAttemptIdを作り、その試行でcache読出しをbypassする。中断後もその試行のbypassを引き継ぐ。文体・原文変更では別の条件・attemptとして扱う。
 
 ### 19.2 意味を表すcache key
 
@@ -1011,7 +1008,7 @@ CREATE TABLE session_completed_chunks (
 );
 ```
 
-`document_key`／`profile_key` は正式digest確定前には明示的なprovisional名前空間を使い、確定時に昇格する。attempt chunkのstatusはpending、running、complete、partial、failed、replaced等を区別する。再分割では親をreplacedにして子を登録する。全blockの計画完了と、現在のleaf chunk全件の完了を確認してpageをCompleteにする。chunk結果とattempt状態の更新は同じtransactionにする。通常のcache再利用でも、どのchunkを今回採用したかをmanifestへ記録する。
+`document_key`／`profile_key` は正式digest確定前には明示的なprovisional名前空間を使い、確定時に昇格する。attempt chunkのstatusはpending、running、complete、partial、failed、replaced等を区別する。全文のchunkが完了したページをCompleteにする。chunk結果とattempt状態の更新は同じtransactionにする。通常のcache再利用でも、どのchunkを今回採用したかをmanifestへ記録する。
 
 schema versionは `PRAGMA user_version` 等で管理する。必要な列の追加はtransactionで行う。prepared statementを使い、tokenごとのcommitをしない。chunk完了・override保存・設定変更を適切な単位でcommitする。
 
@@ -1182,7 +1179,7 @@ CMakeはmanifestから `PDFium::PDFium` imported targetを構築する。最小p
 
 CPU命令の最低条件はPDFium等も含む成果物全体から判断する。llamaだけを調べて「SSE2のみ」と宣言しない。独自にAVX2必須のPCへ限定しない。`GGML_CPU_ALL_VARIANTS` は現在dynamic backend構成を要求するため、単一EXEの自動dispatchを一つのflagで得られると考えない。
 
-portable baselineの完成後、同一EXEに静的な複数kernelを組み込み実行時dispatchする最適化は検討できる。その変更は、非対応CPUで起動前にillegal instructionにならない試験を伴う別工程とする。
+Windows x64のclang-clビルドは同一EXEにAVX2・FMA・F16C用の量子化演算とattention用kernelを静的に組み込む。起動時にCPUIDとXCR0を確認し、CPUとOSが対応する場合に利用する。対象kernelだけに命令セットのcompile flagsを付け、CPU判定と通常の起動経路はportable baselineでbuildする。
 
 ### 21.6 llama backend
 
@@ -1224,7 +1221,7 @@ Macもtarget名だけを変える。これらは作成するscriptのCLI契約�
 
 ### 22.1 Windows
 
-releaseの利用者向け成果物は `offline-pdf-translator.exe` 一つ。modelは同梱必須にせず、利用者が選ぶ外部GGUF。debug symbolは別の開発用成果物として保持できるが、起動に要求しない。
+releaseの利用者向け成果物はZIPとし、`offline-pdf-translator.exe`、固定した公式Q4_K_MのGGUF、`README.md`、`PLaMo-Community-ja.txt` を同じフォルダーに収録する。利用者はモデル設定から同梱GGUFを選ぶ。MacのZIPも.appとこれらの同梱ファイルを同じフォルダーに収録する。
 
 `dumpbin /DEPENDENTS` またはPE解析で、通常importとdelay importを確認する。MSVCの再頒布runtime、OpenMP、PDFium／wx／llama／ggml等のDLLが必須依存として残らないことを確認する。OSの `msvcp_win.dll` と再頒布の `MSVCP140*.dll` を名前だけで混同しない。[S15][S20]
 
@@ -1274,7 +1271,7 @@ releaseの利用者向け成果物は `offline-pdf-translator.exe` 一つ。mode
 | profile未対応 | モデル名と未対応理由。推測promptで実行しない |
 | model／contextのメモリ確保失敗 | 短い理由。CPU再試行や別GGUF選択が適切なら提示 |
 | Metal失敗 | 自動modeではCPUで一度再構築し、実backendを表示 |
-| 出力上限 | 小さいchunkで一度再試行。未完了ならpartial表示 |
+| 出力上限 | 部分結果と終了理由を表示 |
 | 手動停止 | 完成済みchunkとpartialを区別し、再実行可能 |
 | cacheの破損 | cacheを再作成して継続。原文overrideは消さない |
 | 保存先の書込失敗 | このセッションの処理は継続。未保存であることを表示 |
@@ -1419,8 +1416,8 @@ renderのgoldenはOSをまたいだbyte完全一致だけにしない。埋込fo
 | L02 | PFML3構築 | BOSは一度、headerと本文の設定がreferenceと一致 |
 | L03 | 停止token | markerを本文へ出さず正常終了 |
 | L04 | UTF-8がtokenをまたぐ | 途中の置換文字やbyte欠落がない |
-| L05 | context不足 | 分割し、原文を黙って切らない |
-| L06 | 出力上限 | OutputLimit、再分割、partial／完了の区別 |
+| L05 | context不足 | ページ単位でContextLimitを表示 |
+| L06 | 出力上限 | OutputLimit、partial／完了の区別 |
 | L07 | CPU停止／GPU境界停止 | UIが要求を受け付け、次jobにstateが漏れない |
 | L08 | context再利用 | 複数chunkを実行して、前jobの残留stateが混入しない |
 | L09 | GGUF path | 日本語／空白を含むpathでmodelを直接loadできる |
@@ -1454,7 +1451,7 @@ fake PDF／inference／storageに遅延と順序入替えを注入して確認�
 | A14 | 終了中のイベント | 解放済みGUIやPDF／llama handleへ触らない |
 | A15 | hash完了前の原文保存と終了 | 暫定overrideを回復できる |
 | A16 | 強制再翻訳の中断・再開 | 旧attemptの未再生成chunkでCompleteにしない |
-| A17 | OutputLimit再分割中の旧delta | plan世代で除外し、partialを二重連結しない |
+| A17 | 再試行中の旧delta | WorkStampで除外し、新しいページ訳に混入しない |
 | A18 | active文書がcache予算を超える | 完了訳をpinして書出し・再表示へ利用できる |
 
 ### 26.4 GUI

@@ -6,14 +6,13 @@
 
 using namespace opt;
 void require(bool value,const char* why){if(!value)throw std::runtime_error(why);}
-std::shared_ptr<PreparedChunk> prepare(const ChunkRequest& r){return std::make_shared<PreparedChunk>(ChunkPlanner::prepare(r,8192,[](std::string_view s,Form){PreparedInput p;p.tokens.assign(s.size(),17);p.source_tokens=s.size();p.output_limit=512;return p;},[](std::string_view s){return s.size();}));}
+std::shared_ptr<PreparedChunk> prepare(const ChunkRequest& r){return std::make_shared<PreparedChunk>(ChunkPlanner::prepare(r,8192,[](std::string_view s,Form){PreparedInput p;p.tokens.assign(s.size(),17);p.source_tokens=s.size();p.output_limit=512;return p;}));}
 std::string file_text(const std::filesystem::path& path){std::ifstream in(path,std::ios::binary);return {std::istreambuf_iterator<char>(in),{}};}
 std::string path_text(const std::filesystem::path& path){const auto s=path.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
 int main(){const auto directory=std::filesystem::temp_directory_path()/std::filesystem::path("opt-store-"+new_uuid());
     try{
         const auto s=directory/"state",c=directory/"cache";const std::string provisional="provisional:file:original",doc="sha256:document",model="sha256:model";
         const auto source=std::make_shared<const std::string>("Original paragraph.");
-        const std::vector<AttemptBlock> blocks{{"block",BlockKind::Paragraph,source,false}};
         CacheContext context{"provisional:session:document","provisional:session:model","profile","source",0};
         auto full=context;full.document_key=doc;full.model_key=model;
         std::string forced_id;
@@ -33,7 +32,7 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
             FileSignature signature{"native-identity",123,456};store.fingerprint("日本語.pdf",signature,sha256("object"));
             require(store.fingerprint("日本語.pdf",signature)==sha256("object"),"matching native signature reuses hash");signature.identity="replaced";require(!store.fingerprint("日本語.pdf",signature),"same path replaced object misses fingerprint");
             store.save_position(doc,"日本語.pdf",{2,PdfPoint{3.5,4.25},8});require(store.recent_documents().at(0)=="日本語.pdf","native recent path persisted");
-            PageAttempt attempt({1,0,1,1,1},context.condition_key(),blocks,Form::Plain);
+            PageAttempt attempt({1,0,1,1,1},context.condition_key(),source,Form::Plain);
             auto request=attempt.next_request();prepared=prepare(*request);attempt.prepared(prepared);attempt.finished(prepared->stamp,{FinishReason::Completed,"翻訳された文章。",4});
             store.save_attempt(context,attempt.snapshot());require(store.completed(context,*prepared)=="翻訳された文章。","completed chunk reused");
             std::size_t exported_count=store.for_each_complete_page(context.document_key,context.model_key,"profile",[](PageIndex,std::string_view text){require(text=="翻訳された文章。","export same completed attempt");});
@@ -45,11 +44,11 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
             store.promote_cache(false,context.document_key,doc);store.promote_cache(true,context.model_key,model);
             require(!store.completed(context,*prepared)&&store.completed(full,*prepared)=="翻訳された文章。","both fingerprints atomically rekey completion and references");
             auto restored=store.attempt(full);require(restored&&restored->state==PageState::Complete&&restored->condition_key==full.condition_key(),"manifest follows fingerprint promotion");
-            PageAttempt replay({2,0,2,1,1},full.condition_key(),blocks,Form::Plain,false,restored);require(replay.state()==PageState::Complete,"complete persisted attempt restores");
-            PageAttempt forced({2,0,2,1,1},full.condition_key(),blocks,Form::Plain,true);forced_id=forced.snapshot().id;
+            PageAttempt replay({2,0,2,1,1},full.condition_key(),source,Form::Plain,false,restored);require(replay.state()==PageState::Complete,"complete persisted attempt restores");
+            PageAttempt forced({2,0,2,1,1},full.condition_key(),source,Form::Plain,true);forced_id=forced.snapshot().id;
             auto r=forced.next_request();auto p=prepare(*r);forced.prepared(p);forced.delta(p->stamp,"途中の文章");forced.interrupt();store.save_attempt(full,forced.snapshot());
             auto saved_force=store.attempt(full);require(saved_force&&saved_force->id==forced_id&&saved_force->bypass_cache,"new forced attempt is selected over old completion");
-            PageAttempt resume({3,0,3,1,1},full.condition_key(),blocks,Form::Plain,false,saved_force);require(!resume.may_read_cache()&&resume.state()!=PageState::Complete&&resume.next_request(),"restart cannot fill forced attempt from prior cache");
+            PageAttempt resume({3,0,3,1,1},full.condition_key(),source,Form::Plain,false,saved_force);require(!resume.may_read_cache()&&resume.state()!=PageState::Complete&&resume.next_request(),"restart cannot fill forced attempt from prior cache");
             const auto exported=store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("old completed attempt must not export");});require(exported==0,"new partial attempt supersedes old export");
         }
         {
@@ -86,20 +85,20 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
         CacheContext provisional_context{"provisional:document:native-signature","provisional:model:native-signature","profile","source",0};
         auto formal_context=provisional_context;formal_context.document_key="sha256:crash-document";formal_context.model_key="sha256:crash-model";
         std::string crash_id;
-        {Store store(directory/"crash-state",directory/"crash-cache");PageAttempt a({1,0,1,1,1},provisional_context.condition_key(),blocks,Form::Plain,true);crash_id=a.snapshot().id;store.save_attempt(provisional_context,a.snapshot());
+        {Store store(directory/"crash-state",directory/"crash-cache");PageAttempt a({1,0,1,1,1},provisional_context.condition_key(),source,Form::Plain,true);crash_id=a.snapshot().id;store.save_attempt(provisional_context,a.snapshot());
             store.prepare_cache_promotion(false,provisional_context.document_key,formal_context.document_key);store.prepare_cache_promotion(true,provisional_context.model_key,formal_context.model_key);}
         {Store store(directory/"crash-state",directory/"crash-cache");auto saved=store.attempt(formal_context);require(saved&&saved->id==crash_id&&saved->bypass_cache,"interrupted cross-database promotion recovers forced attempt");
             require(store.promoted_key(true,provisional_context.model_key)==formal_context.model_key,"native signature alias survives missing state fingerprint commit");}
         // Persist a completion from a clock in the future, then restart at the
         // host's present clock. A new forced attempt still owns this condition.
         const auto clock_state=directory/"clock-state",clock_cache=directory/"clock-cache";
-        {Store store(clock_state,clock_cache);PageAttempt a({1,0,1,1,1},full.condition_key(),blocks,Form::Plain);
+        {Store store(clock_state,clock_cache);PageAttempt a({1,0,1,1,1},full.condition_key(),source,Form::Plain);
             auto r=a.next_request();auto p=prepare(*r);a.prepared(p);a.finished(p->stamp,{FinishReason::Completed,"完成した訳文。",3});store.save_attempt(full,a.snapshot());
             auto unsafe=a.snapshot();unsafe.chunks.front().text=std::string("prefix\0hidden",13);bool rejected=false;
             try{store.save_attempt(full,unsafe);}catch(const std::invalid_argument&){rejected=true;}require(rejected,"invalid display controls cannot enter completed cache");}
         sqlite3_open(path_text(clock_cache/"cache.sqlite3").c_str(),&db);
         require(sqlite3_exec(db,"UPDATE page_attempts SET modified_at=2100000000000000000",nullptr,nullptr,nullptr)==SQLITE_OK,"future timestamp fixture");sqlite3_close(db);
-        {Store store(clock_state,clock_cache);PageAttempt forced({2,0,1,1,1},full.condition_key(),blocks,Form::Plain,true);store.save_attempt(full,forced.snapshot());
+        {Store store(clock_state,clock_cache);PageAttempt forced({2,0,1,1,1},full.condition_key(),source,Form::Plain,true);store.save_attempt(full,forced.snapshot());
             require(store.attempt(full)->id==forced.snapshot().id,"clock rollback cannot select older completed attempt");
             require(store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("future-clock old attempt exported");})==0,"clock rollback cannot export superseded completion");}
         {Store store(clock_state,clock_cache);auto previous=store.attempt(full);store.switch_to_memory();require(!store.state_persistent()&&!store.cache_persistent()&&store.attempt(full)->id==previous->id,"runtime fallback retains cache manifest and marks both stores unsaved");}

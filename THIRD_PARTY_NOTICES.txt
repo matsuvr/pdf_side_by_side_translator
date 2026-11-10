@@ -1,11 +1,11 @@
 Offline PDF Translator — Licenses and third-party notices
 
 Original application source, fixtures and icon: MIT License (see below).
-Third-party components retain their own licenses. Model weights are NOT
-distributed and are NOT covered by the application's MIT License.
+Third-party components retain their own licenses. Release ZIPs include PLaMo
+model weights under the PLaMo Community License reproduced below.
 
 Built with PLaMo
-Supported separate model: PLaMo 3 Translate 0.8B (pfnet).
+Bundled model: PLaMo 3 Translate 0.8B Q4_K_M (pfnet).
 Model use and publication/provision of model outputs are subject to the PLaMo
 Community License reproduced at the end for offline reference. In particular,
 models trained using outputs are subject to that agreement. Consult the full
@@ -5203,7 +5203,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
 ============================================================================
-PLaMo Community License: reference terms for the separately supplied model
+PLaMo Community License for the bundled model
 ============================================================================
 
 --- licenses/PLaMo-Community-ja.txt ---

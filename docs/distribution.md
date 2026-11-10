@@ -26,6 +26,12 @@ backend, model or helper executable in the package. Package metadata redacts
 the local source root, and source prefix mapping removes that root from CMake
 compilation file-name strings.
 
+Release ZIPs contain the Windows executable or Mac .app, the official pinned
+Q4_K_M GGUF, `README.md` and `PLaMo-Community-ja.txt` at the top level.
+The startup screen reads the adjacent license file when its link is activated.
+Packaging verifies the GGUF against the model fixture's SHA-256, then extracts
+the ZIP and checks the executable and all companion files before publication.
+
 These are development artifacts. No Developer ID identity, notarization ticket,
 stapling, quarantined Gatekeeper first launch or clean-machine acceptance is
 claimed. Source publication does not silently imply those distribution checks.

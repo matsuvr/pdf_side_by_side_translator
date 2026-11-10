@@ -116,7 +116,8 @@ struct PdfService::Impl {
     void render_slice(Clock::time_point start,int status){++render_slices;if(status==FPDF_RENDER_TOBECONTINUED)++render_yields;maximum(render_max_us,std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-start).count());}
     std::thread worker;
     explicit Impl(Delivery callback,std::filesystem::path fonts):delivery(std::move(callback)),font_directory(std::move(fonts)),worker([this]{run();}){}
-    ~Impl(){stopping=true;cv.notify_one();if(worker.joinable())worker.join();}
+    ~Impl(){stop();if(worker.joinable())worker.join();}
+    void stop() noexcept{std::lock_guard lock(mutex);stopping=true;cv.notify_one();}
     void emit(PdfEvent event){delivery(std::make_shared<const PdfEvent>(std::move(event)));}
 
     struct ActiveRender : IFSDK_PAUSE {
@@ -386,7 +387,7 @@ bool PdfService::extract(DocumentEpoch epoch,PageIndex page){
 void PdfService::search(PdfSearchRequest request){
     std::lock_guard lock(impl_->mutex);if(request.document!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->desired_query=request.generation;impl_->searching=std::move(request);impl_->cv.notify_one();
 }
-void PdfService::stop() noexcept{impl_->stopping=true;impl_->cv.notify_one();}
+void PdfService::stop() noexcept{impl_->stop();}
 bool PdfService::done() const noexcept{return impl_->finished.load();}
 void PdfService::join(){if(impl_->worker.joinable())impl_->worker.join();}
 PdfServiceStats PdfService::stats()const noexcept{

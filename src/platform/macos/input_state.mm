@@ -19,7 +19,7 @@ struct NativeShortcutMonitor::Impl {
             if([event window]!=state->window||[[NSApp mainMenu] highlightedItem])return event;
             const auto modifiers=[event modifierFlags];auto* chars=[event charactersIgnoringModifiers];if(![chars length])return event;
             const auto character=[chars characterAtIndex:0];ShortcutKey key=ShortcutKey::Other;
-            if(character=='\r'||character==3)key=ShortcutKey::Enter;else if(character=='.')key=ShortcutKey::Period;
+            if(character=='\r'||character==3)key=ShortcutKey::Enter;
             else if(character==',')key=ShortcutKey::Comma;else if(character=='g'||character=='G')key=ShortcutKey::G;
             else if(character==NSF6FunctionKey)key=ShortcutKey::F6;else if(character==27)key=ShortcutKey::Escape;
             if(key==ShortcutKey::Other)return event;

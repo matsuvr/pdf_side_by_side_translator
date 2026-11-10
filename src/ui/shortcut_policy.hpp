@@ -1,13 +1,13 @@
 #pragma once
 namespace opt {
-enum class ShortcutKey { Other, Enter, Period, Comma, G, F6, Escape };
-enum class ShortcutAction { Native, Translate, TranslateAll, Stop, ModelSettings, FocusPage, CycleFocus, CloseSearch };
+enum class ShortcutKey { Other, Enter, Comma, G, F6, Escape };
+enum class ShortcutAction { Native, TranslateAll, ModelSettings, FocusPage, CycleFocus, CloseSearch };
 struct ShortcutContext {bool modal=false,composing=false,primary=false,shift=false,alt=false,search_open=false;};
 inline ShortcutAction frame_shortcut(ShortcutKey key,const ShortcutContext& state){
     if(state.modal||state.composing||state.alt)return ShortcutAction::Native;
     if(state.primary){
-        switch(key){case ShortcutKey::Enter:return state.shift?ShortcutAction::TranslateAll:ShortcutAction::Translate;
-        case ShortcutKey::Period:return ShortcutAction::Stop;case ShortcutKey::Comma:return ShortcutAction::ModelSettings;
+        switch(key){case ShortcutKey::Enter:if(state.shift)return ShortcutAction::TranslateAll;break;
+        case ShortcutKey::Comma:return ShortcutAction::ModelSettings;
         case ShortcutKey::G:if(!state.shift)return ShortcutAction::FocusPage;break;default:break;}
     }else{
         if(key==ShortcutKey::F6)return ShortcutAction::CycleFocus;

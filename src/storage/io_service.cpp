@@ -65,7 +65,7 @@ struct IoService::Impl {
         if(!key.empty())for(auto& job:jobs)if(job.coalesce==key){job.execute=std::move(task);cv.notify_one();return true;}
         if(jobs.size()>=64)return false;jobs.push_back({std::move(key),std::move(task)});cv.notify_one();return true;
     }
-    void stop()noexcept{stopping=true;cv.notify_one();}
+    void stop()noexcept{std::lock_guard lock(mutex);stopping=true;cv.notify_one();}
     void promote(Store& store,Hash& hash,std::string digest){
         if(hash.file->signature()!=hash.signature)throw std::runtime_error("File changed while fingerprinting");
         const auto key="sha256:"+digest;

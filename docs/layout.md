@@ -29,8 +29,9 @@ is not globally normalized with NFKC. Combining characters and emoji remain
 UTF-8. Line records provide an index for hit testing; selection is a logical
 reading-text byte range mapped back to individual source glyphs.
 
-Confident isolated short equations and aligned numeric tables are classified
-for source-text display. The conservative table rule requires at least three
+The layout engine recognizes isolated short equations and aligned numeric tables.
+Their text is included at its reading position in the full-page prompt.
+The conservative table rule requires at least three
 aligned columns and three rows with repeated numeric cells. Ambiguous text is
 kept as independent prose rather than discarded. Captions remain translatable.
 Complex RTL, vertical writing and arbitrary reading order are not guaranteed;

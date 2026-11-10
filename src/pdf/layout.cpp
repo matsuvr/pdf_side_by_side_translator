@@ -342,14 +342,12 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
             }
         }
     }
-    bool has_model_block=false;
     for(auto& block:result.blocks){
         const auto lower=folded(block.reading_text_utf8);
         if(block.kind!=BlockKind::Table){
             if(lower.starts_with("figure ")||lower.starts_with("fig. ")||lower.starts_with("table "))block.kind=BlockKind::Caption;
             else if(equation(block))block.kind=BlockKind::Equation;
         }
-        if(block.kind!=BlockKind::Table&&block.kind!=BlockKind::Equation&&!block.translation_input_utf8.empty())has_model_block=true;
         block.block_id=block_id(block);
         if(!result.reading_text_utf8.empty())result.reading_text_utf8+="\n\n";
         const auto offset=result.reading_text_utf8.size();result.reading_text_utf8+=block.reading_text_utf8;
@@ -357,7 +355,7 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
         for(auto line:block.lines){line.utf8_begin+=offset;line.utf8_end+=offset;result.lines.push_back(line);}
     }
     result.availability=!visible_character?PageLayout::Availability::NoTranslatableText:!unicode_available?PageLayout::Availability::UnicodeUnavailable:
-        usable_visible_text&&has_model_block?PageLayout::Availability::TextAvailable:PageLayout::Availability::NoTranslatableText;
+        usable_visible_text&&!result.reading_text_utf8.empty()?PageLayout::Availability::TextAvailable:PageLayout::Availability::NoTranslatableText;
     return result;
 }
 std::vector<SourceCharRange> source_ranges(const PageLayout& layout,std::size_t begin,std::size_t end){

@@ -47,6 +47,12 @@ def main():
         settings["mac_deployment_target"] = "14.0"
     else:
         settings["is_clang"] = True
+        # Match the application's MSVC STL and static CRT. Mixing Chromium's
+        # libc++ exception support with MSVC's duplicates std::exception_ptr.
+        settings["use_custom_libcxx"] = False
+        # Keep MSVC STL deduction-guide warnings visible without failing the
+        # external build on Clang's -Wctad-maybe-unsupported diagnostic.
+        settings["treat_warnings_as_errors"] = False
     gn_args = "\n".join(k + " = " + json.dumps(v) for k, v in settings.items()) + "\n"
     (out / "args.gn").write_text(gn_args)
     env = depot_environment()
@@ -73,6 +79,8 @@ def main():
     archives = []
     declared_libraries = target.get("libs", [])
     for word in words:
+        if not mac and word.startswith(("/", "-")):
+            continue
         if word.endswith((".a", ".lib")):
             p = (out / word).resolve()
             if not p.is_file():

@@ -14,10 +14,29 @@ import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 
 from common import ROOT,TARGETS,lock,run,sha256
 from write_build_info import build_info
 from audit_dependencies import audit_macho,audit_pe
+
+MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
+
+def companion_files(target,model_file):
+    files={MODEL_LICENSE.name:MODEL_LICENSE,'README.md':ROOT/'README.md'}
+    if target.endswith('-release'):
+        model=lock()['model_fixture']
+        path=model_file or ROOT/model['filename']
+        if not path.is_file() or sha256(path)!=model['sha256']:
+            raise RuntimeError('Supply the pinned official GGUF with --model-file: '+str(path))
+        files[model['filename']]=path
+    return files
+
+def verify_companions(directory,expected):
+    for name,digest in expected.items():
+        path=directory/name
+        if not path.is_file() or sha256(path)!=digest:
+            raise RuntimeError('Missing or changed package file: '+str(path))
 
 def product():
     values={}
@@ -51,7 +70,9 @@ def validate_static_windows(build,target):
         count+=1
     if not count:raise RuntimeError('No CRT compile evidence')
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True);args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True)
+    parser.add_argument('--model-file',type=Path,help='Pinned official GGUF to include in a Release ZIP')
+    args=parser.parse_args()
     target=args.target;mac=target.startswith('macos-');values=product();version=values['OPT_VERSION'];name=values['OPT_PRODUCT_NAME'];exe=values['OPT_EXECUTABLE_NAME']
     if mac!=(platform.system()=='Darwin'):raise SystemExit('Package on the target operating system')
     info=build_info(target,version)
@@ -64,9 +85,12 @@ def main():
     run([os.sys.executable,ROOT/'scripts/collect_notices.py','--check'])
     binary=build/(name+'.app')/'Contents/MacOS'/name if mac else build/(exe+'.exe')
     if ('OPT_BUILD_INFO:'+info['identity_sha256']).encode() not in binary.read_bytes():raise SystemExit('Executable does not contain the matching build identity')
+    companions=companion_files(target,args.model_file)
+    companion_hashes={name:sha256(path) for name,path in companions.items()}
     dist=ROOT/'dist'/target;dist.mkdir(parents=True,exist_ok=True)
     unique=dist/info['identity_sha256'][:12]
     if unique.exists():
+        verify_companions(unique,companion_hashes)
         manifest=json.loads((unique/'package-manifest.json').read_text())
         artifact=unique/manifest['artifact']
         if artifact.parent!=unique or manifest.get('identity_sha256')!=info['identity_sha256'] or sha256(artifact)!=manifest['sha256']:
@@ -74,10 +98,11 @@ def main():
         if mac:
             audit_bundle(unique/(name+'.app'),'arm64' if 'arm64' in target else 'x86_64')
             run(['codesign','--verify','--deep','--strict',unique/(name+'.app')])
-        elif audit_pe(artifact)['failures']:raise SystemExit('Existing executable dependency audit failed')
+        elif audit_pe(unique/(exe+'.exe'))['failures']:raise SystemExit('Existing executable dependency audit failed')
         print('Verified existing package',artifact);return
     with tempfile.TemporaryDirectory(prefix='.package-',dir=dist) as temporary:
         stage=Path(temporary);payload=stage/'payload';payload.mkdir()
+        for filename,path in companions.items():shutil.copyfile(path,payload/filename)
         if mac:
             bundle=payload/(name+'.app');shutil.copytree(build/(name+'.app'),bundle)
             resources=bundle/'Contents/Resources'
@@ -92,20 +117,32 @@ def main():
             arch='arm64' if 'arm64' in target else 'x86_64';reports=audit_bundle(bundle,arch)
             run(['codesign','--force','--sign','-','--timestamp=none',bundle])
             run(['codesign','--verify','--deep','--strict','--verbose=2',bundle])
-            archive_name=f'{exe}-{version}-{target}.zip';archive=stage/archive_name
-            run(['ditto','-c','-k','--sequesterRsrc','--keepParent',bundle,archive])
-            extracted=stage/'extracted';run(['ditto','-x','-k',archive,extracted])
-            restored=extracted/bundle.name;run(['codesign','--verify','--deep','--strict','--verbose=2',restored]);audit_bundle(restored,arch)
-            if sha256(restored/'Contents/MacOS'/name)!=sha256(bundle/'Contents/MacOS'/name):raise RuntimeError('ZIP round-trip changed executable')
-            shutil.move(str(archive),str(payload/archive_name));artifact=payload/archive_name
         else:
             validate_static_windows(build,target)
-            artifact=payload/(exe+'.exe');shutil.copyfile(binary,artifact);reports=[audit_pe(artifact)]
+            staged_binary=payload/(exe+'.exe');shutil.copyfile(binary,staged_binary);reports=[audit_pe(staged_binary)]
             if reports[0]['failures']:raise RuntimeError(json.dumps(reports,indent=2))
-            reports[0]['file']=artifact.name
+            reports[0]['file']=staged_binary.name
             write_json(payload/'BUILD-INFO.json',info);write_json(payload/'DEPENDENCIES.json',sanitized(pdf))
+        verify_companions(payload,companion_hashes)
+        archive_name=f'{exe}-{version}-{target}.zip';archive=stage/archive_name
+        extracted=stage/'extracted'
+        if mac:
+            run(['ditto','-c','-k','--sequesterRsrc',payload,archive])
+            run(['ditto','-x','-k',archive,extracted])
+            restored=extracted/bundle.name;run(['codesign','--verify','--deep','--strict','--verbose=2',restored]);audit_bundle(restored,arch)
+            restored_binary=restored/'Contents/MacOS'/name
+        else:
+            with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as output:
+                for path in sorted(payload.iterdir()):output.write(path,path.name)
+            with zipfile.ZipFile(archive) as output:output.extractall(extracted)
+            restored_binary=extracted/binary.name
+            if audit_pe(restored_binary)['failures']:raise RuntimeError('Extracted executable dependency audit failed')
+        verify_companions(extracted,companion_hashes)
+        if sha256(restored_binary)!=sha256(binary):raise RuntimeError('ZIP round-trip changed executable')
+        shutil.move(str(archive),str(payload/archive_name));artifact=payload/archive_name
         manifest={**info,'artifact':artifact.name,'size':artifact.stat().st_size,'sha256':sha256(artifact),
-          'runtime_audit':reports,'model_included':False,'clean_machine_execution':'not implied by packaging',
+          'files':{name:{'sha256':companion_hashes[name],'size':path.stat().st_size} for name,path in companions.items()},
+          'runtime_audit':reports,'model_included':target.endswith('-release'),'clean_machine_execution':'not implied by packaging',
           'signature':'ad-hoc; not notarized' if mac else 'unsigned'}
         write_json(payload/'package-manifest.json',manifest)
         (payload/(artifact.name+'.sha256')).write_text(manifest['sha256']+'  '+artifact.name+'\n')

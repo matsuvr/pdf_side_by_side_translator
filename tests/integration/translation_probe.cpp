@@ -50,11 +50,11 @@ int main(int argc,char** argv){
             if(e->kind==PdfEvent::Kind::Extracted)layout=e->layout;
             if(e->kind==PdfEvent::Kind::Failed)throw std::runtime_error(e->message);
         }
-        for(;;){auto e=inference_events.take();if(e->kind==InferenceEvent::Kind::ModelReady){std::cout<<"backend="<<e->backend<<" context="<<e->context_capacity<<'\n';
+        for(;;){auto e=inference_events.take();if(e->kind==InferenceEvent::Kind::ModelReady){std::cout<<"backend="<<e->backend<<" context="<<e->context_capacity<<" load_seconds="<<e->seconds<<'\n';
                 if(fail_metal){if(!injected->load()||e->backend!="CPU")throw std::runtime_error("Real Metal failure / CPU rebuild was not exercised");std::cout<<"real_metal_context_then_cpu_fallback=passed\n";}break;}
             if(e->kind==InferenceEvent::Kind::ModelFailed)throw std::runtime_error(e->detail);}
         std::cout<<"source:\n"<<layout->reading_text_utf8<<"\ntranslation:\n";
-        PageAttempt attempt({1,0,1,1,1},"probe-condition",PageAttempt::sources(*layout),Form::Plain);
+        PageAttempt attempt({1,0,1,1,1},"probe-condition",PageAttempt::source(*layout),Form::Plain);
         auto pump=[&]{if(auto request=attempt.next_request())if(!inference.plan(*request))throw std::runtime_error("Plan rejected");};
         pump();
         while(attempt.state()==PageState::Running||attempt.state()==PageState::Queued){
@@ -63,7 +63,11 @@ int main(int argc,char** argv){
             case InferenceEvent::Kind::Prepared:
                 if(attempt.prepared(e->chunk)){if(auto p=attempt.active_prepared()){if(!inference.execute(p))throw std::runtime_error("Execution rejected");}else pump();}break;
             case InferenceEvent::Kind::TextDelta:attempt.delta(e->stamp,e->delta);std::cout<<e->delta<<std::flush;break;
-            case InferenceEvent::Kind::Finished:attempt.finished(e->stamp,e->result);std::cout<<"\nchunk reason="<<static_cast<int>(e->result.reason)<<" seconds="<<e->seconds<<'\n';pump();break;
+            case InferenceEvent::Kind::Finished:
+                attempt.finished(e->stamp,e->result);
+                std::cout<<"\nchunk reason="<<static_cast<int>(e->result.reason)<<" seconds="<<e->seconds
+                         <<" input_tokens="<<e->chunk->input.tokens.size()<<" output_tokens="<<e->result.output_tokens<<'\n';
+                pump();break;
             case InferenceEvent::Kind::PreparationFailed:throw std::runtime_error(e->detail);
             default:break;
             }

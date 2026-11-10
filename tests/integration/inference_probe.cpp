@@ -56,6 +56,21 @@ int main(int argc, char** argv) {
         auto limited=prepared;limited.output_limit=1;
         if(engine.generate(limited,[](std::string_view){}).reason!=opt::FinishReason::OutputLimit)
             throw std::runtime_error("Output limit was treated as complete");
+        std::string long_source;
+        while (long_source.size() < 6000)
+            long_source += "The sample was collected after each experiment. ";
+        auto multi_batch = engine.prepare(long_source, opt::Form::Plain);
+        if (multi_batch.tokens.size() <= engine.runtime().batch)
+            throw std::runtime_error("Long prompt did not cross a decode batch");
+        multi_batch.output_limit = 1;
+        auto first = engine.generate(multi_batch, [](std::string_view){});
+        if (first.reason != opt::FinishReason::OutputLimit || first.output_tokens != 1)
+            throw std::runtime_error("Missing final prompt logits after multiple decode batches");
+        multi_batch.output_limit = 128;
+        auto interrupted = engine.generate(multi_batch, [&](std::string_view){ cancel = true; });
+        if (interrupted.reason != opt::FinishReason::Cancelled || !interrupted.output_tokens)
+            throw std::runtime_error("Streaming cancellation did not interrupt an active sequence");
+        cancel = false;
         auto after=engine.generate(prepared,[](std::string_view){});
         if(after.reason!=opt::FinishReason::Completed || after.text!=baseline.text)
             throw std::runtime_error("Context state leaked after cancellation or output limit");

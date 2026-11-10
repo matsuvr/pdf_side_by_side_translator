@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Collect exact pinned dependency notices. --check detects source/notice drift.
+"""Collect pinned dependency notices with canonical LF line endings.
+
+--check detects source/notice drift while allowing Git's Windows CRLF checkout.
 
 The set follows the PDFium GN closure and the wx core/base + llama static link
 closure, rather than every downloaded build tool. Some platform-conditional
@@ -49,19 +51,22 @@ PLAN=[
  ('llama.cpp / rotate-bits','llama',['vendor/hash/rotate-bits/LICENSE.md']),
  ('SQLite public-domain declaration','project',['licenses/SQLite-public-domain.txt']),
  ('Noto Sans CJK JP Regular font','resources',['NotoSansCJK-LICENSE.txt']),
- ('PLaMo Community License: reference terms for the separately supplied model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
+ ('PLaMo Community License for the bundled model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
 ]
+
+def read_lf(path):
+    return path.read_bytes().replace(b'\r\n',b'\n')
 
 def outputs():
     lock=json.loads((ROOT/'deps/third_party.lock.json').read_text())
     heading='''Offline PDF Translator — Licenses and third-party notices
 
 Original application source, fixtures and icon: MIT License (see below).
-Third-party components retain their own licenses. Model weights are NOT
-distributed and are NOT covered by the application's MIT License.
+Third-party components retain their own licenses. Release ZIPs include PLaMo
+model weights under the PLaMo Community License reproduced below.
 
 Built with PLaMo
-Supported separate model: PLaMo 3 Translate 0.8B (pfnet).
+Bundled model: PLaMo 3 Translate 0.8B Q4_K_M (pfnet).
 Model use and publication/provision of model outputs are subject to the PLaMo
 Community License reproduced at the end for offline reference. In particular,
 models trained using outputs are subject to that agreement. Consult the full
@@ -84,13 +89,13 @@ patches are applied by this application.
     for component,root,files in PLAN:
         text.extend(['\n'+'='*76+'\n',component+'\n','='*76+'\n'])
         for name in files:
-            data=(ROOTS[root]/name).read_bytes()
+            data=read_lf(ROOTS[root]/name)
             encoding='iso-8859-1' if (root,name)==('pdfium','third_party/freetype/FTL.TXT') else 'utf-8-sig'
             body=data.decode(encoding)
             records.append({'component':component,'root':root,'path':name,'encoding':encoding,'sha256':hashlib.sha256(data).hexdigest()})
             text.extend(['\n--- '+name+' ---\n\n',body,'\n'])
     notice=''.join(text).encode('utf-8')
-    manifest={'schema':1,'dependency_lock_sha256':hashlib.sha256((ROOT/'deps/third_party.lock.json').read_bytes()).hexdigest(),
+    manifest={'schema':1,'dependency_lock_sha256':hashlib.sha256(read_lf(ROOT/'deps/third_party.lock.json')).hexdigest(),
       'notices_sha256':hashlib.sha256(notice).hexdigest(),'inputs':records,
       'origins':{'pdfium':lock['dependencies']['PDFium'],'wx':lock['dependencies']['wxWidgets'],'llama':lock['dependencies']['llama.cpp'],
        'LLVM-compiler-rt':'https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT',
@@ -103,7 +108,7 @@ def main():
     notice,manifest=outputs()
     for path,data in [(ROOT/'THIRD_PARTY_NOTICES.txt',notice),(ROOT/'deps/licenses.lock.json',manifest)]:
         if args.check:
-            if not path.exists() or path.read_bytes()!=data:raise SystemExit(f'Notice/input drift: {path.name}; inspect licenses before regenerating')
+            if not path.exists() or read_lf(path)!=data:raise SystemExit(f'Notice/input drift: {path.name}; inspect licenses before regenerating')
         else:path.write_bytes(data)
     print(f'Verified {sum(len(files) for _,_,files in PLAN)} license inputs; notices {len(notice)} bytes')
 if __name__=='__main__':main()

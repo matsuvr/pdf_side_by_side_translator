@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "dependency_lock_sha256": "5053da0da114883de148f5b1870ce96752a7bb462255546e5bd661fcae320fdb",
-  "notices_sha256": "da803881f21a72473145f1b8b360d5d2683133615ad80787337d6025d42b3372",
+  "dependency_lock_sha256": "5170e63e57374ccac44232322398bd0f0824be250556db22076ddbaf51114b71",
+  "notices_sha256": "12eacd6e2c6eb40ab73b68190aecf9beb51cac625b7b7486624b5c3523a82574",
   "inputs": [
     {
       "component": "Application original source/resources",
@@ -270,14 +270,14 @@
       "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
     },
     {
-      "component": "PLaMo Community License: reference terms for the separately supplied model",
+      "component": "PLaMo Community License for the bundled model",
       "root": "project",
       "path": "licenses/PLaMo-Community-ja.txt",
       "encoding": "utf-8-sig",
       "sha256": "7dd74339bbf9a39fe33e271a89657aacf06f452b082fcb1273fb792b8d6b7db2"
     },
     {
-      "component": "PLaMo Community License: reference terms for the separately supplied model",
+      "component": "PLaMo Community License for the bundled model",
       "root": "project",
       "path": "licenses/PLaMo-Community-en.txt",
       "encoding": "utf-8-sig",

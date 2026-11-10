@@ -3,6 +3,7 @@
 #include "platform/file_snapshot.hpp"
 #include "llama.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,10 @@
 #include <limits>
 #include <stdexcept>
 #include <thread>
+
+#ifdef OPT_WINDOWS_CPU_KERNELS
+extern "C" int opt_windows_has_avx2_kernels();
+#endif
 
 namespace opt {
 namespace {
@@ -42,23 +47,26 @@ struct Engine::Impl {
     std::atomic_bool& cancelled;
     llama_model* model = nullptr;
     llama_context* context = nullptr;
+    ggml_threadpool_t workers = nullptr;
     const llama_vocab* vocab = nullptr;
-    llama_sampler* sampler = nullptr;
     llama_token bos = LLAMA_TOKEN_NULL;
     llama_token tag = LLAMA_TOKEN_NULL;
     std::vector<llama_token> protocol;
     std::vector<llama_token> stops;
+    std::vector<llama_token> nonprinting_bytes;
+    std::vector<llama_token> prompt_prefix, plain_suffix, polite_suffix;
     bool cpu = true;
     std::shared_ptr<const FileSnapshot> file;
     std::FILE* stream=nullptr;
     explicit Impl(std::atomic_bool& c) : cancelled(c) { llama_backend_init(); }
     void clear() {
-        if (sampler) llama_sampler_free(sampler);
         if (context) llama_free(context);
+        if (workers) ggml_threadpool_free(workers);
         if (model) llama_model_free(model);
-        sampler = nullptr; context = nullptr; model = nullptr; vocab = nullptr;
+        context = nullptr; workers = nullptr; model = nullptr; vocab = nullptr;
         if(stream)std::fclose(stream);stream=nullptr;file.reset();
-        protocol.clear();stops.clear();
+        protocol.clear();stops.clear();nonprinting_bytes.clear();
+        prompt_prefix.clear(); plain_suffix.clear(); polite_suffix.clear();
     }
     ~Impl() { clear(); llama_backend_free(); }
 };
@@ -108,6 +116,9 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         p.bos = p.protocol[0]; p.tag = p.protocol[1];
         p.stops={p.bos,p.tag};
         for(llama_token id=0;id<llama_vocab_n_tokens(p.vocab);++id){
+            if((llama_vocab_get_attr(p.vocab,id)&LLAMA_TOKEN_ATTR_BYTE)&&
+               unsupported_text_control(piece(p.vocab,id,false))!=std::string_view::npos)
+                p.nonprinting_bytes.push_back(id);
             if(llama_vocab_is_eog(p.vocab,id)&&std::find(p.stops.begin(),p.stops.end(),id)==p.stops.end())p.stops.push_back(id);
             const auto* raw=llama_vocab_get_text(p.vocab,id);if(!raw)continue;
             const std::string_view name(raw);
@@ -116,6 +127,12 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         }
         if (p.bos != llama_vocab_bos(p.vocab) || !llama_vocab_get_add_bos(p.vocab))
             throw std::runtime_error("BOS設定が対応profileと一致しません。");
+        p.prompt_prefix = tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
+                                   "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>", true, true);
+        const std::string output = "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
+                                   "<|plamo:key|>form<|plamo:val|>";
+        p.plain_suffix = tokenize(output + "plain<|plamo:msg|>", false, true);
+        p.polite_suffix = tokenize(output + "polite<|plamo:msg|>", false, true);
         const int training_context = llama_model_n_ctx_train(p.model);
         if (training_context <= 0) throw std::runtime_error("モデルのcontext容量を取得できません。");
         auto cp = llama_context_default_params();
@@ -127,19 +144,30 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         cp.offload_kqv = !p.cpu; cp.op_offload = !p.cpu;
         p.context = llama_init_from_model(p.model, cp);
         if (!p.context) throw std::runtime_error("推論contextを確保できません。CPUまたは別のGGUFを選んでください。");
-        p.sampler = llama_sampler_init_greedy();
-        if (!p.sampler) throw std::runtime_error("Samplerを確保できません。");
+        if (p.cpu) {
+            auto params = ggml_threadpool_params_default(std::max(cp.n_threads, cp.n_threads_batch));
+            params.paused = true;
+            p.workers = ggml_threadpool_new(&params);
+            if (!p.workers) throw std::runtime_error("CPU推論スレッドを確保できません。");
+            llama_attach_threadpool(p.context, p.workers, nullptr);
+        }
         if(p.file->signature()!=p.file->initial_signature())throw std::runtime_error("GGUFが読込中に変更されました。再度選択してください。");
     } catch (...) { unload(); throw; }
 }
 
 std::vector<std::int32_t> Engine::tokenize(std::string_view text, bool add_bos, bool special) const {
     if (!impl_->vocab || text.size() > INT32_MAX) throw std::runtime_error("Invalid tokenizer input");
-    int n = llama_tokenize(impl_->vocab, text.data(), static_cast<int>(text.size()), nullptr, 0, add_bos, special);
+    std::vector<llama_token> result(std::min<std::size_t>(text.size(), 4096) + 1);
+    auto encode = [&] {
+        return llama_tokenize(impl_->vocab, text.data(), static_cast<int>(text.size()), result.data(),
+                              static_cast<int>(result.size()), add_bos, special);
+    };
+    int n = encode();
     if (n == INT32_MIN) throw std::runtime_error("Tokenizer overflow");
-    std::vector<llama_token> result(static_cast<std::size_t>(n < 0 ? -n : n));
-    n = llama_tokenize(impl_->vocab, text.data(), static_cast<int>(text.size()), result.data(),
-                       static_cast<int>(result.size()), add_bos, special);
+    if (n < 0) {
+        result.resize(static_cast<std::size_t>(-n));
+        n = encode();
+    }
     if (n < 0) throw std::runtime_error("Tokenization failed");
     result.resize(static_cast<std::size_t>(n));
     return result;
@@ -156,21 +184,24 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
             std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end())
             throw ModelInputUnsupported("ModelInputUnsupported: 本文の予約表記を通常文字として表現できません。");
     }
-    prepared.tokens = tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
-                              "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>", true, true);
+    const auto& tail = form == Form::Plain ? p.plain_suffix : p.polite_suffix;
+    prepared.tokens.reserve(p.prompt_prefix.size() + body.size() + tail.size());
+    prepared.tokens.insert(prepared.tokens.end(), p.prompt_prefix.begin(), p.prompt_prefix.end());
     prepared.tokens.insert(prepared.tokens.end(), body.begin(), body.end());
-    const std::string output = "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
-                              "<|plamo:key|>form<|plamo:val|>" +
-                              std::string(form == Form::Plain ? "plain" : "polite") + "<|plamo:msg|>";
-    auto tail = tokenize(output, false, true);
     prepared.tokens.insert(prepared.tokens.end(), tail.begin(), tail.end());
     prepared.source_tokens = static_cast<std::uint32_t>(body.size());
-    prepared.output_limit = static_cast<std::uint32_t>(std::min<std::size_t>(4096,
+    prepared.output_limit = static_cast<std::uint32_t>(std::min<std::size_t>(capacity(),
         std::max<std::size_t>(512, 2 * body.size() + 128)));
     return prepared;
 }
 std::uint32_t Engine::capacity() const { return impl_->context ? llama_n_ctx(impl_->context) : 0; }
-std::string Engine::backend() const { return impl_->cpu ? "CPU" : "Metal"; }
+std::string Engine::backend() const {
+#ifdef OPT_WINDOWS_CPU_KERNELS
+    return opt_windows_has_avx2_kernels() ? "CPU (AVX2)" : "CPU (portable)";
+#else
+    return impl_->cpu ? "CPU" : "Metal";
+#endif
+}
 std::shared_ptr<const FileSnapshot> Engine::file_snapshot() const{return impl_->file;}
 
 GenerationResult Engine::generate(const PreparedInput& input,
@@ -183,26 +214,33 @@ GenerationResult Engine::generate(const PreparedInput& input,
     if (input.tokens.empty() || input.tokens.size() + input.output_limit > capacity()) {
         result.reason = FinishReason::ContextLimit; return result;
     }
-    llama_memory_clear(llama_get_memory(p.context), true);
-    llama_sampler_reset(p.sampler);
+    // PLaMo 3 uses attention KV caches. Invalidating all cells starts a fresh
+    // sequence without writing zeros across unused key and value buffers.
+    llama_memory_clear(llama_get_memory(p.context), false);
+    // Graph kickoff resumes the pool. Park the workers promptly on every exit,
+    // including cancellation, instead of polling while the reader is idle.
+    struct ParkWorkers {
+        ggml_threadpool_t pool;
+        ~ParkWorkers() { if (pool) ggml_threadpool_pause(pool); }
+    } park{p.workers};
     Utf8Stream decoder;
     auto batch = llama_batch_init(512, 0, 1);
     struct BatchGuard { llama_batch& b; ~BatchGuard() { llama_batch_free(b); } } guard{batch};
     if (!batch.token || !batch.pos || !batch.n_seq_id || !batch.seq_id || !batch.logits)
         throw std::runtime_error("推論batchを確保できません。");
-    auto decode = [&](const llama_token* ids, int n, int pos) {
+    auto decode = [&](const llama_token* ids, int n, int pos, bool need_logits) {
         batch.n_tokens = n;
         for (int i = 0; i < n; ++i) {
             batch.token[i] = ids[i]; batch.pos[i] = pos + i;
             batch.n_seq_id[i] = 1; batch.seq_id[i][0] = 0;
-            batch.logits[i] = static_cast<int8_t>(i == n - 1);
+            batch.logits[i] = static_cast<int8_t>(need_logits && i == n - 1);
         }
         return llama_decode(p.context, batch);
     };
     for (std::size_t i = 0; i < input.tokens.size();) {
         if (p.cancelled.load()) { result.reason = FinishReason::Cancelled; return result; }
         const int n = static_cast<int>(std::min<std::size_t>(512, input.tokens.size() - i));
-        if (decode(input.tokens.data() + i, n, static_cast<int>(i)) != 0) {
+        if (decode(input.tokens.data() + i, n, static_cast<int>(i), i + n == input.tokens.size()) != 0) {
             result.reason = p.cancelled.load() ? FinishReason::Cancelled : FinishReason::DecodeError;
             return result;
         }
@@ -212,10 +250,17 @@ GenerationResult Engine::generate(const PreparedInput& input,
     auto last = std::chrono::steady_clock::now();
     auto flush = [&] { if (!pending_delta.empty()) { delta(pending_delta); pending_delta.clear(); } };
     result.reason = FinishReason::OutputLimit;
+    const int vocab_size = llama_vocab_n_tokens(p.vocab);
     for (std::uint32_t i = 0; i < input.output_limit; ++i) {
         if (p.cancelled.load()) { result.reason = FinishReason::Cancelled; break; }
-        const auto token = llama_sampler_sample(p.sampler, p.context, -1);
-        if(token<0||token>=llama_vocab_n_tokens(p.vocab)){result.reason=FinishReason::InvalidModelOutput;break;}
+        // Greedy sampling selects the first maximum. Scan logits in place
+        // instead of building a vocabulary-sized candidate array per token.
+        float* logits = llama_get_logits_ith(p.context, -1);
+        if (!logits || vocab_size <= 0) { result.reason = FinishReason::DecodeError; break; }
+        // Byte fallback tokens for binary controls cannot appear in display text.
+        // Mask them before selection so a single such candidate cannot end a page.
+        for (const auto id : p.nonprinting_bytes) logits[id] = -std::numeric_limits<float>::infinity();
+        const llama_token token = static_cast<llama_token>(std::max_element(logits, logits + vocab_size) - logits);
         if (std::find(input.stop_ids.begin(),input.stop_ids.end(),token)!=input.stop_ids.end()) {
             result.reason = has_usable_text(result.text) ? FinishReason::Completed : FinishReason::EmptyOutput;
             break;
@@ -239,7 +284,7 @@ GenerationResult Engine::generate(const PreparedInput& input,
         if (now - last >= std::chrono::milliseconds(50)) { flush(); last = now; }
         const auto position = input.tokens.size() + i;
         if (position >= capacity()) { result.reason = FinishReason::ContextLimit; break; }
-        if (i + 1 < input.output_limit && decode(&token, 1, static_cast<int>(position)) != 0) {
+        if (i + 1 < input.output_limit && decode(&token, 1, static_cast<int>(position), true) != 0) {
             result.reason = p.cancelled.load() ? FinishReason::Cancelled : FinishReason::DecodeError;
             break;
         }

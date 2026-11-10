@@ -1,6 +1,48 @@
 # Translation implementation evidence
 
-Validated on macOS arm64 on 2026-11-10. Windows and Intel Mac remain untested.
+### Full-page input
+
+The app sends the complete reading-order text of each physical page in one
+PFML3 prompt. An edited source replaces that entire input. Tables retain their
+row and cell separators. If the prompt leaves no room for generation, the app
+reports a context limit. Reaching the output limit leaves the page unfinished.
+The current cache profile excludes results produced by the earlier block planner.
+
+On Windows x64, the P01 first page completed in one CPU generation (62 prompt
+tokens and 42 output tokens). A 1,285-token prompt for a longer page also
+completed in one generation, including its final sentence. The decoder excludes
+byte tokens for unsupported ASCII controls from sampling and allows tabs and
+line breaks. The timing comparisons below describe the earlier block-based version.
+
+The original translation probes below were run on macOS arm64. The Windows
+x64 Release measurements use the same PDF-to-translation path.
+
+### Windows CPU measurements
+
+On a Core i9-13900, five interleaved runs per case used the same local PLaMo 3
+Translate 0.8B Q4_K_M GGUF (SHA-256 `73a1d942d8ab1e654d83898d997b8b4808c32ba669b378df612230989d18f079`).
+Each run started a new process with a warm filesystem cache. Times are median
+seconds spent evaluating the prompt and generating the translation. P01 sums
+the three chunks reported by `translation_probe`.
+
+| Input | Previous Windows Release | Optimized Windows Release | Previous Rust CPU smoke executable |
+| --- | ---: | ---: | ---: |
+| P01, first page | 2.35 s | 0.66 s | — |
+| Synthetic scientific abstract, 123 prompt tokens and 125 generated tokens | 4.84 s | 1.83 s | 2.20 s |
+
+The abstract was one PDF paragraph. The Rust smoke executable received its
+extracted English text directly. All three produced the same Japanese text.
+Including process startup, model loading and shutdown, the abstract took
+5.75 s, 2.86 s and 3.45 s respectively.
+
+To reproduce the PDF measurement with a local model, run
+`translation_probe.exe model.gguf cpu tests/fixtures/P01-simple.pdf`.
+The probe reports the backend, load time, token counts and time per chunk.
+Setting `OPT_CPU_KERNELS=portable` before launch exercises the fallback in
+the same binary. The optimized path packs eligible weights in memory when the
+model loads. The worker pool sleeps between translations.
+
+### macOS arm64 validation
 
 The real Engine is constructed, loaded, used and destroyed on the inference
 worker. The GUI never calls llama APIs. Model loading does not block PDF work.

@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import urllib.request
 
@@ -19,7 +20,14 @@ def lock():
 
 def run(args, cwd=ROOT, env=None, capture=False):
     print("+", " ".join(str(x) for x in args), flush=True)
-    return subprocess.run([str(x) for x in args], cwd=cwd, env=env,
+    command = [str(x) for x in args]
+    if os.name == "nt":
+        # CreateProcess does not use the supplied environment's PATH or
+        # PATHEXT to find batch tools such as depot_tools' gclient.bat.
+        executable = shutil.which(command[0], path=(env or os.environ).get("PATH"))
+        if executable:
+            command[0] = executable
+    return subprocess.run(command, cwd=cwd, env=env,
                           check=True, text=True,
                           stdout=subprocess.PIPE if capture else None).stdout
 

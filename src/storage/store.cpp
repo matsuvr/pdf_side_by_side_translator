@@ -264,7 +264,7 @@ void Store::save_attempt(const CacheContext& context,const AttemptSnapshot& data
             utf8_scalars(c.text);if(c.reason!=FinishReason::Completed||!valid_translation(c.text)||c.source_digest.empty()||c.prompt_digest.empty())throw std::invalid_argument("Incomplete chunk cannot be cached");
             const auto semantic=semantic_key(c);cache_key=completed_cache_key(context,semantic);
             Statement q(impl_->cache,"INSERT INTO completed_chunks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET text_utf8=excluded.text_utf8,byte_size=excluded.byte_size,last_used_at=excluded.last_used_at,session_key=excluded.session_key");
-            q.text(1,cache_key).text(2,context.document_key).number(3,context.page).text(4,profile_key(context)).text(5,c.block_id).number(6,1).number(7,ordinal)
+            q.text(1,cache_key).text(2,context.document_key).number(3,context.page).text(4,profile_key(context)).text(5,c.block_id).number(6,page_plan_version).number(7,ordinal)
                 .text(8,c.source_digest).text(9,c.prompt_digest).text(10,c.text).number(11,c.text.size()+1024).number(12,impl_->cache_time()).number(13,impl_->cache_time())
                 .text(14,context.model_key).text(15,context.profile_digest).text(16,context.source_digest).text(17,semantic).text(18,impl_->session).step();
         }

@@ -1,7 +1,7 @@
 # Native input evidence
 
-The app follows DESIGN.md's Primary+Enter (current page), Primary+Shift+Enter
-(all pages), Primary+G (page number), Primary+, (model settings) and F6/Shift+F6
+The app follows DESIGN.md's Primary+Shift+Enter (all pages),
+Primary+G (page number), Primary+, (model settings) and F6/Shift+F6
 bindings. Bare navigation keys stay with their focused native control. Escape
 closes search or clears a PDF selection; it is not a translation stop shortcut.
 

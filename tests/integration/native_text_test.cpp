@@ -23,11 +23,50 @@ double scroll_y(wxTextCtrl& control){
 #endif
 }
 void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+#ifdef _WIN32
+void check_streamed_wrap(wxTextCtrl& control){
+    const auto handle=static_cast<HWND>(control.GetHandle());
+    require(IsWindowVisible(handle),"wrap repaint test needs a visible text control");
+    SendMessageW(handle,EM_EMPTYUNDOBUFFER,0,0);
+    std::string value="確定した訳文の先頭。\n\n";
+    opt::update_readonly_text(control,{},value,true);
+    UpdateWindow(handle);
+    const auto initial_lines=SendMessageW(handle,EM_GETLINECOUNT,0,0);
+    const auto second_line=SendMessageW(handle,EM_LINEINDEX,1,0);
+    POINTL second_line_origin{};
+    SendMessageW(handle,EM_POSFROMCHAR,reinterpret_cast<WPARAM>(&second_line_origin),second_line);
+    require(second_line_origin.y>0,"first line is on screen");
+    for(int i=0;i<20;++i){
+        auto next=value+"割引率は、";
+        opt::update_readonly_text(control,value,next,false);
+        RECT dirty{};
+        require(!GetUpdateRect(handle,&dirty,FALSE)||dirty.top>=second_line_origin.y,
+                "streaming a wrapped tail invalidated the unchanged first line");
+        UpdateWindow(handle);
+        value=std::move(next);
+    }
+    require(SendMessageW(handle,EM_GETLINECOUNT,0,0)>initial_lines,"Japanese stream crossed a soft wrap");
+    require(control.GetValue()==wxString::FromUTF8(value),"soft wrapping preserves the streamed text");
+    for(int i=0;i<60;++i){
+        auto next=value+"次の行へ折り返しても末尾を追従する。";
+        opt::update_readonly_text(control,value,next,false);
+        value=std::move(next);
+    }
+    SCROLLINFO scroll{sizeof(SCROLLINFO),SIF_ALL};
+    GetScrollInfo(handle,SB_VERT,&scroll);
+    require(scroll.nPos>0 && scroll.nPos+static_cast<int>(scroll.nPage)>=scroll.nMax-2,
+            "stream follows the bottom as wrapped lines outgrow the viewport");
+    require(!SendMessageW(handle,EM_CANUNDO,0,0),"generated text has no user undo history");
+}
+#endif
 class TextTest final:public wxApp {
     wxFrame* frame_=nullptr;wxTextCtrl *text_=nullptr,*focus_=nullptr;int result_=1;
     wxTimer timer_{this};
     void run(){
         try{
+#ifdef _WIN32
+            check_streamed_wrap(*text_);
+#endif
             std::string value;for(int i=0;i<800;++i)value+="読書位置 "+std::to_string(i)+" — 結合文字 é・絵文字 👩‍💻・日本語の長い訳文。\n";
             opt::update_readonly_text(*text_,{},value,true);
             const auto intended=value.find("読書位置 300");text_->SetSelection(120,150);
@@ -69,6 +108,9 @@ public:
         style|=wxTE_RICH2;
 #endif
         text_=new wxTextCtrl(frame_,wxID_ANY,{},wxDefaultPosition,wxDefaultSize,style);text_->SetMaxLength(0);
+#ifdef _WIN32
+        text_->SetDoubleBuffered(true);
+#endif
         auto font=text_->GetFont();font.SetFaceName("Noto Sans CJK JP");font.SetPointSize(14);text_->SetFont(font);
         sizer->Add(text_,1,wxEXPAND);frame_->SetSizer(sizer);frame_->SetClientSize(820,600);frame_->Show();frame_->Layout();
         frame_->Raise();

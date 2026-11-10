@@ -12,14 +12,12 @@ std::string profile_digest(const ModelProfile& p,Form form,std::uint32_t capacit
     return CanonicalKey{}.text("profile-id",p.id).number("prompt-version",p.prompt_version).number("chunk-algorithm",p.chunk_algorithm_version)
         .number("completion-version",p.completion_version).number("engine-cache-version",p.engine_cache_version)
         .text("source-language",p.source_language).text("target-language",p.target_language).number("form",static_cast<unsigned>(form))
-        .number("actual-context",capacity).text("sampling","greedy-v1").number("batch",512).number("micro-batch",128)
-        .text("output-budget","max(512,2*source+128)-cap4096-v1").finish();
+        .number("actual-context",capacity).text("sampling","greedy-printable-bytes-v2").number("batch",512).number("micro-batch",128)
+        .text("output-budget","min(remaining-context,max(512,2*source+128))-v2").finish();
 }
 std::string page_source_digest(const PageLayout& layout,const std::shared_ptr<const std::string>& edited){
     CanonicalKey key;key.number("layout-version",layout.layout_version).number("override-present",bool(edited));
-    if(edited)key.text("override-sha256",sha256(*edited));
-    else for(const auto& b:layout.blocks)key.text("block",b.block_id).number("kind",static_cast<unsigned>(b.kind))
-        .text("reading",sha256(b.reading_text_utf8)).text("translation",sha256(b.translation_input_utf8));
+    key.text("page-text",sha256(edited?*edited:layout.reading_text_utf8));
     return key.finish();
 }
 std::string chunk_semantic_key(const PreparedChunk& p){

@@ -10,12 +10,16 @@ Built with PLaMo
 
 ## 使い方
 
-1. アプリを起動します。
+1. リリースZIPを展開し、アプリを起動します。
 2. PDFを開くか、ウィンドウへドロップします。
-3. 「モデル設定」で、利用条件を確認して入手したローカルGGUFを選びます。
+3. 同梱の `PLaMo-Community-ja.txt` で利用条件を確認し、メニューバーの「モデル設定」から「モデルを選択…」を開き、同じフォルダーの `plamo-3-translate-0.8b-Q4_K_M.gguf` を選びます。
 4. 現在ページの訳文が表示されます。「全ページを翻訳」で他のページも処理できます。
 
-外部に用意する実行用ファイルはPDFとGGUFです。モデルを同梱・自動取得する機能はありません。
+バージョン0.1.0のリリースZIPには、アプリ、Q4_K_MのGGUF、`README.md`、`PLaMo-Community-ja.txt` を同梱します。これらを同じフォルダーに展開し、翻訳したいPDFを開いて使います。
+起動時の右枠には「Built with PLaMo」とモデル提供元を表示します。「PLaMoコミュニティライセンス契約」は、EXEまたは.appと同じフォルダーに配布する `PLaMo-Community-ja.txt` をアプリ内で開きます。
+
+Windows x64版はEXEと同梱ファイルを同じフォルダーに置いて使います。対応するCPUではAVX2・FMA・F16Cを使い、
+モデル準備完了時に `CPU (AVX2)` と表示します。従来のCPUでは同じEXEが `CPU (portable)` を選びます。
 対応モデルは **PLaMo 3 Translate 0.8B、英語→日本語** です。常体と敬体を選べます。
 基準にした公式GGUFは次の通りです。
 
@@ -28,28 +32,27 @@ Built with PLaMo
 
 モデルの利用には、アプリのMIT Licenseとは別に[PLaMoコミュニティライセンス契約](https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/blob/1cf96ae02133958a20074bfdfab76517bb737d00/LICENSE/ja)が適用されます。
 商業目的の条件や、生成物の提供・公開・学習への利用条件も確認してください。
-確認用の契約本文はアプリの「ライセンス」と[licenses/](licenses/)にも収録しています。
+契約本文は同梱の[PLaMoコミュニティライセンス契約](PLaMo-Community-ja.txt)で読めます。アプリの「ライセンス」にも収録しています。
 アプリは利用者の代わりに登録・契約同意をしません。
 
 ## 読書と翻訳
 
-左右は同じ物理ページ番号を表示し、スクロール・PDF倍率・訳文字サイズは独立しています。
+原文の左右にある矢印で前後のページへ移動します。「原文」の横には現在ページの入力欄と総ページ数があり、左のPDF表示枠の上にある倍率欄でPDFの大きさを変えられます。訳文は同じページに追従し、スクロール・訳文字サイズは独立しています。
 原文の選択・コピーとPDF内検索が使えます。抽出した読順を確認・修正する原文編集もできます。
 原文編集はPDF原本やその検索結果を変更しません。文字情報のないPDFへのOCRは行いません。
 
-現在ページの自動翻訳は初期状態でONです。停止すると同じページを勝手に再開しません。
-「このページを翻訳」は途中の処理を再開し、「最初から再翻訳」は新しい試行を作ります。
+現在ページの自動翻訳は初期状態でONです。翻訳中でもウィンドウを閉じて終了できます。
+見出し・本文・表・数式を読順に並べ、1ページの全文を1回でモデルに渡します。原文を編集したページでは編集後の全文を使います。
+ページ全文がモデルの入力容量を超えた場合は、そのページに理由を表示します。
+「翻訳」メニューの「このページを最初から再翻訳」で新しい試行を始められます。
 全ページ翻訳は現在ページを優先し、完成・テキストなし・部分結果・失敗を区別します。
-表や数式は原文のまま残す場合があります。訳文の正確さは原文と照らし合わせて確認できます。
 
 | 操作 | ショートカット |
 | --- | --- |
 | PDFを開く | Primary+O |
 | ページ番号へ | Primary+G |
 | PDF内検索 | Primary+F |
-| このページを翻訳 | Primary+Enter |
 | 全ページを翻訳 | Primary+Shift+Enter |
-| 翻訳停止 | Primary+. |
 | モデル設定 | Primary+, |
 | ペイン間移動 | F6 / Shift+F6 |
 
@@ -81,7 +84,7 @@ UTF-8書き出しはモデル名・文体・ページ番号を記録し、部分
 
 | 構成 | 実装方針 / 記録 |
 | --- | --- |
-| Windows x64 | 静的CRTの単一EXE、CPU推論。ソース・presetを用意。実機ビルド・実行は未検証 |
+| Windows x64 | 静的CRT、CPU推論。Releaseビルド・24件の自動試験・実GGUF翻訳・製品GUIを実機で確認 |
 | macOS arm64 | 自己完結した.app、Metal自動選択とCPU経路。開発Mac上で実モデル・GUI・自動試験を検証 |
 | macOS x86_64 | 自己完結した.app、CPU推論。クロスビルド、24件、実モデルCPU、製品GUI・長文表示をRosettaで検証。実Intel機では未検証 |
 
@@ -108,7 +111,7 @@ python scripts/bootstrap.py --target macos-arm64-release
 cmake --preset macos-arm64-release
 cmake --build --preset macos-arm64-release
 ctest --preset macos-arm64-release
-python scripts/package.py --target macos-arm64-release
+python scripts/package.py --target macos-arm64-release --model-file /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
 ```
 
 Windowsではtargetを `windows-x64-release` に変更します。
@@ -124,6 +127,7 @@ presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除
 上流ソースの独自patchはありません。
 
 packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
+Releaseのpackageは、指定したGGUFを固定した公式SHA-256と照合し、アプリ・GGUF・README・PLaMoライセンスを含むZIPを作ります。
 最終Mach-O / PEの通常・delay importを検査し、Macは署名後のZIPを再展開して再検査します。
 生成物とhash・依存検査・ソース識別情報は `dist/<target>/` 以下へ保存します。
 製品の起動にREADME、Python、ビルド用manifestや個別ライブラリの配布は不要です。

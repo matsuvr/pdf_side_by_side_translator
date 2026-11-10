@@ -1,4 +1,5 @@
 #pragma once
+#include <wx/bitmap.h>
 #include "pdf/pdf_service.hpp"
 #include "pdf/layout.hpp"
 #include <wx/scrolwin.h>

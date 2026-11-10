@@ -8,6 +8,7 @@ int main(){try{
     ModelProfile p;const auto baseline=profile_digest(p,Form::Plain,8192);
     require(profile_digest(p,Form::Polite,8192)!=baseline,"form included");require(profile_digest(p,Form::Plain,4096)!=baseline,"actual context included");
     auto q=p;q.prompt_version++;require(profile_digest(q,Form::Plain,8192)!=baseline,"prompt version included");
+    q=p;q.chunk_algorithm_version=1;require(profile_digest(q,Form::Plain,8192)!=baseline,"old block translations excluded from page cache");
     q=p;q.completion_version++;require(profile_digest(q,Form::Plain,8192)!=baseline,"completion rules included");
     q=p;q.engine_cache_version++;require(profile_digest(q,Form::Plain,8192)!=baseline,"engine compatibility included");
     q=p;q.target_language="fr";require(profile_digest(q,Form::Plain,8192)!=baseline,"target language included");
@@ -23,7 +24,8 @@ int main(){try{
     require(completed_cache_key(c,chunk_semantic_key(other))==key,"session epochs and execution UUIDs excluded");
     FileSignature file{"native-object",123,456};const auto native=provisional_file_key(file);file.identity="replaced-object";
     require(provisional_file_key(file)!=native,"same size and mtime do not hide file replacement");
-    PageLayout layout;layout.blocks.push_back({});layout.blocks.back().block_id="p";layout.blocks.back().translation_input_utf8="Text";
+    PageLayout layout;layout.reading_text_utf8="Text";
     const auto original=page_source_digest(layout);require(page_source_digest(layout,std::make_shared<const std::string>("Text"))!=original,"presence of explicit override included even when text matches");
+    layout.reading_text_utf8+="\n\nMore text";require(page_source_digest(layout)!=original,"page digest includes later paragraphs");
     std::cout<<"semantic cache identity and provisional namespaces passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
