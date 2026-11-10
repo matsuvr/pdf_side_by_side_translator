@@ -1,4 +1,5 @@
 #include "platform/mapped_file.hpp"
+#include "platform/file_snapshot.hpp"
 #include <limits>
 #include <stdexcept>
 #include <system_error>
@@ -68,4 +69,11 @@ MappedFile::~MappedFile()=default;
 std::span<const std::byte> MappedFile::bytes() const noexcept{return {impl_->data,impl_->size};}
 FileSignature MappedFile::signature() const{return impl_->signature();}
 const FileSignature& MappedFile::initial_signature() const{return impl_->original;}
+std::shared_ptr<const FileSnapshot> MappedFile::snapshot() const{
+#ifdef _WIN32
+    return FileSnapshot::duplicate(reinterpret_cast<std::intptr_t>(impl_->file),impl_->original);
+#else
+    return FileSnapshot::duplicate(impl_->file,impl_->original);
+#endif
+}
 }

@@ -183,6 +183,8 @@ struct PdfService::Impl {
                         if(count<=0)throw std::runtime_error("PDFにページがありません。");
                         page_count=static_cast<unsigned>(count);
                         PdfEvent e;e.kind=PdfEvent::Kind::Opened;e.document=epoch;e.page_count=page_count;
+                        e.file_signature=file->initial_signature();
+                        try{e.file_snapshot=file->snapshot();}catch(const std::exception&){e.detail="Fingerprint file object unavailable";}
                         e.info=describe(get_page(0)->page);emit(std::move(e));continue;
                     }
                     if(page_request){

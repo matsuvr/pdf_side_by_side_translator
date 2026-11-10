@@ -1,5 +1,6 @@
 #include "inference/engine.hpp"
 #include "core/utf8.hpp"
+#include "platform/file_snapshot.hpp"
 #include "llama.h"
 #include "ggml-backend.h"
 
@@ -46,14 +47,18 @@ struct Engine::Impl {
     llama_token bos = LLAMA_TOKEN_NULL;
     llama_token tag = LLAMA_TOKEN_NULL;
     std::vector<llama_token> protocol;
+    std::vector<llama_token> stops;
     bool cpu = true;
+    std::shared_ptr<const FileSnapshot> file;
+    std::FILE* stream=nullptr;
     explicit Impl(std::atomic_bool& c) : cancelled(c) { llama_backend_init(); }
     void clear() {
         if (sampler) llama_sampler_free(sampler);
         if (context) llama_free(context);
         if (model) llama_model_free(model);
         sampler = nullptr; context = nullptr; model = nullptr; vocab = nullptr;
-        protocol.clear();
+        if(stream)std::fclose(stream);stream=nullptr;file.reset();
+        protocol.clear();stops.clear();
     }
     ~Impl() { clear(); llama_backend_free(); }
 };
@@ -65,17 +70,24 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
     unload();
     auto& p = *impl_;
     auto mp = llama_model_default_params();
-    // Explicit device list prevents an accidental GPU dependency in CPU mode.
-    std::array<ggml_backend_dev_t, 1> no_devices{nullptr};
-    mp.devices = cpu_only ? no_devices.data() : nullptr;
-    mp.n_gpu_layers = cpu_only ? 0 : -1;
+    // Register only an actual Metal device, or explicitly use the CPU path.
+    std::array<ggml_backend_dev_t,2> devices{nullptr,nullptr};
+    if(!cpu_only)for(std::size_t i=0;i<ggml_backend_dev_count();++i){
+        auto device=ggml_backend_dev_get(i);const auto type=ggml_backend_dev_type(device);
+        if((type==GGML_BACKEND_DEVICE_TYPE_GPU||type==GGML_BACKEND_DEVICE_TYPE_IGPU)&&
+           std::string_view(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)))=="MTL"){
+            devices[0]=device;break;
+        }
+    }
+    p.cpu=devices[0]==nullptr;mp.devices=devices.data();mp.n_gpu_layers=p.cpu?0:-1;
     mp.load_mode = llama_supports_mmap() ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
     mp.progress_callback = load_progress;
     mp.progress_callback_user_data = &p.cancelled;
-    const auto utf8 = path.u8string();
-    p.model = llama_model_load_from_file(reinterpret_cast<const char*>(utf8.c_str()), mp);
-    if (!p.model) throw std::runtime_error("GGUFを読み込めません。別のモデルまたはCPUを選択してください。");
     try {
+        p.file=FileSnapshot::open(path);p.stream=p.file->open_stream();
+        p.model=llama_model_load_from_file_ptr(p.stream,mp);
+        if(!p.model)throw std::runtime_error("GGUFを読み込めません。別のモデルまたはCPUを選択してください。");
+        if(p.file->signature()!=p.file->initial_signature())throw std::runtime_error("GGUFが読込中に変更されました。再度選択してください。");
         p.vocab = llama_model_get_vocab(p.model);
         if (metadata(p.model, "general.architecture") != "plamo3" ||
             metadata(p.model, "tokenizer.ggml.model") != "plamo3" ||
@@ -90,6 +102,14 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
             p.protocol.push_back(ids[0]);
         }
         p.bos = p.protocol[0]; p.tag = p.protocol[1];
+        p.stops={p.bos,p.tag};
+        for(llama_token id=0;id<llama_vocab_n_tokens(p.vocab);++id){
+            if(llama_vocab_is_eog(p.vocab,id)&&std::find(p.stops.begin(),p.stops.end(),id)==p.stops.end())p.stops.push_back(id);
+            const auto* raw=llama_vocab_get_text(p.vocab,id);if(!raw)continue;
+            const std::string_view name(raw);
+            if(name.starts_with("<|plamo:")&&name.ends_with("|>")&&
+               std::find(p.protocol.begin(),p.protocol.end(),id)==p.protocol.end())p.protocol.push_back(id);
+        }
         if (p.bos != llama_vocab_bos(p.vocab) || !llama_vocab_get_add_bos(p.vocab))
             throw std::runtime_error("BOS設定が対応profileと一致しません。");
         const int training_context = llama_model_n_ctx_train(p.model);
@@ -100,12 +120,12 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         const unsigned hw = std::thread::hardware_concurrency();
         cp.n_threads = cp.n_threads_batch = static_cast<int>(hw <= 1 ? 1 : std::min(8U, hw - 1));
         cp.abort_callback = abort_decode; cp.abort_callback_data = &p.cancelled;
-        cp.offload_kqv = !cpu_only; cp.op_offload = !cpu_only;
+        cp.offload_kqv = !p.cpu; cp.op_offload = !p.cpu;
         p.context = llama_init_from_model(p.model, cp);
         if (!p.context) throw std::runtime_error("推論contextを確保できません。CPUまたは別のGGUFを選んでください。");
         p.sampler = llama_sampler_init_greedy();
         if (!p.sampler) throw std::runtime_error("Samplerを確保できません。");
-        p.cpu = cpu_only || !llama_supports_gpu_offload();
+        if(p.file->signature()!=p.file->initial_signature())throw std::runtime_error("GGUFが読込中に変更されました。再度選択してください。");
     } catch (...) { unload(); throw; }
 }
 
@@ -124,12 +144,13 @@ std::vector<std::int32_t> Engine::tokenize(std::string_view text, bool add_bos, 
 PreparedInput Engine::prepare(std::string_view source, Form form) const {
     auto& p = *impl_;
     PreparedInput prepared;
+    prepared.stop_ids=p.stops;
     auto body = tokenize(source, false, false);
     for (auto token : body) {
         if ((llama_vocab_get_attr(p.vocab, token) & LLAMA_TOKEN_ATTR_CONTROL) ||
             llama_vocab_is_eog(p.vocab, token) ||
             std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end())
-            throw std::runtime_error("ModelInputUnsupported: 本文の予約表記を通常文字として表現できません。");
+            throw ModelInputUnsupported("ModelInputUnsupported: 本文の予約表記を通常文字として表現できません。");
     }
     prepared.tokens = tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
                               "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>", true, true);
@@ -146,12 +167,15 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
 }
 std::uint32_t Engine::capacity() const { return impl_->context ? llama_n_ctx(impl_->context) : 0; }
 std::string Engine::backend() const { return impl_->cpu ? "CPU" : "Metal"; }
+std::shared_ptr<const FileSnapshot> Engine::file_snapshot() const{return impl_->file;}
 
 GenerationResult Engine::generate(const PreparedInput& input,
                                  const std::function<void(std::string_view)>& delta) {
     auto& p = *impl_;
     GenerationResult result;
     if (!p.context) return result;
+    if(input.stop_ids!=p.stops){result.reason=FinishReason::ModelInputUnsupported;return result;}
+    if(p.file->signature()!=p.file->initial_signature())return result;
     if (input.tokens.empty() || input.tokens.size() + input.output_limit > capacity()) {
         result.reason = FinishReason::ContextLimit; return result;
     }
@@ -187,18 +211,20 @@ GenerationResult Engine::generate(const PreparedInput& input,
     for (std::uint32_t i = 0; i < input.output_limit; ++i) {
         if (p.cancelled.load()) { result.reason = FinishReason::Cancelled; break; }
         const auto token = llama_sampler_sample(p.sampler, p.context, -1);
-        if (token == p.tag || token == p.bos || llama_vocab_is_eog(p.vocab, token)) {
-            result.reason = result.text.empty() ? FinishReason::EmptyOutput : FinishReason::Completed;
+        if(token<0||token>=llama_vocab_n_tokens(p.vocab)){result.reason=FinishReason::InvalidModelOutput;break;}
+        if (std::find(input.stop_ids.begin(),input.stop_ids.end(),token)!=input.stop_ids.end()) {
+            result.reason = has_usable_text(result.text) ? FinishReason::Completed : FinishReason::EmptyOutput;
             break;
         }
-        if ((llama_vocab_get_attr(p.vocab, token) & LLAMA_TOKEN_ATTR_CONTROL) ||
+        if ((llama_vocab_get_attr(p.vocab, token) & (LLAMA_TOKEN_ATTR_CONTROL|LLAMA_TOKEN_ATTR_UNKNOWN|LLAMA_TOKEN_ATTR_UNUSED)) ||
             std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end()) {
             result.reason = FinishReason::InvalidModelOutput; break;
         }
         try {
             auto complete = decoder.push(piece(p.vocab, token, false));
             result.text += complete; pending_delta += complete;
-        } catch (const std::exception&) { result.reason = FinishReason::InvalidEncoding; break; }
+        } catch (const Utf8Error&) { result.reason = FinishReason::InvalidEncoding; break; }
+        catch (const std::exception&) {result.reason=FinishReason::DecodeError;break;}
         ++result.output_tokens;
         const auto now = std::chrono::steady_clock::now();
         if (now - last >= std::chrono::milliseconds(50)) { flush(); last = now; }
@@ -210,8 +236,9 @@ GenerationResult Engine::generate(const PreparedInput& input,
         }
     }
     flush();
-    if (!decoder.complete() && result.reason == FinishReason::Completed)
+    if (!decoder.complete() && (result.reason == FinishReason::Completed||result.reason==FinishReason::EmptyOutput))
         result.reason = FinishReason::InvalidEncoding;
+    if(result.reason==FinishReason::Completed&&p.file->signature()!=p.file->initial_signature())result.reason=FinishReason::ModelUnavailable;
     return result;
 }
 }

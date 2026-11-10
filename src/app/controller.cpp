@@ -1,6 +1,10 @@
 #include "app/controller.hpp"
 #include "pdf/pdf_service.hpp"
 #include "platform/font.hpp"
+#include "platform/text_view.hpp"
+#include "inference/inference_service.hpp"
+#include "translation/page_attempt.hpp"
+#include "platform/digest.hpp"
 #include "ui/pdf_canvas.hpp"
 #include "ui/wx_path.hpp"
 #include "product.hpp"
@@ -15,6 +19,7 @@
 #include <wx/wrapsizer.h>
 #include <wx/clipbrd.h>
 #include <wx/checkbox.h>
+#include <wx/choice.h>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -27,8 +32,9 @@
 namespace opt {
 namespace {
 wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
-enum class Command { Open, Close, Previous, Next, GoPage, FitWidth, FitPage, Zoom, Left, Right, Equal, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Help, About, Quit };
-enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FitWidth,FitPage,Zoom,Left,Right,Equal,Help,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch };
+wxDEFINE_EVENT(INFERENCE_WAKE,wxThreadEvent);
+enum class Command { Open, Close, Previous, Next, GoPage, FitWidth, FitPage, Zoom, Left, Right, Equal, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Translate, Retranslate, Stop, Automatic, Plain, Polite, ModelSettings, CpuRetry, Help, About, Quit };
+enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FitWidth,FitPage,Zoom,Left,Right,Equal,Help,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch,Translate,Retranslate,Stop,Automatic,Plain,Polite,ModelSettings,CpuRetry };
 bool copy_text(std::string_view text){
     if(!wxTheClipboard->Open())return false;
     wxTheClipboard->SetData(new wxTextDataObject(wxString::FromUTF8(text.data(),text.size())));wxTheClipboard->Close();return true;
@@ -70,6 +76,25 @@ public:
         std::lock_guard lock(mutex_);auto result=std::move(queue_);queue_.clear();bytes_=0;wake_=false;return result;
     }
 };
+class InferenceInbox {
+    std::mutex mutex_;
+    std::deque<std::shared_ptr<const InferenceEvent>> queue_;
+    bool wake_=false;
+public:
+    bool push(std::shared_ptr<const InferenceEvent> event){
+        std::lock_guard lock(mutex_);
+        if(event->kind==InferenceEvent::Kind::TextDelta&&!queue_.empty()&&queue_.back()->kind==event->kind&&queue_.back()->stamp==event->stamp){
+            if(queue_.back()->delta.size()+event->delta.size()<=4U*1024*1024){
+                auto merged=std::make_shared<InferenceEvent>(*queue_.back());merged->delta+=event->delta;queue_.back()=std::move(merged);
+            }
+        }else{
+            while(queue_.size()>=64)queue_.pop_front();
+            queue_.push_back(std::move(event));
+        }
+        const bool notify=!wake_;wake_=true;return notify;
+    }
+    auto take(){std::lock_guard lock(mutex_);auto result=std::move(queue_);queue_.clear();wake_=false;return result;}
+};
 }
 struct ApplicationController::Impl {
     ApplicationController& owner;
@@ -84,6 +109,7 @@ struct ApplicationController::Impl {
     wxButton* open_button=nullptr;
     wxTimer close_timer;
     wxTimer search_timer;
+    wxTimer translate_timer,stream_timer;
     wxWindow *search_bar=nullptr,*left_container=nullptr;
     wxTextCtrl* search_input=nullptr;
     wxCheckBox* search_case=nullptr;
@@ -98,8 +124,23 @@ struct ApplicationController::Impl {
         std::optional<std::pair<PageIndex,TextHit>> hit;
     } search;
     PdfInbox inbox;
+    InferenceInbox inference_inbox;
     std::atomic<DocumentEpoch> wanted_epoch{0};
+    std::atomic<ModelEpoch> wanted_model{0};
     std::unique_ptr<PdfService> pdf;
+    std::unique_ptr<InferenceService> inference;
+    ModelState model_state=ModelState::Unconfigured;
+    ModelEpoch model_epoch=0;
+    SettingsRevision settings_revision=1;
+    std::filesystem::path model_path;
+    BackendPreference backend_preference=BackendPreference::Automatic;
+    Form form=Form::Plain;
+    std::string backend,model_error,shown_translation;
+    bool auto_translate=true,translation_dirty=false,translation_requested=false,force_requested=false;
+    std::optional<std::tuple<DocumentEpoch,PageIndex,SourceRevision>> auto_suppressed;
+    std::unique_ptr<PageAttempt> attempt;
+    // M4 persists evicted attempts; keep only the current page here.
+    std::optional<AttemptSnapshot> previous_attempt;
     DocumentState document_state=DocumentState::Empty;
     DocumentEpoch epoch=0;
     PageIndex page=0;
@@ -111,29 +152,39 @@ struct ApplicationController::Impl {
     std::set<PageIndex> requested_layouts;
     std::size_t layout_bytes=0;
     std::uint64_t layout_tick=0;
-    std::map<PageIndex,std::string> overrides;
+    std::map<PageIndex,std::shared_ptr<const std::string>> overrides;
     std::map<PageIndex,SourceRevision> source_revisions;
     std::optional<std::pair<PageIndex,Command>> pending_source_command;
     bool closing=false;
 
-    explicit Impl(ApplicationController& receiver):owner(receiver),close_timer(&receiver),search_timer(&receiver){
+    explicit Impl(ApplicationController& receiver):owner(receiver),close_timer(&receiver),search_timer(&receiver),translate_timer(&receiver),stream_timer(&receiver){
         owner.Bind(PDF_WAKE,[this](wxThreadEvent&){for(auto& e:inbox.take())if(!closing)receive(*e);});
+        owner.Bind(INFERENCE_WAKE,[this](wxThreadEvent&){for(auto& e:inference_inbox.take())if(!closing)receive(*e);});
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){
-            if(closing&&pdf->done()){
-                close_timer.Stop();pdf->join();
+            if(closing&&pdf->done()&&inference->done()){
+                close_timer.Stop();pdf->join();inference->join();
                 auto* window=frame;frame=nullptr;window->Destroy();
             }
         },close_timer.GetId());
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){begin_search(false,false);},search_timer.GetId());
+        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){begin_translation();},translate_timer.GetId());
+        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){if(translation_dirty)refresh_translation();},stream_timer.GetId());
         pdf=std::make_unique<PdfService>([this](auto event){
             if(event->document!=wanted_epoch.load())return;
             if(inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(PDF_WAKE));
         });
+        inference=std::make_unique<InferenceService>([this](auto event){
+            if(event->model!=wanted_model.load())return;
+            if(inference_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(INFERENCE_WAKE));
+        });
     }
-    ~Impl(){pdf->stop();pdf->join();}
+    ~Impl(){pdf->stop();inference->stop();pdf->join();inference->join();}
     bool can(Command command) const {
         if(closing)return false;
         switch(command){
+        case Command::Translate:case Command::Retranslate:return document_state==DocumentState::Ready&&model_state!=ModelState::Loading;
+        case Command::Stop:return (attempt&&attempt->state()==PageState::Running)||translation_requested;
+        case Command::CpuRetry:return !model_path.empty()&&model_state!=ModelState::Loading;
         case Command::Close:return document_state!=DocumentState::Empty;
         case Command::Previous:return document_state==DocumentState::Ready&&page>0;
         case Command::Next:return document_state==DocumentState::Ready&&page+1<page_count;
@@ -145,6 +196,114 @@ struct ApplicationController::Impl {
             if(auto* text=wxDynamicCast(wxWindow::FindFocus(),wxTextCtrl))return text->CanCopy();
             return false;
         default:return true;
+        }
+    }
+    auto current_source_identity()const{return std::tuple{epoch,page,source_revisions.contains(page)?source_revisions.at(page):SourceRevision{1}};}
+    void show_translation(std::string text,bool reset=true){
+        if(text==shown_translation&&!reset)return;
+        update_readonly_text(*translation,shown_translation,text,reset);shown_translation=std::move(text);
+    }
+    void invalidate_translation(){
+        translate_timer.Stop();translation_requested=false;force_requested=false;inference->cancel_job();
+        if(attempt){attempt->interrupt();previous_attempt=attempt->snapshot();attempt.reset();}
+        translation_dirty=false;
+    }
+    void refresh_translation(){
+        translation_dirty=false;if(!attempt)return;
+        auto text=attempt->display_text();wxString status;
+        switch(attempt->state()){
+        case PageState::Complete:status=wxS("完了");break;
+        case PageState::Partial:status=wxS("部分結果・再試行できます");break;
+        case PageState::Failed:status=wxS("失敗・原文を確認して再試行できます");break;
+        case PageState::NoText:
+            status=wxS("翻訳するテキストがありません");
+            if(text.empty())text="翻訳するテキストがありません。「翻訳用原文の確認・編集」から文章を入力できます。";
+            break;
+        default:status=wxS("翻訳中");if(text.empty())text="翻訳しています…";break;
+        }
+        show_translation(std::move(text),false);
+        right_heading->SetLabel(wxString::Format(wxS("訳文 — %uページ・"),page+1)+status);right_heading->GetParent()->Layout();
+        frame->SetStatusText(status,2);
+    }
+    void schedule_translation(bool explicit_request=false,bool force=false){
+        if(explicit_request){translation_requested=true;force_requested=force;auto_suppressed.reset();}
+        if(document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
+        if(!translation_requested&&(!auto_translate||(auto_suppressed&&*auto_suppressed==current_source_identity())))return;
+        translate_timer.StartOnce(explicit_request?1:150);
+    }
+    void pump_translation(){
+        if(!attempt||model_state!=ModelState::Ready)return;
+        if(auto request=attempt->next_request()){
+            if(!inference->plan(*request))attempt->preparation_failed(request->stamp,FinishReason::ModelUnavailable);
+        }
+        translation_dirty=true;
+    }
+    void begin_translation(){
+        if(closing||document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
+        if(!translation_requested&&(!auto_translate||(auto_suppressed&&*auto_suppressed==current_source_identity())))return;
+        auto layout=current_layout();if(!layout){request_layout(page);return;}
+        const bool force=force_requested;force_requested=false;translation_requested=false;
+        if(attempt&&!force){
+            if(attempt->state()==PageState::Running||attempt->state()==PageState::Complete||attempt->state()==PageState::NoText)return;
+            attempt->resume();pump_translation();return;
+        }
+        if(attempt){attempt->interrupt();previous_attempt=attempt->snapshot();inference->cancel_job();}
+        const auto edited=overrides.find(page);
+        auto sources=PageAttempt::sources(*layout,edited==overrides.end()?nullptr:edited->second);
+        CanonicalKey key;key.number("document-session",epoch).number("page",page).number("model-session",model_epoch)
+            .number("layout-version",layout->layout_version).number("form",static_cast<unsigned>(form));
+        for(const auto& b:sources)key.text("block",b.id).text("source",sha256(*b.source)).number("kind",static_cast<unsigned>(b.kind));
+        WorkStamp stamp;stamp.document=epoch;stamp.page=page;stamp.model=model_epoch;stamp.source=std::get<2>(current_source_identity());stamp.settings=settings_revision;
+        attempt=std::make_unique<PageAttempt>(stamp,key.finish(),std::move(sources),form,force,std::move(previous_attempt));previous_attempt.reset();
+        pump_translation();refresh_translation();
+    }
+    void load_model(){
+        const bool requested=translation_requested,force=force_requested;
+        invalidate_translation();translation_requested=requested;force_requested=force;
+        previous_attempt.reset();model_state=ModelState::Loading;model_error.clear();backend.clear();wanted_model=++model_epoch;
+        frame->SetStatusText(wxS("モデル読込中…"),1);inference->load(model_epoch,model_path,backend_preference);
+    }
+    void model_settings(){
+        wxDialog dialog(frame,wxID_ANY,wxS("モデル設定"),wxDefaultPosition,frame->FromDIP(wxSize(720,300)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
+        auto root=new wxBoxSizer(wxVERTICAL);const auto gap=frame->FromDIP(8);
+        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("PLaMo 3 Translate 0.8B のローカルGGUFを選択してください。\nモデルは同梱・自動ダウンロードされません。利用条件はモデルの配布元で確認してください。"));
+        root->Add(description,0,wxALL|wxEXPAND,gap);
+        if(!model_error.empty()){
+            auto failure=new wxStaticText(&dialog,wxID_ANY,wxString::FromUTF8(model_error));failure->Wrap(frame->FromDIP(660));root->Add(failure,0,wxALL|wxEXPAND,gap);
+        }
+        auto row=new wxBoxSizer(wxHORIZONTAL);auto path_field=new wxTextCtrl(&dialog,wxID_ANY,display_path(model_path));path_field->SetName(wxS("GGUFファイル"));row->Add(path_field,1,wxALL|wxEXPAND,gap);
+        auto browse=new wxButton(&dialog,wxID_ANY,wxS("ファイルを選択…"));row->Add(browse,0,wxALL,gap);root->Add(row,0,wxEXPAND);
+        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("GGUFを選択"),{}, {},wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(file.ShowModal()==wxID_OK)path_field->ChangeValue(file.GetPath());});
+        wxArrayString choices;choices.Add(wxS("自動（Apple SiliconではMetal、利用できなければCPU）"));choices.Add(wxS("CPU"));
+        auto preference=new wxChoice(&dialog,wxID_ANY,wxDefaultPosition,wxDefaultSize,choices);preference->SetSelection(backend_preference==BackendPreference::Cpu?1:0);preference->SetName(wxS("推論デバイス"));root->Add(preference,0,wxALL|wxEXPAND,gap);
+        root->Add(dialog.CreateButtonSizer(wxOK|wxCANCEL),0,wxALL|wxALIGN_RIGHT,gap);dialog.SetSizer(root);dialog.CentreOnParent();
+        if(dialog.ShowModal()!=wxID_OK||path_field->GetValue().empty())return;
+        model_path=native_path(path_field->GetValue());backend_preference=preference->GetSelection()==1?BackendPreference::Cpu:BackendPreference::Automatic;load_model();
+    }
+    void receive(const InferenceEvent& event){
+        if(event.model!=model_epoch)return;
+        switch(event.kind){
+        case InferenceEvent::Kind::ModelReady:
+            model_state=ModelState::Ready;backend=event.backend;frame->SetStatusText(wxS("モデル準備完了・")+wxString::FromUTF8(backend),1);schedule_translation();break;
+        case InferenceEvent::Kind::ModelFailed:
+            model_state=ModelState::Failed;model_error=event.detail;
+            frame->SetStatusText(wxString::FromUTF8(event.message),1);
+            if(attempt){attempt->interrupt();translation_dirty=true;}
+            break;
+        case InferenceEvent::Kind::Prepared:
+            if(attempt&&attempt->prepared(event.chunk)){
+                if(auto prepared=attempt->active_prepared()){
+                    if(!inference->execute(prepared))attempt->preparation_failed(prepared->stamp,FinishReason::ModelUnavailable);
+                }else pump_translation();
+                translation_dirty=true;
+            }break;
+        case InferenceEvent::Kind::PreparationFailed:
+            if(attempt&&attempt->preparation_failed(event.stamp,event.result.reason)){pump_translation();refresh_translation();}break;
+        case InferenceEvent::Kind::TextDelta:
+            if(attempt&&attempt->delta(event.stamp,event.delta))translation_dirty=true;break;
+        case InferenceEvent::Kind::Finished:
+            if(attempt&&attempt->finished(event.stamp,event.result)){pump_translation();refresh_translation();}break;
+        default:break;
         }
     }
     void cancel_search(bool clear_hit=true){
@@ -202,7 +361,7 @@ struct ApplicationController::Impl {
         auto root=new wxBoxSizer(wxVERTICAL);
         root->Add(new wxStaticText(&dialog,wxID_ANY,wxS("このページの翻訳に使う文章です。PDFの原本、原文のコピー、検索は変わりません。")),0,wxALL,frame->FromDIP(8));
         const auto existing=overrides.find(page);
-        const auto& source=existing==overrides.end()?layout.reading_text_utf8:existing->second;
+        const auto& source=existing==overrides.end()?layout.reading_text_utf8:*existing->second;
         auto text=new wxTextCtrl(&dialog,wxID_ANY,wxString::FromUTF8(source),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE);
         text->SetName(wxS("翻訳用原文"));text->SetFont(translation->GetFont());root->Add(text,1,wxEXPAND|wxALL,frame->FromDIP(8));
         auto buttons=new wxBoxSizer(wxHORIZONTAL);
@@ -213,10 +372,11 @@ struct ApplicationController::Impl {
         dialog.SetSizer(root);dialog.CentreOnParent();text->SetFocus();
         const int choice=dialog.ShowModal();
         if(editing_document!=epoch)return;
-        if(choice==wxID_OK){overrides[editing_page]=text->GetValue().ToStdString(wxConvUTF8);++source_revisions[editing_page];}
+        if(choice==wxID_OK){overrides[editing_page]=std::make_shared<const std::string>(text->GetValue().ToStdString(wxConvUTF8));++source_revisions[editing_page];}
         else if(choice==wxID_REVERT_TO_SAVED){overrides.erase(editing_page);++source_revisions[editing_page];}
         else return;
         frame->SetStatusText(wxS("このセッションの翻訳用原文を更新しました。"),0);
+        if(editing_page==page){invalidate_translation();schedule_translation();}
     }
     void route(int id,Command command){
         frame->Bind(wxEVT_MENU,[this,command](wxCommandEvent&){execute(command);},id);
@@ -233,22 +393,24 @@ struct ApplicationController::Impl {
     }
     void open_path(const wxString& name){
         if(closing)return;
+        invalidate_translation();previous_attempt.reset();auto_suppressed.reset();
         path=native_path(name);document_state=DocumentState::Opening;page=0;page_count=0;
         cancel_search();search_input->ChangeValue(wxString{});search.query.clear();search_label->SetLabel(wxString{});
         anchors.clear();layouts.clear();layout_bytes=0;requested_layouts.clear();overrides.clear();source_revisions.clear();pending_source_command.reset();wanted_epoch=++epoch;
         canvas->set_page(epoch,0);
-        translation->ChangeValue(wxS("PDFを読み込んでいます…"));
+        show_translation("PDFを読み込んでいます…");
         frame->SetTitle(display_path(path.filename())+wxS(" — ")+wxString::FromUTF8(product::name));
         headings();frame->SetStatusText(wxS("PDFを読み込んでいます…"),0);
         pdf->open(epoch,path);
     }
     void go(PageIndex target,bool search_navigation=false){
         if(target>=page_count||target==page)return;
+        invalidate_translation();auto_suppressed.reset();
         if(!search_navigation)cancel_search();
         if(auto a=canvas->reading_anchor())anchors[page]=*a;
-        page=target;canvas->set_page(epoch,page);translation->ChangeValue(wxS("翻訳モデルを設定すると、このページの訳文を表示します。"));
+        page=target;canvas->set_page(epoch,page);show_translation(model_state==ModelState::Ready?"ページの原文を準備しています…":"翻訳モデルを設定すると、このページの訳文を表示します。");
         pending_source_command.reset();if(auto layout=current_layout())canvas->set_layout(std::move(layout));
-        headings();pdf->page_info(epoch,page);
+        headings();pdf->page_info(epoch,page);schedule_translation();
     }
     void receive(const PdfEvent& event){
         if(event.document!=epoch)return;
@@ -256,7 +418,7 @@ struct ApplicationController::Impl {
         case PdfEvent::Kind::Opened:
             document_state=DocumentState::Ready;page_count=event.page_count;page=0;
             canvas->set_page(epoch,0,event.info);headings();
-            translation->ChangeValue(wxS("翻訳モデルを設定すると、このページの訳文を表示します。"));
+            show_translation(model_state==ModelState::Ready?"ページの原文を準備しています…":"翻訳モデルを設定すると、このページの訳文を表示します。");schedule_translation();
             break;
         case PdfEvent::Kind::PageInfo:
             if(event.page==page){
@@ -273,10 +435,11 @@ struct ApplicationController::Impl {
                 if(event.page==page){
                     canvas->set_layout(event.layout);
                     if(event.layout->availability==PageLayout::Availability::NoTextLayer||event.layout->availability==PageLayout::Availability::NoTranslatableText)
-                        translation->ChangeValue(wxS("翻訳するテキストがありません。「翻訳用原文の確認・編集」から文章を入力できます。"));
+                        show_translation("翻訳するテキストがありません。「翻訳用原文の確認・編集」から文章を入力できます。");
                     else if(event.layout->availability==PageLayout::Availability::UnicodeUnavailable)
-                        translation->ChangeValue(wxS("文字のUnicode情報を取得できません。原文画像を確認し、翻訳用原文を入力できます。"));
+                        show_translation("文字のUnicode情報を取得できません。原文画像を確認し、翻訳用原文を入力できます。");
                     if(pending_source_command&&pending_source_command->first==page){const auto command=pending_source_command->second;pending_source_command.reset();execute(command);}
+                    schedule_translation();
                 }
             }
             break;
@@ -303,7 +466,7 @@ struct ApplicationController::Impl {
             requested_layouts.erase(event.page);
             if(pending_source_command&&pending_source_command->first==event.page)pending_source_command.reset();
             if(event.code=="PdfSearch"&&event.query_generation==search.generation){search.active=false;search_label->SetLabel(wxS("検索できませんでした。PDFを再度開けます。"));}
-            if(event.code=="PdfOpen"){document_state=DocumentState::Failed;translation->ChangeValue(wxString::FromUTF8(event.message));}
+            if(event.code=="PdfOpen"){document_state=DocumentState::Failed;show_translation(event.message);}
             if(event.code=="PdfOpen"||event.page==page)frame->SetStatusText(wxString::FromUTF8(event.message),0);
             break;
         default:break;
@@ -317,9 +480,10 @@ struct ApplicationController::Impl {
             if(dialog.ShowModal()==wxID_OK)open_path(dialog.GetPath());break;
         }
         case Command::Close:
+            invalidate_translation();previous_attempt.reset();auto_suppressed.reset();
             cancel_search();search_input->ChangeValue(wxString{});search.query.clear();search_label->SetLabel(wxString{});
             wanted_epoch=++epoch;pdf->close(epoch);document_state=DocumentState::Empty;page_count=0;page=0;
-            anchors.clear();layouts.clear();layout_bytes=0;requested_layouts.clear();overrides.clear();source_revisions.clear();pending_source_command.reset();canvas->clear_document();translation->Clear();headings();frame->SetTitle(wxString::FromUTF8(product::name));break;
+            anchors.clear();layouts.clear();layout_bytes=0;requested_layouts.clear();overrides.clear();source_revisions.clear();pending_source_command.reset();canvas->clear_document();show_translation({});headings();frame->SetTitle(wxString::FromUTF8(product::name));break;
         case Command::Previous:go(page-1);break;case Command::Next:go(page+1);break;
         case Command::GoPage:{
             long value=0;auto text=page_input->GetValue();
@@ -358,6 +522,19 @@ struct ApplicationController::Impl {
             begin_search(command==Command::FindPrevious,true);break;
         case Command::CloseSearch:
             cancel_search();search_bar->Hide();left_container->Layout();canvas->SetFocus();break;
+        case Command::Translate:case Command::Retranslate:
+            schedule_translation(true,command==Command::Retranslate);if(model_state!=ModelState::Ready)model_settings();break;
+        case Command::Stop:
+            translate_timer.Stop();translation_requested=false;force_requested=false;auto_suppressed=current_source_identity();
+            inference->cancel_job();if(attempt){attempt->interrupt();refresh_translation();}frame->SetStatusText(wxS("停止しました。明示的な翻訳操作で再開できます。"),2);break;
+        case Command::Automatic:
+            auto_translate=!auto_translate;if(auto_translate){auto_suppressed.reset();schedule_translation();}break;
+        case Command::Plain:case Command::Polite:{
+            const auto selected=command==Command::Plain?Form::Plain:Form::Polite;
+            if(form!=selected){form=selected;++settings_revision;invalidate_translation();previous_attempt.reset();schedule_translation();}break;
+        }
+        case Command::ModelSettings:model_settings();break;
+        case Command::CpuRetry:backend_preference=BackendPreference::Cpu;load_model();break;
         case Command::Help:
             wxMessageBox(wxS("PDFを開くか、ウィンドウへドロップしてください。\nページ番号はEnterで確定します。\n\nホイール: ページ内をスクロール\nShift＋ホイール: 横スクロール\nPrimary＋ホイール: 拡大・縮小\nSpace＋ドラッグ／中ボタン: 移動\nF6: ペイン間のフォーカス移動\n\nPDFの原本は変更しません。"),wxS("操作方法"),wxOK|wxICON_INFORMATION,frame);break;
         case Command::About:
@@ -385,13 +562,23 @@ struct ApplicationController::Impl {
         view_menu->Append(Previous,wxS("前のページ\tAlt+PageUp"));view_menu->Append(Next,wxS("次のページ\tAlt+PageDown"));
 #endif
         auto help_menu=new wxMenu;help_menu->Append(Help,wxS("操作方法"));help_menu->Append(About,wxS("このアプリについて"));
-        auto menu=new wxMenuBar;menu->Append(file_menu,wxS("ファイル"));menu->Append(edit_menu,wxS("編集"));menu->Append(view_menu,wxS("表示"));menu->Append(help_menu,wxS("ヘルプ"));frame->SetMenuBar(menu);
+        auto translate_menu=new wxMenu;
+        translate_menu->Append(Translate,wxS("このページを翻訳\tCtrl+T"));translate_menu->Append(Retranslate,wxS("このページを最初から再翻訳\tCtrl+Shift+T"));
+        translate_menu->Append(Stop,wxS("停止\tCtrl+."));translate_menu->AppendCheckItem(Automatic,wxS("現在ページを自動翻訳"));translate_menu->Check(Automatic,true);
+        translate_menu->AppendSeparator();translate_menu->AppendRadioItem(Plain,wxS("常体"));translate_menu->AppendRadioItem(Polite,wxS("敬体"));translate_menu->Check(Plain,true);
+        translate_menu->AppendSeparator();translate_menu->Append(ModelSettings,wxS("モデル設定…\tCtrl+,"));translate_menu->Append(CpuRetry,wxS("CPUでモデルを読み直す"));
+        auto menu=new wxMenuBar;menu->Append(file_menu,wxS("ファイル"));menu->Append(edit_menu,wxS("編集"));menu->Append(view_menu,wxS("表示"));menu->Append(translate_menu,wxS("翻訳"));menu->Append(help_menu,wxS("ヘルプ"));frame->SetMenuBar(menu);
         route(Open,Command::Open);route(Close,Command::Close);route(Previous,Command::Previous);route(Next,Command::Next);
         route(GoPage,Command::GoPage);route(FitWidth,Command::FitWidth);route(FitPage,Command::FitPage);route(Zoom,Command::Zoom);
         route(Left,Command::Left);route(Right,Command::Right);route(Equal,Command::Equal);route(Help,Command::Help);route(About,Command::About);
         route(wxID_COPY,Command::Copy);route(wxID_SELECTALL,Command::SelectAll);route(wxID_EXIT,Command::Quit);
         route(CopySource,Command::CopySource);route(EditSource,Command::EditSource);
         route(Find,Command::Find);route(FindNext,Command::FindNext);route(FindPrevious,Command::FindPrevious);route(CloseSearch,Command::CloseSearch);
+        route(Translate,Command::Translate);route(Retranslate,Command::Retranslate);route(Stop,Command::Stop);route(Automatic,Command::Automatic);
+        route(Plain,Command::Plain);route(Polite,Command::Polite);route(ModelSettings,Command::ModelSettings);route(CpuRetry,Command::CpuRetry);
+        frame->Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& e){e.Check(auto_translate);},Automatic);
+        frame->Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& e){e.Check(form==Form::Plain);},Plain);
+        frame->Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& e){e.Check(form==Form::Polite);},Polite);
         auto root=new wxBoxSizer(wxVERTICAL);
         toolbar=new wxPanel(frame);auto tools=new wxWrapSizer(wxHORIZONTAL);
         const int gap=frame->FromDIP(4);
@@ -402,6 +589,7 @@ struct ApplicationController::Impl {
         page_count_label=new wxStaticText(toolbar,wxID_ANY,"/ 0");tools->Add(page_count_label,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);
         wxArrayString options;for(const auto* label:{wxS("幅に合わせる"),wxS("ページ全体"),wxS("50%"),wxS("75%"),wxS("100%"),wxS("125%"),wxS("150%"),wxS("200%"),wxS("400%")})options.Add(label);
         zoom_input=new wxComboBox(toolbar,Zoom,wxS("幅に合わせる"),wxDefaultPosition,frame->FromDIP(wxSize(160,-1)),options,wxTE_PROCESS_ENTER);zoom_input->SetName(wxS("PDFの倍率"));tools->Add(zoom_input,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);
+        button(Translate,wxS("このページを翻訳"));button(Stop,wxS("停止"));button(ModelSettings,wxS("モデル設定"));
         toolbar->SetSizer(tools);root->Add(toolbar,0,wxEXPAND);
         split=new wxSplitterWindow(frame,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxSP_LIVE_UPDATE|wxSP_3D);
         auto left=new wxPanel(split);auto right=new wxPanel(split);auto ls=new wxBoxSizer(wxVERTICAL);auto rs=new wxBoxSizer(wxVERTICAL);
@@ -446,10 +634,11 @@ struct ApplicationController::Impl {
             }else e.Skip();
         });
         frame->Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& e){
-            if(!closing){closing=true;pdf->stop();frame->Disable();frame->SetStatusText(wxS("終了処理中…"),0);close_timer.Start(50);}
+            if(!closing){closing=true;translate_timer.Stop();stream_timer.Stop();search_timer.Stop();pdf->stop();inference->stop();frame->Disable();frame->SetStatusText(wxS("終了処理中…"),0);close_timer.Start(50);}
             if(e.CanVeto())e.Veto();
         });
         headings();frame->Show();frame->Layout();split->SetSashPosition(split->GetClientSize().x/2);
+        stream_timer.Start(50);
         if(!initial.empty())open_path(initial);
     }
 };

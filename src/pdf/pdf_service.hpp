@@ -1,6 +1,7 @@
 #pragma once
 #include "core/types.hpp"
 #include "pdf/layout.hpp"
+#include "platform/file_signature.hpp"
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -10,6 +11,7 @@
 #include <vector>
 
 namespace opt {
+class FileSnapshot;
 struct TileKey {
     DocumentEpoch document=0;
     PageIndex page=0;
@@ -52,6 +54,8 @@ struct PdfEvent {
     DocumentEpoch document=0;
     PageIndex page=0;
     std::uint32_t page_count=0;
+    std::shared_ptr<const FileSnapshot> file_snapshot;
+    FileSignature file_signature;
     PdfPageInfo info;
     TileKey key;
     RenderTransform transform;
