@@ -32,6 +32,19 @@ def synthetic_pe(normal, delay):
 
 
 class DependencyAuditTest(unittest.TestCase):
+    def test_deployment_is_not_a_dylib_compatibility_version(self):
+        commands='''Load command 0
+          cmd LC_LOAD_DYLIB
+          current version 3000.1.0
+          compatibility version 1000.0.0
+        Load command 1
+          cmd LC_BUILD_VERSION
+          platform 1
+          minos 14.0
+          sdk 27.2
+        '''
+        self.assertEqual(audit.macho_deployment(commands),{'minimum_os':'14.0','sdk':'27.2'})
+
     def report(self, normal, delay):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "app.exe"

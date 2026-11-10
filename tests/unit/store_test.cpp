@@ -102,6 +102,7 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
         {Store store(clock_state,clock_cache);PageAttempt forced({2,0,1,1,1},full.condition_key(),blocks,Form::Plain,true);store.save_attempt(full,forced.snapshot());
             require(store.attempt(full)->id==forced.snapshot().id,"clock rollback cannot select older completed attempt");
             require(store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("future-clock old attempt exported");})==0,"clock rollback cannot export superseded completion");}
+        {Store store(clock_state,clock_cache);auto previous=store.attempt(full);store.switch_to_memory();require(!store.state_persistent()&&!store.cache_persistent()&&store.attempt(full)->id==previous->id,"runtime fallback retains cache manifest and marks both stores unsaved");}
         std::filesystem::remove_all(directory);std::cout<<"durable state, canonical promotion, forced resume, pinning and recovery passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<" (fixtures at "<<directory<<")\n";return 1;}
 }

@@ -67,8 +67,27 @@ int main(){const auto root=std::filesystem::temp_directory_path()/std::filesyste
             service.export_complete(target,{"nonexistent-document","nonexistent-model","profile","source",0});third.wait(IoEvent::Kind::Error);
             require(bytes(target)=="keep original","failed export preserves existing destination atomically");
             service.export_current(root/"after-error.txt",0,"処理は続けられる",PageState::Complete);third.wait(IoEvent::Kind::Exported);
+            service.export_state(root/"missing-parent"/"backup.sqlite3");third.wait(IoEvent::Kind::Error);
+            service.save_override(3,other_native,"provisional:session:3",other,{0,10,std::string("未昇格でも保存")});
+            require(third.wait(IoEvent::Kind::OverrideSaved)->persistent,"failed backup destination does not disable healthy active persistence");
             service.stop();service.join();}
         {Store store(root/"state",root/"cache");auto saved=store.document(other_native,other_native);require(saved.overrides.size()==1&&*saved.overrides[0].source=="未昇格でも保存","unpromoted user source is durable independently of cache/hash cancellation");}
+        // The storage may become unavailable after startup. The accepted edit
+        // must survive UI page-cache eviction and be rescuable from memory.
+        Inbox recovery;std::atomic_bool fail_next{false};
+        {IoService service(root/"runtime-state",root/"runtime-cache",[&](auto e){recovery.push(std::move(e));},[&]{if(fail_next.exchange(false))throw StorageError(10,"Injected SQLite I/O error");});
+            require(recovery.wait(IoEvent::Kind::Initialized)->persistent,"runtime recovery starts with disk stores");
+            service.save_override(1,other_native,"",other,{0,1,std::string("previous disk edit")});require(recovery.wait(IoEvent::Kind::OverrideSaved)->persistent,"earlier edit saved on disk");
+            fail_next=true;service.save_override(1,other_native,"",other,{1,2,std::string("new edit accepted during write failure")});
+            recovery.wait(IoEvent::Kind::Error);require(!recovery.wait(IoEvent::Kind::OverrideSaved)->persistent,"accepted failing edit retried in memory with explicit unsaved state");
+            service.read_page(1,"",other_native,0);auto older=recovery.wait(IoEvent::Kind::PageLoaded);
+            require(*older->saved_document->overrides.at(0).source=="previous disk edit","memory transition retains readable prior edits");
+            service.read_page(1,"",other_native,1);auto newer=recovery.wait(IoEvent::Kind::PageLoaded);
+            require(*newer->saved_document->overrides.at(0).source=="new edit accepted during write failure","edit can be refetched after leaving its GUI page");
+            service.export_state(root/"runtime-rescue.sqlite3");recovery.wait(IoEvent::Kind::Exported);service.stop();service.join();}
+        {Store disk(root/"runtime-state",root/"runtime-cache");require(disk.document(other_native,other_native).overrides.size()==1,"memory recovery leaves original disk state intact");}
+        std::filesystem::create_directory(root/"rescued-state");std::filesystem::rename(root/"runtime-rescue.sqlite3",root/"rescued-state/state.sqlite3");
+        {Store restored(root/"rescued-state",root/"rescued-cache");require(restored.document(other_native,other_native).overrides.size()==2,"rescue includes both old and accepted in-memory edits");}
         std::filesystem::remove_all(root);std::cout<<"async fingerprints, saved-signature reuse, edit/hash races, UTF-8 export and shutdown durability passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<" (fixtures at "<<root<<")\n";return 1;}
 }

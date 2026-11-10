@@ -89,6 +89,7 @@ Macのdeployment targetは14.0です。実行確認したOSは開発Macの27.2�
 Developer ID署名・公証済みの一般配布版は作成していません。package scriptのMac出力はad-hoc署名の開発成果物です。
 Gatekeeperの初回起動、開発環境のないクリーンな実機、Windowsの英語環境・DPI・IME、複数モニターのscale変更は別途確認が必要です。
 現在の証拠と限界は[実装状況](docs/implementation-status.md)と各検証記録に分けて記載しています。
+[配布検証](docs/distribution.md)では、別配置・新規状態・ネットワークと開発workspaceの読取を禁止した条件での製品実行も記録しています。
 
 ## 開発者向けビルド
 
@@ -155,4 +156,5 @@ fixtureはこのプロジェクトのために新規作成したPDFです。フ�
 静的に組み込む依存、フォント、別途選択するモデルにはそれぞれの条件が適用されます。
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)は固定ソースから生成した完全な通知文です。
 `python scripts/collect_notices.py --check` で入力と通知文のhashを照合できます。
+`python scripts/audit_publication.py` は削除済み内容を含む公開branchの履歴と現ソースを確認し、検出値を表示せずに問題の場所だけを報告します。
 依存やモデルの利用条件をアプリのMIT Licenseに読み替えるものではありません。

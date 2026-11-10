@@ -41,6 +41,7 @@ struct IoService::Impl {
         Sha256 digest;
     };
     Delivery delivery;
+    std::function<void()> before_job;
     std::filesystem::path state_directory,cache_directory;
     std::mutex mutex;std::condition_variable cv;std::deque<Job> jobs;
     std::atomic_bool stopping{false},finished{false};
@@ -51,7 +52,7 @@ struct IoService::Impl {
     std::vector<std::byte> hash_buffer=std::vector<std::byte>(1024*1024);
     bool hash_turn=false,dirty=false;
     std::thread worker;
-    Impl(std::filesystem::path s,std::filesystem::path c,Delivery sink):delivery(std::move(sink)),state_directory(std::move(s)),cache_directory(std::move(c)){
+    Impl(std::filesystem::path s,std::filesystem::path c,Delivery sink,std::function<void()> hook):delivery(std::move(sink)),before_job(std::move(hook)),state_directory(std::move(s)),cache_directory(std::move(c)){
         worker=std::thread([this]{run();});
     }
     ~Impl(){stop();if(worker.joinable())worker.join();}
@@ -99,7 +100,20 @@ struct IoService::Impl {
                 std::optional<Job> job;
                 {std::unique_lock lock(mutex);cv.wait(lock,[&]{return stopping.load()||!jobs.empty()||document_hash||model_hash||dirty;});
                     if(!jobs.empty()){job=std::move(jobs.front());jobs.pop_front();}else if(stopping.load())break;}
-                if(job){try{job->execute(store);dirty=true;}catch(const std::exception& e){error(e.what());}}
+                if(job){
+                    try{if(before_job)before_job();job->execute(store);dirty=true;}
+                    catch(const StorageError& e){
+                        if(e.permits_memory_fallback()){
+                            try{
+                                store.switch_to_memory();
+                                IoEvent warning;warning.message="保存先を利用できなくなりました。変更はこの起動中だけ保持します。状態データの退避コピーを保存できます。";emit(std::move(warning));
+                                // Retry the immutable accepted request after all failed
+                                // transactions have unwound; do not lose the newest edit.
+                                job->execute(store);dirty=true;
+                            }catch(const std::exception& retry){error(retry.what());}
+                        }else error(e.what());
+                    }catch(const std::exception& e){error(e.what());}
+                }
                 if(!stopping.load())hash_step(store);
                 bool idle=false;{std::lock_guard lock(mutex);idle=jobs.empty()&&!document_hash&&!model_hash;}
                 if(idle&&dirty&&!stopping.load()){dirty=false;try{dirty=store.maintain();}catch(const std::exception& e){error(e.what());}}
@@ -108,7 +122,7 @@ struct IoService::Impl {
         finished=true;
     }
 };
-IoService::IoService(std::filesystem::path s,std::filesystem::path c,Delivery sink):impl_(std::make_unique<Impl>(std::move(s),std::move(c),std::move(sink))){}
+IoService::IoService(std::filesystem::path s,std::filesystem::path c,Delivery sink,std::function<void()> hook):impl_(std::make_unique<Impl>(std::move(s),std::move(c),std::move(sink),std::move(hook))){}
 IoService::~IoService()=default;
 bool IoService::open_document(DocumentEpoch epoch,std::string provisional,std::filesystem::path path,std::shared_ptr<const FileSnapshot> file){
     impl_->desired_document=epoch;
@@ -186,9 +200,12 @@ bool IoService::export_complete(std::filesystem::path path,CacheContext context,
         atomic_export(path,[&](std::ostream& out){export_header(out,form);out<<"完成したページのみを収録しています。未完了ページは含みません。\n\n";count=store.for_each_complete_page(resolved.document_key,resolved.model_key,resolved.profile_digest,[&](PageIndex page,std::string_view text){out<<"# "<<page+1<<"ページ — 完了\n\n"<<text<<"\n\n";},native==p->native_keys.end()?std::string_view{}:std::string_view(native->second));if(!count)throw std::runtime_error("No completed pages to export");});
         IoEvent e;e.kind=IoEvent::Kind::Exported;e.message=std::to_string(count)+"ページの完成訳を書き出しました。";p->emit(std::move(e));});
 }
-bool IoService::clear_cache(){return impl_->enqueue("",[p=impl_.get()](Store& store){store.clear_cache();IoEvent e;e.kind=IoEvent::Kind::CacheCleared;p->emit(std::move(e));});}
+bool IoService::clear_cache(){return impl_->enqueue("",[p=impl_.get()](Store& store){store.clear_cache();IoEvent e;e.kind=IoEvent::Kind::CacheCleared;e.persistent=store.cache_persistent();p->emit(std::move(e));});}
 bool IoService::export_state(std::filesystem::path destination){
-    return impl_->enqueue("",[p=impl_.get(),destination=std::move(destination)](Store& store){store.export_state(destination);
+    return impl_->enqueue("",[p=impl_.get(),destination=std::move(destination)](Store& store){
+        // A failed backup destination must not switch healthy active storage
+        // to memory merely because the destination itself uses SQLite.
+        try{store.export_state(destination);}catch(const StorageError& e){throw std::runtime_error(e.what());}
         IoEvent e;e.kind=IoEvent::Kind::Exported;e.message="設定・原文編集・読書位置の退避コピーを保存しました。現在の保存先は変わりません。";p->emit(std::move(e));});
 }
 bool IoService::diagnostic(DiagnosticRecord record){

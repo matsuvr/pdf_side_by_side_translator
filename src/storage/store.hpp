@@ -4,8 +4,16 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <stdexcept>
+#include <utility>
 
 namespace opt {
+class StorageError final:public std::runtime_error {
+    int code_;
+public:
+    StorageError(int code,std::string message):std::runtime_error(std::move(message)),code_(code){}
+    bool permits_memory_fallback()const noexcept;
+};
 struct SavedOverride {PageIndex page=0;SourceRevision revision=0;std::optional<std::string> source;};
 struct ReadingPosition {PageIndex page=0;std::optional<PdfPoint> pdf_anchor;std::size_t text_anchor=0;bool operator==(const ReadingPosition&)const=default;};
 struct SavedDocument {
@@ -47,6 +55,7 @@ public:
         const std::function<void(PageIndex,std::string_view)>& consume,std::string_view native_source_key={});
     void clear_cache();
     void export_state(const std::filesystem::path& destination);
+    void switch_to_memory();
     bool maintain();
 private:
     struct Impl;std::unique_ptr<Impl> impl_;

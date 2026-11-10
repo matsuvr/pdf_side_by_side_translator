@@ -84,7 +84,19 @@ def audit_pe(path):
     return {"file": str(path), "format": "PE", **info, "failures": failures}
 
 
-def audit_macho(path, expected_arch):
+def macho_deployment(commands):
+    for block in re.split(r"Load command \d+",commands):
+        if re.search(r"cmd LC_BUILD_VERSION\b",block):
+            version=re.search(r"\bminos (\d+\.\d+(?:\.\d+)?)",block)
+            sdk=re.search(r"\bsdk (\d+\.\d+(?:\.\d+)?)",block)
+            return {"minimum_os":version.group(1) if version else None,"sdk":sdk.group(1) if sdk else None}
+        if re.search(r"cmd LC_VERSION_MIN_MACOSX\b",block):
+            version=re.search(r"\bversion (\d+\.\d+(?:\.\d+)?)",block)
+            return {"minimum_os":version.group(1) if version else None,"sdk":None}
+    return {"minimum_os":None,"sdk":None}
+
+
+def audit_macho(path, expected_arch, expected_minimum_os=None):
     info = subprocess.check_output(["otool", "-L", str(path)], text=True)
     commands = subprocess.check_output(["otool", "-l", str(path)], text=True)
     architecture = subprocess.check_output(["lipo", "-archs", str(path)], text=True).strip()
@@ -97,9 +109,11 @@ def audit_macho(path, expected_arch):
     for rpath in rpaths:
         if not rpath.startswith(("@loader_path", "@executable_path")):
             failures.append("External runtime search path: " + rpath)
-    deployment = re.findall(r"(?:minos|version) (\d+\.\d+(?:\.\d+)?)", commands)
+    deployment = macho_deployment(commands)
+    if not deployment["minimum_os"]:failures.append("Deployment load command missing")
+    if expected_minimum_os and deployment["minimum_os"]!=expected_minimum_os:failures.append("Deployment target mismatch: "+str(deployment["minimum_os"]))
     return {"file": str(path), "format": "Mach-O", "architecture": architecture,
-            "dependencies": dependencies, "rpaths": rpaths, "version_commands": deployment,
+            "dependencies": dependencies, "rpaths": rpaths, **deployment,
             "failures": failures}
 
 
@@ -107,6 +121,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--arch", choices=["arm64", "x86_64"])
+    parser.add_argument("--minimum-os")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.artifact.is_dir():
@@ -117,7 +132,7 @@ def main():
         with path.open("rb") as stream: magic = stream.read(4)
         if magic[:2] == b"MZ": reports.append(audit_pe(path))
         elif magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"):
-            reports.append(audit_macho(path, args.arch))
+            reports.append(audit_macho(path, args.arch,args.minimum_os))
     if not reports: raise SystemExit("No executable found to inspect")
     output = json.dumps(reports, indent=2) + "\n"
     if args.output:

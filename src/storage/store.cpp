@@ -20,11 +20,15 @@
 #endif
 
 namespace opt {
+bool StorageError::permits_memory_fallback()const noexcept{
+    switch(code_&0xff){case SQLITE_BUSY:case SQLITE_LOCKED:case SQLITE_READONLY:case SQLITE_IOERR:
+        case SQLITE_FULL:case SQLITE_CANTOPEN:case SQLITE_CORRUPT:case SQLITE_NOTADB:return true;default:return false;}
+}
 namespace {
 std::string utf8(const std::filesystem::path& p){const auto s=p.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
 std::filesystem::path native(std::string_view s){return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(s.data()),s.size()));}
 std::int64_t now(){return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();}
-void check(int code,sqlite3* db){if(code!=SQLITE_OK&&code!=SQLITE_ROW&&code!=SQLITE_DONE)throw std::runtime_error(sqlite3_errmsg(db));}
+void check(int code,sqlite3* db){if(code!=SQLITE_OK&&code!=SQLITE_ROW&&code!=SQLITE_DONE)throw StorageError(code,sqlite3_errmsg(db));}
 struct Statement {
     sqlite3* db;sqlite3_stmt* stmt=nullptr;
     Statement(sqlite3* d,const char* sql):db(d){check(sqlite3_prepare_v2(db,sql,-1,&stmt,nullptr),db);}
@@ -39,7 +43,7 @@ struct Statement {
     double real(int at)const{return sqlite3_column_double(stmt,at);}
     bool is_null(int at)const{return sqlite3_column_type(stmt,at)==SQLITE_NULL;}
 };
-void sql(sqlite3* db,const char* text){char* error=nullptr;auto code=sqlite3_exec(db,text,nullptr,nullptr,&error);std::string message=error?error:"SQLite failure";sqlite3_free(error);if(code!=SQLITE_OK)throw std::runtime_error(message);}
+void sql(sqlite3* db,const char* text){char* error=nullptr;auto code=sqlite3_exec(db,text,nullptr,nullptr,&error);std::string message=error?error:"SQLite failure";sqlite3_free(error);if(code!=SQLITE_OK)throw StorageError(code,std::move(message));}
 struct Transaction {sqlite3* db;bool committed=false;explicit Transaction(sqlite3* d):db(d){sql(db,"BEGIN IMMEDIATE");}~Transaction(){if(!committed)sqlite3_exec(db,"ROLLBACK",nullptr,nullptr,nullptr);}void commit(){sql(db,"COMMIT");committed=true;}};
 constexpr std::array leaf_names{"pending","planning","running","complete","source-only","partial","failed","replaced"};
 constexpr std::array page_names{"not-started","waiting-text","queued","running","complete","partial","failed","no-text"};
@@ -346,6 +350,28 @@ std::size_t Store::for_each_complete_page(std::string_view doc,std::string_view 
     }return count;
 }
 void Store::clear_cache(){impl_->owns();Transaction tx(impl_->cache);sql(impl_->cache,"DELETE FROM attempt_chunks;DELETE FROM page_attempts;DELETE FROM completed_chunks;DELETE FROM session_completed_chunks;DELETE FROM fingerprint_promotions");tx.commit();}
+void Store::switch_to_memory(){
+    impl_->owns();
+    auto copy=[&](sqlite3* source,const char* schema){
+        sqlite3* target=nullptr;try{
+        check(sqlite3_open_v2(":memory:",&target,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),target);
+        bool copied=false;
+        if(auto* backup=sqlite3_backup_init(target,"main",source,"main")){
+            const auto result=sqlite3_backup_step(backup,-1);const auto finished=sqlite3_backup_finish(backup);copied=result==SQLITE_DONE&&finished==SQLITE_OK;
+        }
+        if(!copied){
+            sqlite3_close(target);target=nullptr;check(sqlite3_open_v2(":memory:",&target,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),target);sql(target,schema);
+            impl_->messages.push_back("Unreadable disk data was preserved; a fresh in-memory database holds new changes");
+        }
+        sql(target,"PRAGMA foreign_keys=ON");return target;
+        }catch(...){if(target)sqlite3_close_v2(target);throw;}
+    };
+    auto* state=copy(impl_->state,state_schema);sqlite3* cache=nullptr;
+    try{cache=copy(impl_->cache,cache_schema);}catch(...){sqlite3_close(state);throw;}
+    sqlite3_close_v2(impl_->state);sqlite3_close_v2(impl_->cache);impl_->state=state;impl_->cache=cache;
+    impl_->state_disk=impl_->cache_disk=false;impl_->memory_only=true;
+    impl_->messages.push_back("Disk write failed; session changes are now held in memory and can be rescued with a state backup");
+}
 void Store::export_state(const std::filesystem::path& destination){
     impl_->owns();
     const auto parent=std::filesystem::weakly_canonical(access_path(destination.parent_path()));

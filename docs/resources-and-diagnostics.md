@@ -55,6 +55,13 @@ the app, preserve its existing state directory (including WAL/SHM files), and
 place the backup as `state.sqlite3` in a fresh state directory before launch.
 The original future/corrupt state is never automatically deleted.
 
+If an active SQLite write fails after startup, readable state/cache are copied
+to memory on their owner thread and the accepted request is retried once there.
+An integration fault injection checks that earlier disk edits and the newly
+accepted edit remain available after GUI-page eviction and in a rescue backup,
+while the original disk state is retained. A failed backup destination does not
+trigger this transition for otherwise healthy active storage.
+
 The 23 headless CTest checks pass on macOS arm64. Interactive long-text evidence
 is in [native-text.md](native-text.md); other platform execution and final
 distribution/clean-launch checks are tracked separately.

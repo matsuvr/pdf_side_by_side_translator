@@ -23,7 +23,9 @@ struct IoEvent {
 class IoService {
 public:
     using Delivery=std::function<void(std::shared_ptr<const IoEvent>)>;
-    IoService(std::filesystem::path state_directory,std::filesystem::path cache_directory,Delivery delivery);
+    // The optional hook is a test-only fault-injection seam, never a product
+    // setting. It runs on the I/O owner immediately before an accepted job.
+    IoService(std::filesystem::path state_directory,std::filesystem::path cache_directory,Delivery delivery,std::function<void()> before_job={});
     ~IoService();
     bool open_document(DocumentEpoch document,std::string provisional_cache_key,std::filesystem::path path,std::shared_ptr<const FileSnapshot> file);
     bool close_document();

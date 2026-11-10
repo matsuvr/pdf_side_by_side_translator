@@ -36,7 +36,7 @@ def audit_bundle(bundle,arch):
         if path.suffix.lower() in {'.gguf','.py','.dll','.dylib','.metallib'}:raise RuntimeError('Unexpected runtime sidecar: '+path.name)
         magic=path.read_bytes()[:4]
         if magic in (b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca'):
-            report=audit_macho(path,arch);report['file']=str(path.relative_to(bundle));reports.append(report)
+            report=audit_macho(path,arch,'14.0');report['file']=str(path.relative_to(bundle));reports.append(report)
     if len(reports)!=1:raise RuntimeError('Expected exactly one product Mach-O')
     if any(r['failures'] for r in reports):raise RuntimeError(json.dumps(reports,indent=2))
     return reports

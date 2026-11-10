@@ -294,11 +294,27 @@ struct ApplicationController::Impl {
         if(text==shown_translation&&!reset)return;
         update_readonly_text(*translation,shown_translation,text,reset);shown_translation=std::move(text);
     }
+    void show_waiting_translation(){
+        if(document_state!=DocumentState::Ready)return;
+        std::string text;wxString status;
+        if(auto layout=current_layout();layout&&!overrides.contains(page)&&
+           (layout->availability==PageLayout::Availability::NoTextLayer||layout->availability==PageLayout::Availability::NoTranslatableText||layout->availability==PageLayout::Availability::UnicodeUnavailable)){
+            if(layout->availability==PageLayout::Availability::UnicodeUnavailable){text="文字のUnicode情報を取得できません。原文画像を確認し、翻訳用原文を入力できます。";status=wxS("Unicode情報なし");}
+            else{text="翻訳するテキストがありません。「翻訳用原文の確認・編集」から文章を入力できます。";status=wxS("翻訳テキストなし");}
+        }else if(model_state==ModelState::Loading)text="モデルを読み込んでいます。PDFはそのまま読めます。";
+        else if(model_state==ModelState::Failed)text="モデルを利用できません。「モデル設定」でGGUFまたはCPUを選び直してください。";
+        else if(model_state!=ModelState::Ready)text="翻訳モデルを設定すると、このページの訳文を表示します。";
+        else if(auto_translate||translation_requested||(batch&&batch->active())){text="ページの原文を準備しています…";status=wxS("翻訳待ち");}
+        else{text="「このページを翻訳」で、このページの訳文を表示できます。";status=wxS("翻訳操作を待っています");}
+        show_translation(std::move(text));right_heading->SetLabel(wxString::Format(wxS("訳文 — %uページ"),page+1));
+        if(!batch)frame->SetStatusText(status,2);
+    }
     void invalidate_translation(){
         translate_timer.Stop();translation_requested=false;force_requested=false;inference->cancel_job();
         pending_attempt.reset();scheduled_page.reset();explicit_page_request=false;
         if(attempt){attempt->interrupt();save_attempt();attempt.reset();}visible_attempt.reset();attempt_view_only=false;
         translation_dirty=false;
+        show_waiting_translation();
     }
     void update_window_title(){
         if(!frame)return;auto title=wxString::FromUTF8(product::name);
@@ -450,6 +466,7 @@ struct ApplicationController::Impl {
         const bool requested=translation_requested,force=force_requested;
         invalidate_translation();translation_requested=requested;force_requested=force;
         stop_batch(true);model_state=ModelState::Loading;model_error.clear();backend.clear();wanted_model=++model_epoch;
+        show_waiting_translation();
         model_key="provisional:model:"+new_uuid();save_preferences();
         frame->SetStatusText(wxS("モデル読込中…"),1);inference->load(model_epoch,model_path,backend_preference);
     }
@@ -478,6 +495,7 @@ struct ApplicationController::Impl {
         case InferenceEvent::Kind::ModelReady:
             model_state=ModelState::Ready;backend=event.backend;model_capacity=event.context_capacity;model_profile=event.profile;
             inference_runtime=event.runtime;model_load_seconds=event.seconds;record(DiagnosticCode::ModelReady,event.seconds);
+            if(!current_attempt())show_waiting_translation();
             if(event.file)model_key="provisional:model:"+provisional_file_key(event.file->initial_signature());
             if(io&&event.file)storage_result(io->track_model(model_epoch,model_key,model_path,event.file));
             frame->SetStatusText(wxS("モデル準備完了・")+wxString::FromUTF8(backend),1);
@@ -485,6 +503,7 @@ struct ApplicationController::Impl {
         case InferenceEvent::Kind::ModelFailed:
             model_state=ModelState::Failed;model_error=event.detail;
             record(DiagnosticCode::ModelFailed);
+            if(!current_attempt())show_waiting_translation();
             frame->SetStatusText(wxString::FromUTF8(event.message),1);
             if(attempt){attempt->interrupt();translation_dirty=true;}
             break;
@@ -622,6 +641,7 @@ struct ApplicationController::Impl {
             if(event.document==epoch)frame->SetStatusText(event.persistent?wxS("翻訳用原文を保存しました。"):wxS("翻訳用原文はこのセッション内だけで保持されています。"),0);
             if(!event.persistent)storage_warning=true;break;
         case IoEvent::Kind::Exported:frame->SetStatusText(wxString::FromUTF8(event.message),0);break;
+        case IoEvent::Kind::CacheCleared:frame->SetStatusText(event.persistent?wxS("翻訳キャッシュを削除しました。原文編集は保持しています。"):wxS("この起動中の翻訳キャッシュを削除しました。元の保存先は変更していません。"),0);break;
         case IoEvent::Kind::Error:storage_warning=true;record(DiagnosticCode::StorageWarning);frame->SetStatusText(wxString::FromUTF8(event.message),0);break;
         default:break;
         }
@@ -721,6 +741,7 @@ struct ApplicationController::Impl {
         page_input->ChangeValue(page_count?wxString::Format("%u",page+1):wxString{});
         page_count_label->SetLabel(wxString::Format("/ %u",page_count));
         frame->SetStatusText(page_count?wxString::Format(wxS("%u / %uページ"),page+1,page_count):wxS("PDFを開いてください。"),0);
+        if(!batch)frame->SetStatusText({},2);
         frame->Layout();
     }
     void open_path(const wxString& name){
@@ -744,9 +765,9 @@ struct ApplicationController::Impl {
         invalidate_translation();auto_suppressed.reset();
         if(!search_navigation)cancel_search();
         if(auto a=canvas->reading_anchor())anchors[page]=*a;
-        page=target;canvas->set_page(epoch,page);show_translation(model_state==ModelState::Ready?"ページの原文を準備しています…":"翻訳モデルを設定すると、このページの訳文を表示します。");
+        page=target;canvas->set_page(epoch,page);
         pending_source_command.reset();if(auto layout=current_layout())canvas->set_layout(std::move(layout));
-        headings();pdf->page_info(epoch,page);request_source(page);schedule_translation();
+        headings();show_waiting_translation();pdf->page_info(epoch,page);request_source(page);schedule_translation();
     }
     void receive(const PdfEvent& event){
         if(event.document!=epoch)return;
@@ -759,7 +780,7 @@ struct ApplicationController::Impl {
             if(io&&event.file_snapshot)storage_result(io->open_document(epoch,document_key,path,event.file_snapshot));
             canvas->set_page(epoch,0,event.info);headings();
             if(!wxWindow::FindFocus()||wxWindow::FindFocus()==frame||wxWindow::FindFocus()==open_button)canvas->SetFocus();
-            show_translation(model_state==ModelState::Ready?"ページの原文を準備しています…":"翻訳モデルを設定すると、このページの訳文を表示します。");schedule_translation();
+            show_waiting_translation();schedule_translation();
             break;
         case PdfEvent::Kind::PageInfo:
             if(event.page==page){
@@ -775,9 +796,9 @@ struct ApplicationController::Impl {
                 cache_layout(event.page,event.layout);source_revisions.try_emplace(event.page,1);
                 if(event.page==page){
                     canvas->set_layout(event.layout);
-                    if(event.layout->availability==PageLayout::Availability::NoTextLayer||event.layout->availability==PageLayout::Availability::NoTranslatableText)
+                    if(!current_attempt()&&!overrides.contains(page)&&(event.layout->availability==PageLayout::Availability::NoTextLayer||event.layout->availability==PageLayout::Availability::NoTranslatableText))
                         show_translation("翻訳するテキストがありません。「翻訳用原文の確認・編集」から文章を入力できます。");
-                    else if(event.layout->availability==PageLayout::Availability::UnicodeUnavailable)
+                    else if(!current_attempt()&&!overrides.contains(page)&&event.layout->availability==PageLayout::Availability::UnicodeUnavailable)
                         show_translation("文字のUnicode情報を取得できません。原文画像を確認し、翻訳用原文を入力できます。");
                     if(pending_source_command&&pending_source_command->first==page){const auto command=pending_source_command->second;pending_source_command.reset();execute(command);}
                     schedule_translation();
@@ -898,7 +919,7 @@ struct ApplicationController::Impl {
             translate_timer.Stop();translation_requested=false;force_requested=false;auto_suppressed=current_source_identity();
             scheduled_page.reset();pending_attempt.reset();inference->cancel_job();if(attempt){attempt->interrupt();save_attempt();refresh_translation();}frame->SetStatusText(wxS("停止しました。明示的な翻訳操作で再開できます。"),2);break;
         case Command::Automatic:
-            auto_translate=!auto_translate;save_preferences();if(auto_translate){auto_suppressed.reset();schedule_translation();}break;
+            auto_translate=!auto_translate;save_preferences();if(!current_attempt())show_waiting_translation();if(auto_translate){auto_suppressed.reset();schedule_translation();}break;
         case Command::Plain:case Command::Polite:{
             const auto selected=command==Command::Plain?Form::Plain:Form::Polite;
             if(form!=selected){form=selected;++settings_revision;stop_batch(true);invalidate_translation();save_preferences();schedule_translation();}break;
@@ -920,7 +941,13 @@ struct ApplicationController::Impl {
             if(command==Command::ExportPage)storage_result(io->export_current(native_path(dialog.GetPath()),exporting_page,text,state,exporting_form));
             else storage_result(io->export_complete(native_path(dialog.GetPath()),std::move(context),exporting_form));break;
         }
-        case Command::ClearCache:stop_batch(true);if(io)storage_result(io->clear_cache());break;
+        case Command::ClearCache:
+            stop_batch(true);invalidate_translation();auto_suppressed=current_source_identity();
+            if(io&&io->clear_cache()){
+                if(document_state==DocumentState::Ready)show_translation("翻訳キャッシュの削除を要求しました。「このページを翻訳」で新しく生成できます。");
+                frame->SetStatusText(wxS("翻訳キャッシュを削除しています…"),0);frame->SetStatusText({},2);
+            }else storage_result(false);
+            break;
         case Command::ExportState:{
             wxFileDialog dialog(frame,wxS("設定・原文編集・読書位置の退避コピーを保存"),{},wxS("translator-state-backup.sqlite3"),wxS("SQLiteデータベース (*.sqlite3)|*.sqlite3"),wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
             if(show_modal(dialog)==wxID_OK)storage_result(io->export_state(native_path(dialog.GetPath())));break;
@@ -999,7 +1026,7 @@ struct ApplicationController::Impl {
         frame->Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& e){e.Check(form==Form::Plain);},Plain);
         frame->Bind(wxEVT_UPDATE_UI,[this](wxUpdateUIEvent& e){e.Check(form==Form::Polite);},Polite);
         auto root=new wxBoxSizer(wxVERTICAL);
-        toolbar=new wxPanel(frame);auto tools=new wxWrapSizer(wxHORIZONTAL);
+        toolbar=new wxPanel(frame);auto tools=new wxWrapSizer(wxHORIZONTAL,wxREMOVE_LEADING_SPACES);
         const int gap=frame->FromDIP(4);
         auto button=[&](int id,const wxString& label){auto* b=new wxButton(toolbar,id,label);tools->Add(b,0,wxALL,gap);return b;};
         open_button=button(Open,wxS("PDFを開く"));button(Previous,wxS("前へ"));button(Next,wxS("次へ"));
