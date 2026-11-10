@@ -118,7 +118,8 @@ struct InferenceService::Impl {
                 }
             }
         }catch(...){
-            try{InferenceEvent e;e.message="推論処理を続けられません。アプリを再起動してください。";emit(std::move(e));}catch(...){}
+            stopping=true;
+            try{InferenceEvent e;{std::lock_guard lock(mutex);e.model=desired_model;}e.message="推論処理を続けられません。アプリを再起動してください。";emit(std::move(e));}catch(...){}
         }
         finished=true;
     }

@@ -38,5 +38,5 @@ backends are test injection only; product translation always uses the real engin
 
 Page attempts record every source interval, leaf status and replaced parent.
 Forced attempts retain cache bypass on resume; ungenerated leaves cannot count
-as complete. Persistence, semantic cache lookup, batch traversal and export are
-the next milestone and are not claimed by this checkpoint.
+as complete. See [persistence evidence](persistence.md) for the subsequent I/O,
+semantic cache, batch and export implementation.

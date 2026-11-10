@@ -37,4 +37,27 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
         [prefix release];[value release];
     }
 }
+std::size_t text_logical_anchor(wxTextCtrl& control){
+    @autoreleasepool {
+        auto* scroll=(NSScrollView*)control.GetHandle();auto* text=(NSTextView*)[scroll documentView];
+        const auto visible=[[scroll contentView] bounds];
+        const auto at=std::min([text characterIndexForInsertionAtPoint:NSMakePoint(NSMinX(visible)+3,NSMinY(visible)+1)],[[text string] length]);
+        return [[[text string] substringToIndex:at] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    }
+}
+void restore_text_logical_anchor(wxTextCtrl& control,std::size_t offset){
+    @autoreleasepool {
+        auto* scroll=(NSScrollView*)control.GetHandle();auto* text=(NSTextView*)[scroll documentView];
+        auto* bytes=[[text string] dataUsingEncoding:NSUTF8StringEncoding];const auto* raw=(const unsigned char*)[bytes bytes];
+        offset=std::min(offset,static_cast<std::size_t>([bytes length]));while(offset>0&&offset<[bytes length]&&(raw[offset]&0xc0)==0x80)--offset;
+        auto* prefix=[[NSString alloc] initWithBytes:raw length:offset encoding:NSUTF8StringEncoding];if(!prefix)return;
+        const auto at=[prefix length];[prefix release];
+        if(at==0){[[scroll contentView] scrollToPoint:NSZeroPoint];[scroll reflectScrolledClipView:[scroll contentView]];return;}
+        auto* manager=[text layoutManager];[manager ensureLayoutForTextContainer:[text textContainer]];
+        const auto glyphs=[manager glyphRangeForCharacterRange:NSMakeRange(at<[[text string] length]?at:at-1,1) actualCharacterRange:nil];
+        const auto rectangle=[manager boundingRectForGlyphRange:glyphs inTextContainer:[text textContainer]];
+        auto point=[[scroll contentView] bounds].origin;point.y=rectangle.origin.y+[text textContainerOrigin].y;
+        [[scroll contentView] scrollToPoint:point];[scroll reflectScrolledClipView:[scroll contentView]];
+    }
+}
 }

@@ -282,7 +282,8 @@ struct PdfService::Impl {
                 cv.wait(lock,[&]{return stopping.load()||opening||requested_page||requested_view||searching||!extraction.empty();});
             }
         }catch(...){
-            try{PdfEvent e;e.code="PdfService";e.message="PDF処理を続けられません。アプリを再起動してください。";emit(std::move(e));}catch(...){}
+            stopping=true;
+            try{PdfEvent e;e.kind=PdfEvent::Kind::Failed;e.document=requested_document.load();e.code="PdfService";e.message="PDF処理を続けられません。アプリを再起動してください。";emit(std::move(e));}catch(...){}
         }
         finished=true;
     }
@@ -307,6 +308,7 @@ void PdfService::viewport(ViewRequest request){
 }
 bool PdfService::extract(DocumentEpoch epoch,PageIndex page){
     std::lock_guard lock(impl_->mutex);const auto key=std::pair{epoch,page};
+    if(impl_->stopping.load())return false;
     if(std::find(impl_->extraction.begin(),impl_->extraction.end(),key)==impl_->extraction.end()){
         if(impl_->extraction.size()>=64)return false;
         impl_->extraction.push_back(key);

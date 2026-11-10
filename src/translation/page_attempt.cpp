@@ -27,14 +27,14 @@ std::vector<AttemptBlock> PageAttempt::sources(const PageLayout& layout,std::sha
         if(!source->empty())result.push_back({b.block_id,b.kind,std::move(source),only});
     }return result;
 }
-PageAttempt::PageAttempt(WorkStamp base,std::string key,std::vector<AttemptBlock> blocks,Form form,bool force,std::optional<AttemptSnapshot> saved)
+PageAttempt::PageAttempt(WorkStamp base,std::string key,std::vector<AttemptBlock> blocks,Form form,bool force,std::optional<AttemptSnapshot> saved,bool resume_unfinished)
     :base_(std::move(base)),blocks_(std::move(blocks)),form_(form){
     data_.id=new_uuid();data_.condition_key=std::move(key);data_.bypass_cache=force;
     bool translatable=false;
     for(const auto& b:blocks_){
         if(!b.source)throw std::invalid_argument("Attempt block has no source");
         if(b.source->empty())continue;
-        AttemptChunk c;c.id=new_uuid();c.block_id=b.id;c.end=b.source->size();
+        AttemptChunk c;c.id=new_uuid();c.block_id=b.id;c.kind=b.kind;c.end=b.source->size();
         if(b.source_only||!has_usable_text(*b.source)){c.state=LeafState::SourceOnly;c.text=*b.source;}
         else translatable=true;
         data_.chunks.push_back(std::move(c));
@@ -57,7 +57,7 @@ PageAttempt::PageAttempt(WorkStamp base,std::string key,std::vector<AttemptBlock
         }
         for(const auto& c:saved->chunks)if(std::none_of(blocks_.begin(),blocks_.end(),[&](const auto& b){return b.id==c.block_id;}))valid=false;
         }catch(const std::exception&){valid=false;}
-        if(valid){data_=std::move(*saved);resume();}
+        if(valid){data_=std::move(*saved);if(resume_unfinished)resume();}
     }
     base_.page_attempt=data_.id;
     settle();if(!translatable)data_.state=PageState::NoText;
@@ -83,6 +83,7 @@ bool PageAttempt::prepared(std::shared_ptr<const PreparedChunk> p){
     c.prompt_tokens=static_cast<std::uint32_t>(p->input.tokens.size());c.output_limit=p->input.output_limit;c.state=LeafState::Running;
     if(remainder_end>c.end){
         AttemptChunk remainder;remainder.id=new_uuid();remainder.parent_id=c.parent_id;remainder.block_id=c.block_id;
+        remainder.kind=c.kind;
         remainder.begin=c.end;remainder.end=remainder_end;remainder.target_tokens=c.target_tokens;remainder.split_retry=c.split_retry;
         data_.chunks.insert(data_.chunks.begin()+index+1,std::move(remainder));
     }
@@ -115,7 +116,7 @@ bool PageAttempt::split_limited(std::size_t index){
     // Old partial is no longer displayed or concatenated with its children.
     parent.text.clear();++data_.plan;
     AttemptChunk first;first.id=new_uuid();first.parent_id=parent_id;first.block_id=block;
-    first.begin=begin;first.end=middle;first.target_tokens=target;first.plan=data_.plan;first.split_retry=true;
+    first.kind=parent.kind;first.begin=begin;first.end=middle;first.target_tokens=target;first.plan=data_.plan;first.split_retry=true;
     auto second=first;second.id=new_uuid();second.begin=middle;second.end=end;
     data_.chunks.insert(data_.chunks.begin()+index+1,{std::move(first),std::move(second)});return true;
 }

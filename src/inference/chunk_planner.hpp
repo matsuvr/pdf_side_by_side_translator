@@ -8,7 +8,7 @@
 namespace opt {
 struct ModelProfile {
     std::string id="plamo3-translation-pfml3-v1";
-    std::uint32_t prompt_version=1,chunk_algorithm_version=1,completion_version=1,engine_cache_version=1;
+    std::uint32_t prompt_version=1,chunk_algorithm_version=1,completion_version=1,engine_cache_version=2;
     std::string source_language="en",target_language="ja";
 };
 struct ChunkRequest {

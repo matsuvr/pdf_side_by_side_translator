@@ -17,6 +17,7 @@ struct AttemptChunk {
     PlanGeneration plan=1;
     LeafState state=LeafState::Pending;
     FinishReason reason=FinishReason::Cancelled;
+    BlockKind kind=BlockKind::Paragraph;
     bool split_retry=false;
 };
 struct AttemptSnapshot {
@@ -31,7 +32,7 @@ struct AttemptSnapshot {
 class PageAttempt {
 public:
     PageAttempt(WorkStamp base,std::string condition_key,std::vector<AttemptBlock> blocks,
-                Form form,bool force=false,std::optional<AttemptSnapshot> resume={});
+                Form form,bool force=false,std::optional<AttemptSnapshot> resume={},bool resume_unfinished=true);
     std::optional<ChunkRequest> next_request();
     bool prepared(std::shared_ptr<const PreparedChunk> chunk);
     bool delta(const WorkStamp& stamp,std::string_view text);
@@ -44,6 +45,7 @@ public:
     const WorkStamp& active_stamp() const noexcept {return active_stamp_;}
     std::shared_ptr<const PreparedChunk> active_prepared() const {return prepared_;}
     const AttemptSnapshot& snapshot() const noexcept {return data_;}
+    void promote_condition_key(std::string key){data_.condition_key=std::move(key);}
     PageState state() const noexcept {return data_.state;}
     std::string display_text() const;
     static std::vector<AttemptBlock> sources(const PageLayout& layout,std::shared_ptr<const std::string> edited={});

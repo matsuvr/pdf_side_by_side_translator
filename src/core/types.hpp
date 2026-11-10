@@ -12,7 +12,7 @@ using JobId = std::uint64_t;
 using PlanGeneration = std::uint64_t;
 using PageIndex = std::uint32_t;
 using PdfCharIndex = std::uint32_t;
-struct PdfPoint { double x=0, y=0; };
+struct PdfPoint { double x=0, y=0;bool operator==(const PdfPoint&)const=default; };
 struct PdfRect { double left=0, bottom=0, right=0, top=0; };
 struct Affine2D {
     double a=1,b=0,c=0,d=1,tx=0,ty=0;
