@@ -2,6 +2,7 @@
 #include "pdf/pdf_service.hpp"
 #include "platform/font.hpp"
 #include "platform/text_view.hpp"
+#include "platform/input_state.hpp"
 #include "inference/inference_service.hpp"
 #include "translation/page_attempt.hpp"
 #include "translation/batch_run.hpp"
@@ -9,6 +10,7 @@
 #include "storage/io_service.hpp"
 #include "ui/pdf_canvas.hpp"
 #include "ui/wx_path.hpp"
+#include "ui/shortcut_policy.hpp"
 #include "product.hpp"
 #include <wx/wx.h>
 #include <wx/combobox.h>
@@ -23,6 +25,7 @@
 #include <wx/clipbrd.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
+#include <wx/weakref.h>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -38,8 +41,9 @@ namespace {
 wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(INFERENCE_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(IO_WAKE,wxThreadEvent);
-enum class Command { Open, Close, Previous, Next, GoPage, FitWidth, FitPage, Zoom, Left, Right, Equal, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Translate, Retranslate, TranslateAll, Stop, Automatic, Plain, Polite, ModelSettings, CpuRetry, ExportPage, ExportComplete, ClearCache, Help, About, Quit };
-enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FitWidth,FitPage,Zoom,Left,Right,Equal,Help,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch,Translate,Retranslate,TranslateAll,Stop,Automatic,Plain,Polite,ModelSettings,CpuRetry,ExportPage,ExportComplete,ClearCache };
+enum class Command { Open, Close, Previous, Next, GoPage, FocusPage, FitWidth, FitPage, Zoom, Left, Right, Equal, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Translate, Retranslate, TranslateAll, Stop, Automatic, Plain, Polite, ModelSettings, CpuRetry, ExportPage, ExportComplete, ClearCache, Help, About, Quit };
+enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,FitPage,Zoom,Left,Right,Equal,Help,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch,Translate,Retranslate,TranslateAll,Stop,Automatic,Plain,Polite,ModelSettings,CpuRetry,ExportPage,ExportComplete,ClearCache };
+struct ModalScope {unsigned& depth;explicit ModalScope(unsigned& value):depth(value){++depth;}~ModalScope(){--depth;}};
 bool copy_text(std::string_view text){
     if(!wxTheClipboard->Open())return false;
     wxTheClipboard->SetData(new wxTextDataObject(wxString::FromUTF8(text.data(),text.size())));wxTheClipboard->Close();return true;
@@ -126,6 +130,8 @@ struct ApplicationController::Impl {
     wxTextCtrl* search_input=nullptr;
     wxCheckBox* search_case=nullptr;
     wxStaticText* search_label=nullptr;
+    wxWeakRef<wxWindow> search_return_focus;
+    unsigned modal_depth=0;
     struct SearchState {
         std::uint64_t generation=0;
         std::string query;
@@ -143,6 +149,7 @@ struct ApplicationController::Impl {
     std::unique_ptr<PdfService> pdf;
     std::unique_ptr<InferenceService> inference;
     std::unique_ptr<IoService> io;
+    std::unique_ptr<NativeShortcutMonitor> native_shortcuts;
     std::string document_key,native_document_key,model_key;
     std::uint32_t model_capacity=8192;
     ModelProfile model_profile;
@@ -213,9 +220,10 @@ struct ApplicationController::Impl {
             if(inference_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(INFERENCE_WAKE));
         });
     }
-    ~Impl(){pdf->stop();inference->stop();if(io)io->stop();pdf->join();inference->join();if(io)io->join();}
+    ~Impl(){native_shortcuts.reset();pdf->stop();inference->stop();if(io)io->stop();pdf->join();inference->join();if(io)io->join();}
     bool can(Command command) const {
         if(closing)return false;
+        if(command!=Command::Copy&&command!=Command::SelectAll&&(modal_depth||input_composing(wxWindow::FindFocus())))return false;
         switch(command){
         case Command::Open:return !pdf->done();
         case Command::Translate:case Command::Retranslate:case Command::TranslateAll:return document_state==DocumentState::Ready&&model_state!=ModelState::Loading;
@@ -226,7 +234,7 @@ struct ApplicationController::Impl {
         case Command::Close:return document_state!=DocumentState::Empty;
         case Command::Previous:return document_state==DocumentState::Ready&&page>0;
         case Command::Next:return document_state==DocumentState::Ready&&page+1<page_count;
-        case Command::GoPage:case Command::FitWidth:case Command::FitPage:case Command::Zoom:
+        case Command::GoPage:case Command::FocusPage:case Command::FitWidth:case Command::FitPage:case Command::Zoom:
         case Command::Left:case Command::Right:case Command::CopySource:case Command::EditSource:
         case Command::Find:case Command::FindNext:case Command::FindPrevious:return document_state==DocumentState::Ready;
         case Command::Copy:
@@ -237,6 +245,22 @@ struct ApplicationController::Impl {
         }
     }
     auto current_source_identity()const{return std::tuple{epoch,page,source_revisions.contains(page)?source_revisions.at(page):SourceRevision{1}};}
+    int show_modal(wxDialog& dialog){ModalScope scope(modal_depth);return dialog.ShowModal();}
+    bool handle_shortcut(ShortcutKey key,ShortcutContext state){
+        state.modal=modal_depth>0;state.search_open=search_bar->IsShown();
+        auto run=[&](Command command){if(!can(command))return false;execute(command);return true;};
+        switch(frame_shortcut(key,state)){
+        case ShortcutAction::Translate:return run(Command::Translate);case ShortcutAction::TranslateAll:return run(Command::TranslateAll);
+        case ShortcutAction::Stop:return run(Command::Stop);case ShortcutAction::ModelSettings:return run(Command::ModelSettings);
+        case ShortcutAction::FocusPage:return run(Command::FocusPage);case ShortcutAction::CloseSearch:return run(Command::CloseSearch);
+        case ShortcutAction::CycleFocus:{
+            wxWindow* targets[]{canvas,translation,open_button};auto* focus=wxWindow::FindFocus();int index=2;
+            if(focus==canvas||(focus&&left_container->IsDescendant(focus)))index=0;else if(focus==translation)index=1;
+            targets[(index+(state.shift?2:1))%3]->SetFocus();return true;
+        }
+        case ShortcutAction::Native:return false;
+        }return false;
+    }
     const PageAttempt* current_attempt()const{
         if(attempt&&attempt_context.page==page)return attempt.get();
         if(visible_attempt&&visible_context.page==page)return visible_attempt.get();return nullptr;
@@ -338,6 +362,13 @@ struct ApplicationController::Impl {
         if(closing||document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
         if(!translation_requested&&!(batch&&batch->active())&&(!auto_translate||(auto_suppressed&&*auto_suppressed==current_source_identity())))return;
         const auto target=scheduled_page.value_or(page);
+        // Release the finished background page before fetching the next page's
+        // source. The retained displayed page and upcoming work are the only
+        // two page attempts with text in memory.
+        if(attempt&&attempt_context.page!=target){
+            attempt->interrupt();save_attempt();inference->cancel_job();
+            if(attempt_context.page==page){visible_attempt=std::move(attempt);visible_context=attempt_context;}else attempt.reset();
+        }
         auto found=layouts.find(target);auto layout=found==layouts.end()?nullptr:found->second.layout;
         if(!layout){request_layout(target);return;}
         if(!loaded_sources.contains(target)){request_source(target);return;}
@@ -387,11 +418,11 @@ struct ApplicationController::Impl {
         }
         auto row=new wxBoxSizer(wxHORIZONTAL);auto path_field=new wxTextCtrl(&dialog,wxID_ANY,display_path(model_path));path_field->SetName(wxS("GGUFファイル"));row->Add(path_field,1,wxALL|wxEXPAND,gap);
         auto browse=new wxButton(&dialog,wxID_ANY,wxS("ファイルを選択…"));row->Add(browse,0,wxALL,gap);root->Add(row,0,wxEXPAND);
-        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("GGUFを選択"),{}, {},wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(file.ShowModal()==wxID_OK)path_field->ChangeValue(file.GetPath());});
+        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("GGUFを選択"),{}, {},wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(show_modal(file)==wxID_OK)path_field->ChangeValue(file.GetPath());});
         wxArrayString choices;choices.Add(wxS("自動（Apple SiliconではMetal、利用できなければCPU）"));choices.Add(wxS("CPU"));
         auto preference=new wxChoice(&dialog,wxID_ANY,wxDefaultPosition,wxDefaultSize,choices);preference->SetSelection(backend_preference==BackendPreference::Cpu?1:0);preference->SetName(wxS("推論デバイス"));root->Add(preference,0,wxALL|wxEXPAND,gap);
         root->Add(dialog.CreateButtonSizer(wxOK|wxCANCEL),0,wxALL|wxALIGN_RIGHT,gap);dialog.SetSizer(root);dialog.CentreOnParent();
-        if(dialog.ShowModal()!=wxID_OK||path_field->GetValue().empty())return;
+        if(show_modal(dialog)!=wxID_OK||path_field->GetValue().empty())return;
         model_path=native_path(path_field->GetValue());backend_preference=preference->GetSelection()==1?BackendPreference::Cpu:BackendPreference::Automatic;load_model();
     }
     void receive(const InferenceEvent& event){
@@ -486,7 +517,13 @@ struct ApplicationController::Impl {
                 if(position.pdf_anchor){anchors[page]=*position.pdf_anchor;canvas->restore_anchor(*position.pdf_anchor);}
                 pending_text_anchor=std::pair{page,position.text_anchor};
             }
-            if(attempt||pending_attempt)invalidate_translation();schedule_translation();break;
+            if(attempt||pending_attempt){
+                const bool requested=translation_requested||pending_attempt.has_value()||(attempt&&attempt->state()==PageState::Running);
+                const bool explicit_request=explicit_page_request||(pending_attempt&&!pending_attempt->view_only);
+                const bool forced=force_requested;
+                invalidate_translation();translation_requested=requested;explicit_page_request=explicit_request;force_requested=forced;
+            }
+            schedule_translation();break;
         case IoEvent::Kind::PageLoaded:{
             if(event.document!=epoch||!event.saved_document)break;
             const auto target=event.saved_document->position.page;requested_sources.erase(target);loaded_sources.insert(target);
@@ -559,6 +596,7 @@ struct ApplicationController::Impl {
         if(search.active)search_step();else search_label->SetLabel(wxString{});
     }
     void show_search(){
+        if(!search_bar->IsShown())search_return_focus=wxWindow::FindFocus();
         search_bar->Show();left_container->Layout();search_input->SetFocus();search_input->SelectAll();
     }
     void request_layout(PageIndex index){
@@ -603,7 +641,7 @@ struct ApplicationController::Impl {
         auto use=new wxButton(&dialog,wxID_OK,wxS("この原文を使う"));use->SetDefault();buttons->Add(use,0,wxALL,frame->FromDIP(4));root->Add(buttons,0,wxEXPAND|wxALL,frame->FromDIP(4));
         reset->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){dialog.EndModal(wxID_REVERT_TO_SAVED);});
         dialog.SetSizer(root);dialog.CentreOnParent();text->SetFocus();
-        const int choice=dialog.ShowModal();
+        const int choice=show_modal(dialog);
         if(editing_document!=epoch)return;
         if(choice==wxID_OK)overrides[editing_page]=std::make_shared<const std::string>(text->GetValue().ToStdString(wxConvUTF8));
         else if(choice==wxID_REVERT_TO_SAVED)overrides.erase(editing_page);
@@ -632,7 +670,7 @@ struct ApplicationController::Impl {
         frame->Layout();
     }
     void open_path(const wxString& name){
-        if(closing)return;
+        if(closing||modal_depth)return;
         save_reading_position();if(io)io->close_document();
         stop_batch(true);invalidate_translation();auto_suppressed.reset();
         document_key="provisional:document:"+new_uuid();native_document_key.clear();document_state_loaded=false;reading_touched=false;page_position_touched=false;pending_text_anchor.reset();last_saved_position.reset();locally_edited.clear();loaded_sources.clear();requested_sources.clear();
@@ -665,6 +703,7 @@ struct ApplicationController::Impl {
             document_key="provisional:document:"+native_document_key;
             if(io&&event.file_snapshot)storage_result(io->open_document(epoch,document_key,path,event.file_snapshot));
             canvas->set_page(epoch,0,event.info);headings();
+            if(!wxWindow::FindFocus()||wxWindow::FindFocus()==frame||wxWindow::FindFocus()==open_button)canvas->SetFocus();
             show_translation(model_state==ModelState::Ready?"ページの原文を準備しています…":"翻訳モデルを設定すると、このページの訳文を表示します。");schedule_translation();
             break;
         case PdfEvent::Kind::PageInfo:
@@ -706,7 +745,7 @@ struct ApplicationController::Impl {
             left_container->Layout();break;
         case PdfEvent::Kind::PasswordRequired:{
             wxPasswordEntryDialog dialog(frame,wxS("PDFのパスワードを入力してください。"),wxS("パスワード付きPDF"));
-            if(dialog.ShowModal()==wxID_OK)pdf->open(epoch,path,dialog.GetValue().ToStdString(wxConvUTF8));
+            if(show_modal(dialog)==wxID_OK)pdf->open(epoch,path,dialog.GetValue().ToStdString(wxConvUTF8));
             else execute(Command::Close);
             break;
         }
@@ -731,7 +770,7 @@ struct ApplicationController::Impl {
         switch(command){
         case Command::Open:{
             wxFileDialog dialog(frame,wxS("PDFを開く"),{}, {},wxS("PDFファイル (*.pdf)|*.pdf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);
-            if(dialog.ShowModal()==wxID_OK)open_path(dialog.GetPath());break;
+            if(show_modal(dialog)==wxID_OK)open_path(dialog.GetPath());break;
         }
         case Command::Close:
             save_reading_position();if(io)io->close_document();document_state_loaded=false;last_saved_position.reset();
@@ -741,6 +780,7 @@ struct ApplicationController::Impl {
             wanted_epoch=++epoch;pdf->close(epoch);document_state=DocumentState::Empty;page_count=0;page=0;
             anchors.clear();layouts.clear();layout_bytes=0;requested_layouts.clear();overrides.clear();source_revisions.clear();pending_source_command.reset();canvas->clear_document();show_translation({});headings();frame->SetTitle(wxString::FromUTF8(product::name));break;
         case Command::Previous:go(page-1);break;case Command::Next:go(page+1);break;
+        case Command::FocusPage:page_input->SetFocus();page_input->SelectAll();break;
         case Command::GoPage:{
             long value=0;auto text=page_input->GetValue();
             if(text.ToLong(&value)&&value>=1&&static_cast<unsigned long>(value)<=page_count)go(static_cast<PageIndex>(value-1));
@@ -781,10 +821,13 @@ struct ApplicationController::Impl {
             if(search_input->GetValue().empty()){search_input->SetFocus();break;}
             begin_search(command==Command::FindPrevious,true);break;
         case Command::CloseSearch:
-            cancel_search();search_bar->Hide();left_container->Layout();canvas->SetFocus();break;
+            cancel_search();search_bar->Hide();left_container->Layout();
+            if(search_return_focus&&search_return_focus->IsShown()&&search_return_focus->IsEnabled())search_return_focus->SetFocus();else canvas->SetFocus();break;
         case Command::Translate:case Command::Retranslate:
+            if(wxWindow::FindFocus()==page_input)execute(Command::GoPage);
             reading_touched=true;schedule_translation(true,command==Command::Retranslate);if(model_state!=ModelState::Ready)model_settings();break;
         case Command::TranslateAll:
+            if(wxWindow::FindFocus()==page_input)execute(Command::GoPage);
             reading_touched=true;
             if(model_state==ModelState::Ready)start_batch();else{model_settings();batch_when_ready=model_state==ModelState::Loading;}break;
         case Command::Stop:
@@ -800,16 +843,22 @@ struct ApplicationController::Impl {
         case Command::ModelSettings:model_settings();break;
         case Command::CpuRetry:backend_preference=BackendPreference::Cpu;load_model();break;
         case Command::ExportPage:case Command::ExportComplete:{
+            reading_touched=true;const auto exporting_page=page;const auto* shown=current_attempt();
+            const auto text=command==Command::ExportPage&&shown?shown->display_text():std::string{};
+            const auto state=shown?shown->state():PageState::NotStarted;
+            CacheContext context;context.document_key=document_key;context.model_key=model_key;context.profile_digest=profile_digest(model_profile,form,model_capacity);
             wxFileDialog dialog(frame,wxS("訳文をUTF-8テキストへ書き出す"),{},wxS("translation.txt"),wxS("テキスト (*.txt)|*.txt"),wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
-            if(dialog.ShowModal()!=wxID_OK)break;
-            if(command==Command::ExportPage){const auto* shown=current_attempt();if(shown)storage_result(io->export_current(native_path(dialog.GetPath()),page,shown->display_text(),shown->state()));}
-            else {CacheContext context;context.document_key=document_key;context.model_key=model_key;context.profile_digest=profile_digest(model_profile,form,model_capacity);storage_result(io->export_complete(native_path(dialog.GetPath()),std::move(context)));}break;
+            if(show_modal(dialog)!=wxID_OK)break;
+            if(command==Command::ExportPage)storage_result(io->export_current(native_path(dialog.GetPath()),exporting_page,text,state));
+            else storage_result(io->export_complete(native_path(dialog.GetPath()),std::move(context)));break;
         }
         case Command::ClearCache:stop_batch(true);if(io)storage_result(io->clear_cache());break;
-        case Command::Help:
-            wxMessageBox(wxS("PDFを開くか、ウィンドウへドロップしてください。\nページ番号はEnterで確定します。\n\nホイール: ページ内をスクロール\nShift＋ホイール: 横スクロール\nPrimary＋ホイール: 拡大・縮小\nSpace＋ドラッグ／中ボタン: 移動\nF6: ペイン間のフォーカス移動\n\nPDFの原本は変更しません。"),wxS("操作方法"),wxOK|wxICON_INFORMATION,frame);break;
-        case Command::About:
-            wxMessageBox(wxString::FromUTF8(product::name)+" "+wxString::FromUTF8(product::version)+wxS("\nオフラインPDF翻訳アプリ\nMIT License"),wxS("このアプリについて"),wxOK,frame);break;
+        case Command::Help:{
+            ModalScope scope(modal_depth);wxMessageBox(wxS("PDFを開くか、ウィンドウへドロップしてください。\nページ番号はEnterで確定します。\n\nホイール: ページ内をスクロール\nShift＋ホイール: 横スクロール\nPrimary＋ホイール: 拡大・縮小\nSpace＋ドラッグ／中ボタン: 移動\nF6: ペイン間のフォーカス移動\nPrimary＋G: ページ番号へ\nPrimary＋Enter: このページを翻訳\nPrimary＋Shift＋Enter: 全ページを翻訳\n\nPrimaryはMacではCommand、WindowsではCtrlです。\nモデル設定でローカルのPLaMo GGUFを選択できます。\nPDFの原本は変更しません。"),wxS("操作方法"),wxOK|wxICON_INFORMATION,frame);break;
+        }
+        case Command::About:{
+            ModalScope scope(modal_depth);wxMessageBox(wxString::FromUTF8(product::name)+" "+wxString::FromUTF8(product::version)+wxS("\nオフラインPDF翻訳アプリ\nMIT License"),wxS("このアプリについて"),wxOK,frame);break;
+        }
         case Command::Quit:frame->Close();break;
         }
     }
@@ -825,25 +874,39 @@ struct ApplicationController::Impl {
         file_menu->AppendSeparator();file_menu->Append(ClearCache,wxS("翻訳キャッシュを削除"));file_menu->AppendSeparator();file_menu->Append(wxID_EXIT,wxS("終了\tCtrl+Q"));
         auto edit_menu=new wxMenu;edit_menu->Append(wxID_COPY,wxS("コピー\tCtrl+C"));edit_menu->Append(wxID_SELECTALL,wxS("全選択\tCtrl+A"));
         edit_menu->AppendSeparator();edit_menu->Append(CopySource,wxS("ページの原文をコピー"));edit_menu->Append(EditSource,wxS("翻訳用原文の確認・編集…\tCtrl+Shift+E"));
-        edit_menu->AppendSeparator();edit_menu->Append(Find,wxS("PDF内を検索…\tCtrl+F"));edit_menu->Append(FindNext,wxS("次の検索結果\tCtrl+G"));edit_menu->Append(FindPrevious,wxS("前の検索結果\tCtrl+Shift+G"));
+        edit_menu->AppendSeparator();edit_menu->Append(Find,wxS("PDF内を検索…\tCtrl+F"));edit_menu->Append(FindNext,wxS("次の検索結果"));edit_menu->Append(FindPrevious,wxS("前の検索結果"));
         auto view_menu=new wxMenu;
         view_menu->Append(FitWidth,wxS("幅に合わせる"));view_menu->Append(FitPage,wxS("ページ全体"));
         view_menu->Append(Left,wxS("左回転"));view_menu->Append(Right,wxS("右回転"));view_menu->Append(Equal,wxS("左右を均等にする"));
 #ifdef __WXMAC__
+        view_menu->Append(FocusPage,wxS("ページ番号へ (⌘G)"));
         view_menu->Append(Previous,wxS("前のページ\tCtrl+["));view_menu->Append(Next,wxS("次のページ\tCtrl+]"));
 #else
+        view_menu->Append(FocusPage,wxS("ページ番号へ (Ctrl+G)"));
         view_menu->Append(Previous,wxS("前のページ\tAlt+PageUp"));view_menu->Append(Next,wxS("次のページ\tAlt+PageDown"));
 #endif
         auto help_menu=new wxMenu;help_menu->Append(Help,wxS("操作方法"));help_menu->Append(About,wxS("このアプリについて"));
         auto translate_menu=new wxMenu;
-        translate_menu->Append(Translate,wxS("このページを翻訳\tCtrl+T"));translate_menu->Append(Retranslate,wxS("このページを最初から再翻訳\tCtrl+Shift+T"));
-        translate_menu->Append(TranslateAll,wxS("全ページを翻訳"));
-        translate_menu->Append(Stop,wxS("停止\tCtrl+."));translate_menu->AppendCheckItem(Automatic,wxS("現在ページを自動翻訳"));translate_menu->Check(Automatic,true);
+#ifdef __WXMAC__
+        translate_menu->Append(Translate,wxS("このページを翻訳 (⌘Enter)"));translate_menu->Append(Retranslate,wxS("このページを最初から再翻訳"));
+        translate_menu->Append(TranslateAll,wxS("全ページを翻訳 (⌘Shift+Enter)"));translate_menu->Append(Stop,wxS("停止 (⌘.)"));
+#else
+        translate_menu->Append(Translate,wxS("このページを翻訳 (Ctrl+Enter)"));translate_menu->Append(Retranslate,wxS("このページを最初から再翻訳"));
+        translate_menu->Append(TranslateAll,wxS("全ページを翻訳 (Ctrl+Shift+Enter)"));translate_menu->Append(Stop,wxS("停止 (Ctrl+.)"));
+#endif
+        translate_menu->AppendCheckItem(Automatic,wxS("現在ページを自動翻訳"));translate_menu->Check(Automatic,true);
         translate_menu->AppendSeparator();translate_menu->AppendRadioItem(Plain,wxS("常体"));translate_menu->AppendRadioItem(Polite,wxS("敬体"));translate_menu->Check(Plain,true);
-        translate_menu->AppendSeparator();translate_menu->Append(ModelSettings,wxS("モデル設定…\tCtrl+,"));translate_menu->Append(CpuRetry,wxS("CPUでモデルを読み直す"));
+        translate_menu->AppendSeparator();
+#ifdef __WXMAC__
+        translate_menu->Append(ModelSettings,wxS("モデル設定… (⌘,)"));
+#else
+        translate_menu->Append(ModelSettings,wxS("モデル設定… (Ctrl+,)"));
+#endif
+        translate_menu->Append(CpuRetry,wxS("CPUでモデルを読み直す"));
         auto menu=new wxMenuBar;menu->Append(file_menu,wxS("ファイル"));menu->Append(edit_menu,wxS("編集"));menu->Append(view_menu,wxS("表示"));menu->Append(translate_menu,wxS("翻訳"));menu->Append(help_menu,wxS("ヘルプ"));frame->SetMenuBar(menu);
         route(Open,Command::Open);route(Close,Command::Close);route(Previous,Command::Previous);route(Next,Command::Next);
         route(GoPage,Command::GoPage);route(FitWidth,Command::FitWidth);route(FitPage,Command::FitPage);route(Zoom,Command::Zoom);
+        route(FocusPage,Command::FocusPage);
         route(Left,Command::Left);route(Right,Command::Right);route(Equal,Command::Equal);route(Help,Command::Help);route(About,Command::About);
         route(wxID_COPY,Command::Copy);route(wxID_SELECTALL,Command::SelectAll);route(wxID_EXIT,Command::Quit);
         route(CopySource,Command::CopySource);route(EditSource,Command::EditSource);
@@ -910,17 +973,18 @@ struct ApplicationController::Impl {
         page_input->Bind(wxEVT_KILL_FOCUS,[this](wxFocusEvent& e){if(page_count)execute(Command::GoPage);e.Skip();});
         zoom_input->Bind(wxEVT_TEXT_ENTER,[this](wxCommandEvent&){execute(Command::Zoom);});zoom_input->Bind(wxEVT_COMBOBOX,[this](wxCommandEvent&){execute(Command::Zoom);});
         frame->Bind(wxEVT_CHAR_HOOK,[this](wxKeyEvent& e){
-            if(e.GetKeyCode()==WXK_F6){
-                wxWindow* targets[]{canvas,translation,open_button};int index=0;
-                for(int i=0;i<3;++i)if(targets[i]==wxWindow::FindFocus())index=i;
-                targets[(index+(e.ShiftDown()?2:1))%3]->SetFocus();
-            }else e.Skip();
+            ShortcutKey key=ShortcutKey::Other;const auto code=e.GetKeyCode();
+            if(code==WXK_RETURN||code==WXK_NUMPAD_ENTER)key=ShortcutKey::Enter;
+            else if(code=='.')key=ShortcutKey::Period;else if(code==',')key=ShortcutKey::Comma;
+            else if(code=='G'||code=='g')key=ShortcutKey::G;else if(code==WXK_F6)key=ShortcutKey::F6;else if(code==WXK_ESCAPE)key=ShortcutKey::Escape;
+            if(!handle_shortcut(key,{false,input_composing(wxWindow::FindFocus()),e.CmdDown(),e.ShiftDown(),e.AltDown(),false}))e.Skip();
         });
         frame->Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& e){
-            if(!closing){save_reading_position();save_preferences();stop_batch();invalidate_translation();closing=true;translate_timer.Stop();stream_timer.Stop();position_timer.Stop();search_timer.Stop();pdf->stop();inference->stop();if(io)io->stop();frame->Disable();frame->SetStatusText(wxS("終了処理中…"),0);close_timer.Start(50);}
+            if(!closing){save_reading_position();save_preferences();stop_batch();invalidate_translation();closing=true;native_shortcuts.reset();translate_timer.Stop();stream_timer.Stop();position_timer.Stop();search_timer.Stop();pdf->stop();inference->stop();if(io)io->stop();frame->Disable();frame->SetStatusText(wxS("終了処理中…"),0);close_timer.Start(50);}
             if(e.CanVeto())e.Veto();
         });
         headings();frame->Show();frame->Layout();split->SetSashPosition(split->GetClientSize().x/2);
+        native_shortcuts=std::make_unique<NativeShortcutMonitor>(*frame,[this](ShortcutKey key,ShortcutContext state){return handle_shortcut(key,state);});
         stream_timer.Start(50);
         position_timer.Start(1000);
         const auto directory=native_path(wxStandardPaths::Get().GetUserLocalDataDir());
