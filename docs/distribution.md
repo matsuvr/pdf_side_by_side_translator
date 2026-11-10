@@ -79,6 +79,19 @@ before the database clear so a later save cannot silently repopulate the old
 result. Final native checks cover these corrections separately from the first
 candidate's evidence.
 
+The corrected Apple Silicon ZIP was then extracted and run with the same
+network/workspace restrictions. With automatic translation off it showed the
+manual instruction and no old completion label. A cached result could be
+displayed explicitly. After Clear Cache and exit, `completed_chunks`,
+`page_attempts` and `attempt_chunks` all contained zero rows, while the source
+override remained. The final x86_64 ZIP was separately extracted and launched
+under Rosetta with that empty cache and the same sandbox; the product UI
+completed a fresh CPU translation of the preserved 9-sensor source. These were
+the packaged applications, not only the dependency/inference test programs.
+Both final candidates contain exactly one native Mach-O, minimum OS 14.0,
+SDK 27.2, no rpaths and no non-OS load dependencies. Neither executable contains
+the literal development source root.
+
 ## Storage failure and source audit
 
 Runtime SQLite write failures are distinguished from programming/constraint
@@ -103,3 +116,12 @@ source tree or private PDF is included in Git. The PDF/font test fixtures and
 icon are newly authored; upstream code is fetched at build time under its
 recorded terms. The original application is MIT, while upstream/font/model
 conditions remain distinct and their complete notices are included.
+
+Before publication, the previously unpublished history was normalized to the
+owner's GitHub noreply identity while preserving file trees, messages, parent
+structure and dates. No already published branch was rewritten. The audit then
+reported no findings across 12 commits / 287 historical blobs and confirmed
+noreply authors throughout; a final repeat includes this documentation update.
+The former private author email was also checked against the published source
+content without printing it and was absent. Public third-party copyright and
+license notices retain their upstream attribution.

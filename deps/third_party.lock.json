@@ -47,7 +47,7 @@
   "patches": [],
   "validated_build_configurations": {
     "macos-arm64-release": {
-      "stage": "Product through M5 checked on development Mac; M6 distribution acceptance in progress",
+      "stage": "Product, 24 tests, real CPU/Metal, signed package and relocated network/workspace-denied product execution verified on development Mac; clean-machine/older-OS acceptance unverified",
       "llvm": "llvmorg-24-init-14453-ge063be79-1",
       "xcode": "27.2 (27B52)",
       "sdk": "27.2",
@@ -56,7 +56,7 @@
       "record": "docs/m0-macos-arm64.md"
     },
     "macos-x64-release": {
-      "stage": "Product cross-built on arm64; 23 tests, real CPU model and native text executed under Rosetta; physical Intel unverified",
+      "stage": "Product cross-built on arm64; 24 tests, real CPU, native text and signed relocated product executed under Rosetta; physical Intel and clean-machine acceptance unverified",
       "llvm": "llvmorg-24-init-14453-ge063be79-1",
       "xcode": "27.2 (27B52)",
       "sdk": "27.2",

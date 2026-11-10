@@ -83,7 +83,7 @@ UTF-8書き出しはモデル名・文体・ページ番号を記録し、部分
 | --- | --- |
 | Windows x64 | 静的CRTの単一EXE、CPU推論。ソース・presetを用意。実機ビルド・実行は未検証 |
 | macOS arm64 | 自己完結した.app、Metal自動選択とCPU経路。開発Mac上で実モデル・GUI・自動試験を検証 |
-| macOS x86_64 | 自己完結した.app、CPU推論。クロスビルド、23件、実モデルCPU、長文表示をRosettaで検証。実Intel機では未検証 |
+| macOS x86_64 | 自己完結した.app、CPU推論。クロスビルド、24件、実モデルCPU、製品GUI・長文表示をRosettaで検証。実Intel機では未検証 |
 
 Macのdeployment targetは14.0です。実行確認したOSは開発Macの27.2で、macOS 14実機の確認を意味しません。
 Developer ID署名・公証済みの一般配布版は作成していません。package scriptのMac出力はad-hoc署名の開発成果物です。

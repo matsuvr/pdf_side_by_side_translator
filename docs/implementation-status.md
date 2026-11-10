@@ -20,7 +20,8 @@ validated release. DESIGN.md is the acceptance specification.
 | M3 real-model translation | Implemented on Mac arm64; broader native race/scroll checks continue in M5 | [Translation evidence](translation.md); native Metal current-page translation and CPU/Metal service probes verified |
 | M4 persistence and batch | Implemented on Mac arm64; native position/font-resize and large-document stress continue in M5 | [Persistence evidence](persistence.md); 15 tests, native batch and source restoration verified |
 | M5 native behavior | Implemented and checked on Mac arm64; Windows/IME/DPI matrix remains unverified | [Fonts](native-fonts.md), [input](native-input.md), [text](native-text.md), [stress](stress.md), [embedded resources/diagnostics](resources-and-diagnostics.md) |
-| M6 distribution validation | Mac package, relocation, fresh-state/network-denied product run and source audit checked; final candidate/publication in progress | [Distribution and publication evidence](distribution.md); Windows/clean-machine/physical Intel/notarization remain unverified |
+| M6 distribution validation | Mac arm64 and x64 packages verified, including relocated product execution and source publication review | [Distribution and publication evidence](distribution.md); Windows/clean-machine/physical Intel/notarization remain unverified |
 
-No clean-machine offline, Windows, Intel Mac, signing or notarization claim
-is made until corresponding results are recorded here.
+Ad-hoc signing is verified for the Mac development packages. Developer ID,
+notarization, clean-machine offline first launch, Windows execution and physical
+Intel execution remain unverified. Rosetta evidence is identified explicitly.
