@@ -1,6 +1,9 @@
 #include "ui/pdf_canvas.hpp"
 #include <wx/dcbuffer.h>
 #include <wx/settings.h>
+#include <wx/graphics.h>
+#include <wx/clipbrd.h>
+#include <wx/menu.h>
 #include <algorithm>
 #include <cmath>
 #include <climits>
@@ -8,7 +11,7 @@
 namespace opt {
 namespace {constexpr int render_flags=1;constexpr std::size_t gui_cache_budget=64*1024*1024;}
 PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxID_ANY),sink_(std::move(sink)){
-    SetName("PDF原文");SetBackgroundStyle(wxBG_STYLE_PAINT);SetScrollRate(1,1);
+    SetName(wxS("PDF原文"));SetBackgroundStyle(wxBG_STYLE_PAINT);SetScrollRate(1,1);
     Bind(wxEVT_PAINT,&PdfCanvas::paint,this);
     Bind(wxEVT_SIZE,[this](wxSizeEvent& e){calculate();e.Skip();});
     for(const auto& type:{wxEVT_SCROLLWIN_TOP,wxEVT_SCROLLWIN_BOTTOM,wxEVT_SCROLLWIN_LINEUP,
@@ -26,23 +29,40 @@ PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxI
     });
     auto begin_pan=[this](wxMouseEvent& e){
         SetFocus();if(e.MiddleDown()||space_){
+            selecting_=false;
             panning_=true;drag_start_=e.GetPosition();GetViewStart(&scroll_start_.x,&scroll_start_.y);
-            CaptureMouse();SetCursor(wxCursor(wxCURSOR_HAND));
+            if(!HasCapture())CaptureMouse();SetCursor(wxCursor(wxCURSOR_HAND));
+        }else if(layout_&&transform_){
+            const auto pixel=page_pixel(e.GetPosition());
+            const auto point=transform_->page_px_to_pdf.apply(pixel);
+            if(pixel.x>=0&&pixel.y>=0&&pixel.x<width_&&pixel.y<height_&&near_text(*layout_,point)){
+                const auto at=nearest_text_position(*layout_,point);selection_=std::pair{at,at};selecting_=true;
+                if(!HasCapture())CaptureMouse();SetCursor(wxCursor(wxCURSOR_IBEAM));
+            }else selection_.reset();
+            Refresh();
         }else e.Skip();
     };
     Bind(wxEVT_LEFT_DOWN,begin_pan);Bind(wxEVT_MIDDLE_DOWN,begin_pan);
     auto end_pan=[this](wxMouseEvent& e){
-        if(panning_){panning_=false;if(HasCapture())ReleaseMouse();SetCursor(wxNullCursor);}else e.Skip();
+        if(panning_||selecting_){panning_=false;selecting_=false;if(HasCapture())ReleaseMouse();SetCursor(wxNullCursor);}else e.Skip();
     };
     Bind(wxEVT_LEFT_UP,end_pan);Bind(wxEVT_MIDDLE_UP,end_pan);
     Bind(wxEVT_MOTION,[this](wxMouseEvent& e){
-        if(panning_){const auto delta=e.GetPosition()-drag_start_;Scroll(std::max(0,scroll_start_.x-delta.x),std::max(0,scroll_start_.y-delta.y));schedule();}else e.Skip();
+        if(panning_){const auto delta=e.GetPosition()-drag_start_;Scroll(std::max(0,scroll_start_.x-delta.x),std::max(0,scroll_start_.y-delta.y));schedule();}
+        else if(selecting_&&selection_&&layout_&&transform_){
+            selection_->second=nearest_text_position(*layout_,transform_->page_px_to_pdf.apply(page_pixel(e.GetPosition())));Refresh();
+        }else e.Skip();
     });
-    Bind(wxEVT_MOUSE_CAPTURE_LOST,[this](wxMouseCaptureLostEvent&){panning_=false;SetCursor(wxNullCursor);});
+    Bind(wxEVT_MOUSE_CAPTURE_LOST,[this](wxMouseCaptureLostEvent&){panning_=false;selecting_=false;SetCursor(wxNullCursor);});
+    Bind(wxEVT_CONTEXT_MENU,[this](wxContextMenuEvent&){
+        SetFocus();wxMenu menu;menu.Append(wxID_COPY,wxS("コピー"));menu.Enable(wxID_COPY,has_selection());
+        menu.Append(wxID_SELECTALL,wxS("全選択"));menu.Enable(wxID_SELECTALL,layout_&&!layout_->reading_text_utf8.empty());PopupMenu(&menu);
+    });
     Bind(wxEVT_KEY_DOWN,[this](wxKeyEvent& e){
         int x,y;GetViewStart(&x,&y);const int step=FromDIP(32);
         switch(e.GetKeyCode()){
         case WXK_SPACE:space_=true;break;
+        case WXK_ESCAPE:clear_selection();return;
         case WXK_LEFT:x-=step;break;case WXK_RIGHT:x+=step;break;
         case WXK_UP:y-=step;break;case WXK_DOWN:y+=step;break;
         case WXK_PAGEUP:y-=GetClientSize().y*9/10;break;case WXK_PAGEDOWN:y+=GetClientSize().y*9/10;break;
@@ -55,13 +75,43 @@ PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxI
     Bind(wxEVT_KILL_FOCUS,[this](wxFocusEvent& e){space_=false;e.Skip();});
     Bind(wxEVT_DPI_CHANGED,[this](wxDPIChangedEvent& e){calculate();e.Skip();});
 }
-void PdfCanvas::clear_document(){timer_.Stop();document_=0;info_.reset();transform_.reset();pending_anchor_.reset();cache_.clear();cache_bytes_=0;width_=height_=0;last_request_.reset();SetVirtualSize(1,1);Refresh();}
+void PdfCanvas::clear_document(){timer_.Stop();document_=0;info_.reset();transform_.reset();pending_anchor_.reset();layout_.reset();selection_.reset();search_range_.reset();cache_.clear();cache_bytes_=0;width_=height_=0;last_request_.reset();SetVirtualSize(1,1);Refresh();}
 void PdfCanvas::set_page(DocumentEpoch document,PageIndex page,std::optional<PdfPageInfo> info){
     if(document_!=document){cache_.clear();cache_bytes_=0;}
     document_=document;page_=page;info_=info;transform_.reset();pending_anchor_.reset();last_request_.reset();
+    layout_.reset();selection_.reset();search_range_.reset();
     Scroll(0,0);width_=height_=0;calculate();Refresh();
 }
 void PdfCanvas::set_info(const PdfPageInfo& info){info_=info;calculate();}
+void PdfCanvas::set_layout(std::shared_ptr<const PageLayout> layout){
+    if(layout_==layout)return;layout_=std::move(layout);selection_.reset();Refresh();
+}
+bool PdfCanvas::has_selection() const noexcept{return selection_&&selection_->first!=selection_->second&&bool(layout_);}
+void PdfCanvas::clear_selection(){selection_.reset();Refresh();}
+void PdfCanvas::select_all(){
+    if(layout_){selection_=std::pair<std::size_t,std::size_t>{0,layout_->reading_text_utf8.size()};Refresh();}
+}
+bool PdfCanvas::copy_selection() const{
+    if(!has_selection())return false;
+    const auto [a,b]=*selection_;const auto first=std::min(a,b),last=std::max(a,b);
+    const auto text=std::string_view(layout_->reading_text_utf8).substr(first,last-first);
+    if(!wxTheClipboard->Open())return false;
+    wxTheClipboard->SetData(new wxTextDataObject(wxString::FromUTF8(text.data(),text.size())));wxTheClipboard->Close();return true;
+}
+void PdfCanvas::show_search_hit(std::optional<TextHit> hit){
+    search_range_.reset();
+    if(hit&&layout_){
+        search_range_=std::pair{hit->begin,hit->end};
+        if(!hit->source_ranges.empty()){
+            const auto index=hit->source_ranges.front().first;
+            if(index<layout_->glyphs.size()){
+                const auto& rect=layout_->glyphs[index].bounds;
+                pending_anchor_=Anchor{{(rect.left+rect.right)/2,(rect.bottom+rect.top)/2},{GetClientSize().x/2,GetClientSize().y/3}};schedule();
+            }
+        }
+    }
+    Refresh();
+}
 PdfPoint PdfCanvas::page_pixel(wxPoint screen) const{
     int x,y;GetViewStart(&x,&y);
     return {(static_cast<double>(x)+screen.x-origin_.x)*scale_,(static_cast<double>(y)+screen.y-origin_.y)*scale_};
@@ -166,7 +216,7 @@ void PdfCanvas::paint(wxPaintEvent&){
     dc.SetBackground(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE)));dc.Clear();
     if(!info_){
         dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-        dc.DrawText(document_?"ページを読み込んでいます…":"PDFを開くか、ここへドロップしてください。",FromDIP(16),FromDIP(16));return;
+        dc.DrawText(document_?wxS("ページを読み込んでいます…"):wxS("PDFを開くか、ここへドロップしてください。"),FromDIP(16),FromDIP(16));return;
     }
     dc.SetPen(*wxTRANSPARENT_PEN);dc.SetBrush(*wxWHITE_BRUSH);
     dc.DrawRectangle(origin_.x,origin_.y,static_cast<int>(std::ceil(width_/scale_)),static_cast<int>(std::ceil(height_/scale_)));
@@ -174,6 +224,25 @@ void PdfCanvas::paint(wxPaintEvent&){
         tile.used=++tick_;
         tile.bitmap.SetScaleFactor(scale_);
         dc.DrawBitmap(tile.bitmap,origin_.x+static_cast<int>(std::round(key.x/scale_)),origin_.y+static_cast<int>(std::round(key.y/scale_)),false);
+    }
+    if(layout_&&transform_){
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+        if(gc){
+            gc->Clip(origin_.x,origin_.y,width_/scale_,height_/scale_);gc->SetPen(*wxTRANSPARENT_PEN);
+            auto highlight=[&](const auto& range,wxColour colour){
+                if(!range)return;
+                gc->SetBrush(wxBrush(colour));const auto [a,b]=*range;
+                for(const auto source:source_ranges(*layout_,std::min(a,b),std::max(a,b)))
+                    for(std::uint64_t i=source.first;i<static_cast<std::uint64_t>(source.first)+source.count&&i<layout_->glyphs.size();++i){
+                        const auto& g=layout_->glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds)continue;
+                        const auto p=transform_->pdf_to_page_px.apply({g.bounds.left,g.bounds.bottom});
+                        const auto q=transform_->pdf_to_page_px.apply({g.bounds.right,g.bounds.top});
+                        gc->DrawRectangle(origin_.x+std::min(p.x,q.x)/scale_,origin_.y+std::min(p.y,q.y)/scale_,
+                            std::max(1.0,std::abs(p.x-q.x)/scale_),std::max(1.0,std::abs(p.y-q.y)/scale_));
+                    }
+            };
+            highlight(search_range_,wxColour(255,190,20,90));highlight(selection_,wxColour(60,130,245,85));
+        }
     }
 }
 }

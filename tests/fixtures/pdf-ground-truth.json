@@ -26,5 +26,79 @@
       612,
       792
     ]
+  },
+  "P02-columns.pdf": {
+    "ordered_markers": [
+      "Two-column experiment",
+      "LEFT first",
+      "LEFT second",
+      "RIGHT first",
+      "RIGHT second"
+    ]
+  },
+  "P03-mixed.pdf": {
+    "ordered_markers": [
+      "Mixed columns",
+      "TOP LEFT first",
+      "TOP LEFT second",
+      "TOP RIGHT first",
+      "TOP RIGHT second",
+      "Figure 1.",
+      "BOTTOM LEFT first",
+      "BOTTOM LEFT second",
+      "BOTTOM RIGHT first",
+      "BOTTOM RIGHT second"
+    ]
+  },
+  "P04-crop.pdf": {
+    "contains": [
+      "Visible in the crop box.",
+      "The origin is not zero."
+    ],
+    "excludes": [
+      "HIDDEN"
+    ],
+    "crop_box": [
+      100,
+      100,
+      500,
+      700
+    ]
+  },
+  "P05-rotation.pdf": {
+    "page_count": 4,
+    "rotations": [
+      0,
+      90,
+      180,
+      270
+    ],
+    "ordered_markers": [
+      "Rotation checks",
+      "The second line"
+    ]
+  },
+  "P07-structured.pdf": {
+    "ordered_markers": [
+      "Structured scientific",
+      "following equation",
+      "E = mc2",
+      "Figure 1.",
+      "Condition",
+      "Control",
+      "Trial",
+      "The caption"
+    ],
+    "block_kinds": {
+      "E = mc2": 3,
+      "Figure 1.": 2,
+      "Condition": 4
+    }
+  },
+  "P08-image.pdf": {
+    "page_count": 1,
+    "no_text_pages": [
+      0
+    ]
   }
 }

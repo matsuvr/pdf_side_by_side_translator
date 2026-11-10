@@ -1,5 +1,6 @@
 #pragma once
 #include "pdf/pdf_service.hpp"
+#include "pdf/layout.hpp"
 #include <wx/scrolwin.h>
 #include <wx/timer.h>
 #include <map>
@@ -17,6 +18,12 @@ public:
     void rotate(int quarter_delta);
     void accept(const PdfEvent& event);
     void clear_document();
+    void set_layout(std::shared_ptr<const PageLayout> layout);
+    bool copy_selection() const;
+    void select_all();
+    void clear_selection();
+    bool has_selection() const noexcept;
+    void show_search_hit(std::optional<TextHit> hit);
     std::optional<PdfPoint> reading_anchor() const;
     void restore_anchor(PdfPoint point);
     ZoomMode zoom_mode() const noexcept{return zoom_mode_;}
@@ -38,6 +45,9 @@ private:
     wxPoint origin_,drag_start_,scroll_start_;
     wxSize client_;
     bool panning_=false,space_=false;
+    bool selecting_=false;
+    std::shared_ptr<const PageLayout> layout_;
+    std::optional<std::pair<std::size_t,std::size_t>> selection_,search_range_;
     std::map<TileKey,CachedTile> cache_;
     std::size_t cache_bytes_=0;
     std::uint64_t tick_=0;

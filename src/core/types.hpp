@@ -48,6 +48,10 @@ struct GlyphRecord {
     bool generated=false,valid_bounds=false,unicode_map_error=false;
 };
 enum class BlockKind { Heading, Paragraph, Caption, Equation, Table, Margin, Unknown, Edited };
+struct TextLine {
+    std::size_t utf8_begin=0,utf8_end=0;
+    PdfRect source_bounds;
+};
 struct TextBlock {
     std::string block_id;
     PageIndex page=0;
@@ -56,15 +60,20 @@ struct TextBlock {
     std::string reading_text_utf8,translation_input_utf8;
     std::vector<TextMapping> reading_mapping,translation_mapping;
     std::vector<PdfRect> source_rects;
+    std::vector<TextLine> lines;
     float layout_confidence=0;
 };
 struct PageLayout {
+    enum class Availability { TextAvailable, NoTextLayer, UnicodeUnavailable, NoTranslatableText };
     PageIndex page=0;
     std::uint32_t layout_version=1;
     std::vector<GlyphRecord> glyphs;
     std::vector<TextBlock> blocks;
     std::string reading_text_utf8;
     std::vector<TextMapping> reading_mapping;
+    std::vector<TextLine> lines;
+    Affine2D pdf_to_layout;
+    Availability availability=Availability::NoTextLayer;
 };
 std::string encode_utf8(char32_t scalar);
 }

@@ -10,19 +10,24 @@ from pathlib import Path
 from common import ROOT
 
 
-def write_pdf(path, pages):
+def write_pdf(path, pages, attributes=None, image=False):
     objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"",
                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    if image:
+        objects.append(b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\x1c\x52\xa0\nendstream")
     kids = []
-    for page in pages:
+    for index, page in enumerate(pages):
         page_id, stream_id = len(objects) + 1, len(objects) + 2
         kids.append(str(page_id) + " 0 R")
         commands = []
+        if image: commands.append("q 400 0 0 300 100 400 cm /Im0 Do Q")
         for x, y, size, text in page:
             escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
             commands.append(f"BT /F1 {size} Tf {x} {y} Td ({escaped}) Tj ET")
         stream = ("\n".join(commands) + "\n").encode("ascii")
-        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {stream_id} 0 R >>".encode())
+        extra = attributes[index] if attributes else ""
+        xobject = "/XObject << /Im0 4 0 R >>" if image else ""
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] {extra} /Resources << /Font << /F1 3 0 R >> {xobject} >> /Contents {stream_id} 0 R >>".encode())
         objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"endstream")
     objects[1] = f"<< /Type /Pages /Count {len(kids)} /Kids [{' '.join(kids)}] >>".encode()
     data = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
@@ -56,6 +61,50 @@ def main():
                 "P01-simple.pdf": {"page_count": 3,
                     "reading_order": [[line[3] for line in p] for p in pages],
                     "no_text_pages": [2], "media_box": [0, 0, 612, 792]}}
+    columns = [
+        (48, 746, 20, "Two-column experiment"),
+        (48, 700, 11, "LEFT first line stays in this column."),
+        (330, 700, 11, "RIGHT first line follows the left."),
+        (48, 682, 11, "LEFT second line completes this part."),
+        (330, 682, 11, "RIGHT second line completes the page."),
+    ]
+    write_pdf(root / "P02-columns.pdf", [columns])
+    expected["P02-columns.pdf"] = {"ordered_markers": ["Two-column experiment", "LEFT first", "LEFT second", "RIGHT first", "RIGHT second"]}
+    mixed = [
+        (48, 746, 20, "Mixed columns and full-width content"),
+        (48, 700, 11, "TOP LEFT first line belongs together."),
+        (330, 700, 11, "TOP RIGHT first line is read next."),
+        (48, 682, 11, "TOP LEFT second line ends here."),
+        (330, 682, 11, "TOP RIGHT second line ends here."),
+        (48, 580, 12, "Figure 1. A shared caption between both sections."),
+        (48, 520, 11, "BOTTOM LEFT first line follows the figure."),
+        (330, 520, 11, "BOTTOM RIGHT first line is read last."),
+        (48, 502, 11, "BOTTOM LEFT second line ends here."),
+        (330, 502, 11, "BOTTOM RIGHT second line ends here."),
+        (294, 36, 10, "3"),
+    ]
+    write_pdf(root / "P03-mixed.pdf", [mixed])
+    expected["P03-mixed.pdf"] = {"ordered_markers": ["Mixed columns", "TOP LEFT first", "TOP LEFT second", "TOP RIGHT first", "TOP RIGHT second", "Figure 1.", "BOTTOM LEFT first", "BOTTOM LEFT second", "BOTTOM RIGHT first", "BOTTOM RIGHT second"]}
+    crop = [(10, 750, 12, "HIDDEN OUTSIDE CROP"), (150, 640, 16, "Visible in the crop box."), (150, 610, 12, "The origin is not zero.")]
+    write_pdf(root / "P04-crop.pdf", [crop], ["/CropBox [100 100 500 700]"])
+    expected["P04-crop.pdf"] = {"contains": ["Visible in the crop box.", "The origin is not zero."], "excludes": ["HIDDEN"], "crop_box": [100, 100, 500, 700]}
+    rotated = [[(48, 700, 12, "Rotation checks preserve the first line."), (48, 680, 12, "The second line follows.")] for _ in range(4)]
+    write_pdf(root / "P05-rotation.pdf", rotated, [f"/Rotate {r}" for r in (0, 90, 180, 270)])
+    expected["P05-rotation.pdf"] = {"page_count": 4, "rotations": [0, 90, 180, 270], "ordered_markers": ["Rotation checks", "The second line"]}
+    structured = [
+        (48, 736, 18, "Structured scientific content"),
+        (48, 690, 12, "The following equation is kept as source text."),
+        (180, 640, 16, "E = mc2"),
+        (48, 570, 12, "Figure 1. A fixed measurement layout."),
+        (48, 500, 11, "Condition"), (230, 500, 11, "N"), (410, 500, 11, "Score"),
+        (48, 480, 11, "Control"), (230, 480, 11, "12"), (410, 480, 11, "0.75"),
+        (48, 460, 11, "Trial"), (230, 460, 11, "24"), (410, 460, 11, "0.92"),
+        (48, 380, 12, "The caption is translated; cells remain separate."),
+    ]
+    write_pdf(root / "P07-structured.pdf", [structured])
+    expected["P07-structured.pdf"] = {"ordered_markers": ["Structured scientific", "following equation", "E = mc2", "Figure 1.", "Condition", "Control", "Trial", "The caption"], "block_kinds": {"E = mc2": 3, "Figure 1.": 2, "Condition": 4}}
+    write_pdf(root / "P08-image.pdf", [[]], image=True)
+    expected["P08-image.pdf"] = {"page_count": 1, "no_text_pages": [0]}
     (root / "pdf-ground-truth.json").write_text(json.dumps(expected, indent=2) + "\n")
 
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "core/types.hpp"
+#include "pdf/layout.hpp"
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -27,6 +28,7 @@ struct RasterBuffer {
 struct PdfPageInfo {
     double width_points=0,height_points=0;
     Affine2D pdf_to_layout;
+    double layout_width=1024,layout_height=1024;
 };
 struct ViewRequest {
     DocumentEpoch document=0;
@@ -35,8 +37,17 @@ struct ViewRequest {
     // Physical pixel origins, always aligned to the 512-pixel tile grid.
     std::vector<std::pair<int,int>> tiles;
 };
+struct PdfSearchRequest {
+    DocumentEpoch document=0;
+    PageIndex page=0;
+    std::uint64_t generation=0;
+    std::string query;
+    std::size_t start=0;
+    bool match_case=false,backward=false;
+    std::shared_ptr<const PageLayout> cached_layout;
+};
 struct PdfEvent {
-    enum class Kind { Opened, Closed, PageInfo, ViewReady, TileReady, Extracted, PasswordRequired, Failed };
+    enum class Kind { Opened, Closed, PageInfo, ViewReady, TileReady, Extracted, SearchResult, PasswordRequired, Failed };
     Kind kind=Kind::Failed;
     DocumentEpoch document=0;
     PageIndex page=0;
@@ -45,7 +56,9 @@ struct PdfEvent {
     TileKey key;
     RenderTransform transform;
     std::shared_ptr<const RasterBuffer> pixels;
-    std::shared_ptr<const std::vector<GlyphRecord>> glyphs;
+    std::shared_ptr<const PageLayout> layout;
+    std::uint64_t query_generation=0;
+    std::optional<TextHit> hit;
     std::string code,message,detail;
 };
 class PdfService {
@@ -60,6 +73,7 @@ public:
     void page_info(DocumentEpoch epoch,PageIndex page);
     void viewport(ViewRequest request);
     bool extract(DocumentEpoch epoch,PageIndex page);
+    void search(PdfSearchRequest request);
     void stop() noexcept;
     bool done() const noexcept;
     void join();
