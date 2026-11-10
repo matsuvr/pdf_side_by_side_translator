@@ -8,7 +8,7 @@ import re
 import shlex
 import shutil
 
-from common import ROOT, WORK, TARGETS, depot_environment, lock, run, sha256
+from common import ROOT, WORK, TARGETS, assert_clean_checkout, depot_environment, lock, run, sha256
 
 
 def main():
@@ -20,6 +20,7 @@ def main():
     if mac != (platform.system() == "Darwin"):
         raise SystemExit("Run PDFium's native build on the target operating system.")
     source = WORK / "pdfium-workspace/pdfium"
+    assert_clean_checkout(source)
     out = source / "out" / args.target
     out.mkdir(parents=True, exist_ok=True)
     probe = source / "offline_probe"

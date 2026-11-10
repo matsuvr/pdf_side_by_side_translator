@@ -38,7 +38,7 @@ def main():
     font = deps["NotoSansCJKjp-Regular"]
     font_path = WORK / "resources/NotoSansCJKjp-Regular.otf"
     download(font["url"], font_path, font.get("sha256"))
-    download(font["license_url"], WORK / "resources/NotoSansCJK-LICENSE.txt")
+    download(font["license_url"], WORK / "resources/NotoSansCJK-LICENSE.txt", font["license_sha256"])
 
     # Record observed hashes separately until reviewed and promoted into the lock.
     observed = {"SQLite": sha256(archive), "NotoSansCJKjp-Regular": sha256(font_path)}

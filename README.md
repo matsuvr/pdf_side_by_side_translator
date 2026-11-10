@@ -1,0 +1,158 @@
+# Offline PDF Translator
+
+ローカルのPDFを左側に、日本語訳を右側に表示するデスクトップアプリです。
+PDFの描画・文字抽出・翻訳を同じコンピューター上で処理します。
+推論サーバー、Python、ブラウザー、オンラインアカウントを実行時に必要としません。
+
+![製品icon](resources/app-icon.png)
+
+Built with PLaMo
+
+## 使い方
+
+1. アプリを起動します。
+2. PDFを開くか、ウィンドウへドロップします。
+3. 「モデル設定」で、利用条件を確認して入手したローカルGGUFを選びます。
+4. 現在ページの訳文が表示されます。「全ページを翻訳」で他のページも処理できます。
+
+外部に用意する実行用ファイルはPDFとGGUFです。モデルを同梱・自動取得する機能はありません。
+対応モデルは **PLaMo 3 Translate 0.8B、英語→日本語** です。常体と敬体を選べます。
+基準にした公式GGUFは次の通りです。
+
+| 項目 | 固定値 |
+| --- | --- |
+| 配布元 | [pfnet/plamo-3-translate-0.8b-GGUF](https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF) |
+| revision | `1cf96ae02133958a20074bfdfab76517bb737d00` |
+| ファイル | `plamo-3-translate-0.8b-Q4_K_M.gguf` |
+| SHA-256 | `70891ec70dc7ab4205745a38307867c2881b99239f20327927633abfe4bc9ec6` |
+
+モデルの利用には、アプリのMIT Licenseとは別に[PLaMoコミュニティライセンス契約](https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/blob/1cf96ae02133958a20074bfdfab76517bb737d00/LICENSE/ja)が適用されます。
+商業目的の条件や、生成物の提供・公開・学習への利用条件も確認してください。
+確認用の契約本文はアプリの「ライセンス」と[licenses/](licenses/)にも収録しています。
+アプリは利用者の代わりに登録・契約同意をしません。
+
+## 読書と翻訳
+
+左右は同じ物理ページ番号を表示し、スクロール・PDF倍率・訳文字サイズは独立しています。
+原文の選択・コピーとPDF内検索が使えます。抽出した読順を確認・修正する原文編集もできます。
+原文編集はPDF原本やその検索結果を変更しません。文字情報のないPDFへのOCRは行いません。
+
+現在ページの自動翻訳は初期状態でONです。停止すると同じページを勝手に再開しません。
+「このページを翻訳」は途中の処理を再開し、「最初から再翻訳」は新しい試行を作ります。
+全ページ翻訳は現在ページを優先し、完成・テキストなし・部分結果・失敗を区別します。
+表や数式は原文のまま残す場合があります。訳文の正確さは原文と照らし合わせて確認できます。
+
+| 操作 | ショートカット |
+| --- | --- |
+| PDFを開く | Primary+O |
+| ページ番号へ | Primary+G |
+| PDF内検索 | Primary+F |
+| このページを翻訳 | Primary+Enter |
+| 全ページを翻訳 | Primary+Shift+Enter |
+| 翻訳停止 | Primary+. |
+| モデル設定 | Primary+, |
+| ペイン間移動 | F6 / Shift+F6 |
+
+PrimaryはMacではCommand、WindowsではCtrlです。IME変換やダイアログの入力を優先します。
+詳しい操作方法とライセンスは、アプリ内でオフラインのまま読めます。
+UTF-8書き出しはモデル名・文体・ページ番号を記録し、部分結果を明示します。
+
+## 保存とプライバシー
+
+設定・読書位置・原文編集・翻訳キャッシュは、新しい製品名のユーザーデータ領域に保存します。
+以前のアプリの設定や資産は移行しません。PDF原本やGGUFは書き換えません。
+
+| OS | 通常の状態ディレクトリ |
+| --- | --- |
+| macOS | `~/Library/Application Support/Offline PDF Translator/` |
+| Windows | `%LOCALAPPDATA%\Offline PDF Translator\` |
+
+`state.sqlite3` は設定・原文編集・読書位置、`Cache/cache.sqlite3` は再生成可能な翻訳結果です。
+キャッシュ削除は原文編集を消しません。保存できない場合や同じ保存先を別の起動が使用中の場合は、メモリ内で処理を続け、未保存と表示します。
+「状態データの退避コピーを保存」で、メモリ内の編集も別のSQLiteファイルへ救出できます。
+復元手順は[保存・リソースの記録](docs/resources-and-diagnostics.md)を参照してください。
+検証用の独立した状態領域や退避データの復元先を使う場合は、実行ファイルに
+`--data-dir /absolute/path/to/state` を指定できます。通常起動の保存先は上表のままです。
+
+本文・訳文・診断情報を自動送信する機能はありません。診断情報は内容を表示してからコピーできます。
+通常ログには本文、訳文、パスワード、ファイルpathを入れず、最大256 KiB×3世代で保持します。
+
+## 対象と検証状況
+
+| 構成 | 実装方針 / 記録 |
+| --- | --- |
+| Windows x64 | 静的CRTの単一EXE、CPU推論。ソース・presetを用意。実機ビルド・実行は未検証 |
+| macOS arm64 | 自己完結した.app、Metal自動選択とCPU経路。開発Mac上で実モデル・GUI・自動試験を検証 |
+| macOS x86_64 | 自己完結した.app、CPU推論。クロスビルド、23件、実モデルCPU、長文表示をRosettaで検証。実Intel機では未検証 |
+
+Macのdeployment targetは14.0です。実行確認したOSは開発Macの27.2で、macOS 14実機の確認を意味しません。
+Developer ID署名・公証済みの一般配布版は作成していません。package scriptのMac出力はad-hoc署名の開発成果物です。
+Gatekeeperの初回起動、開発環境のないクリーンな実機、Windowsの英語環境・DPI・IME、複数モニターのscale変更は別途確認が必要です。
+現在の証拠と限界は[実装状況](docs/implementation-status.md)と各検証記録に分けて記載しています。
+
+## 開発者向けビルド
+
+Pythonは依存取得・ビルド補助にだけ使います。製品へ同梱しません。
+Python 3.11以降、Git、CMake、NinjaとOSの開発SDKを用意します。
+Macで検証した環境はXcode 27.2 / SDK 27.2です。
+WindowsはVisual StudioのC++ Build ToolsとWindows SDKを用意し、対応する開発者用shellで実行します。
+PDFiumの固定版が要求するSDK/toolchain条件に従います。
+
+```sh
+python3 -m venv .tools/venv
+# Mac: source .tools/venv/bin/activate
+# Windows PowerShell: .tools\venv\Scripts\Activate.ps1
+python -m pip install -r deps/build-tools.txt
+python scripts/bootstrap.py --target macos-arm64-release
+cmake --preset macos-arm64-release
+cmake --build --preset macos-arm64-release
+ctest --preset macos-arm64-release
+python scripts/package.py --target macos-arm64-release
+```
+
+Windowsではtargetを `windows-x64-release` に変更します。
+他に `windows-x64-debug`、`macos-arm64-debug`、`macos-x64-release` があります。
+Mac x64はApple Siliconからクロスビルドできますが、Rosettaの試験は実Intel機の代わりにはなりません。
+Debugには対応するDebug依存を別に構築します。
+
+bootstrapは公式の固定ソースを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
+wxWidgets・llama.cpp・SQLiteとアプリはCMakeで静的に構築します。
+通常のCMake configure/buildはネットへ依存を取りに行きません。PDFiumと同じ固定LLVM compiler/linkerを使います。
+presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除外します。
+依存revision、モデルfixture、フォントhashは[dependency lock](deps/third_party.lock.json)にあります。
+上流ソースの独自patchはありません。
+
+packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
+最終Mach-O / PEの通常・delay importを検査し、Macは署名後のZIPを再展開して再検査します。
+生成物とhash・依存検査・ソース識別情報は `dist/<target>/` 以下へ保存します。
+製品の起動にREADME、Python、ビルド用manifestや個別ライブラリの配布は不要です。
+
+## 試験と構造
+
+```sh
+# 実ネイティブ長文試験プログラムも構築する場合
+cmake --preset macos-arm64-release -DOPT_BUILD_GUI_PROBE=ON
+cmake --build --preset macos-arm64-release
+build/macos-arm64-release/native_text_test.app/Contents/MacOS/native_text_test
+```
+
+このネイティブ試験は、フォーカスを持てるデスクトップsessionで実行します。
+ヘッドレスCTestと、別途ローカルGGUFを指定する実モデル試験を分けています。
+fixtureはこのプロジェクトのために新規作成したPDFです。フォント内蔵のUnicode fixtureの再生成だけは
+`deps/fixture-test-tools.txt` の開発用依存を使います。
+公式tokenizer比較fixtureの生成手順と固定版は[翻訳の記録](docs/translation.md)を参照してください。
+
+- `src/pdf/`: PDFium専用worker、段階的tile描画、layoutと原文mapping
+- `src/inference/`: llama専用worker、PFML3、実token長に基づく分割
+- `src/translation/`: page attempt、再開・再分割・lazy batch
+- `src/storage/`: I/O専用worker、state/cache、同一open objectのhash、書き出し
+- `src/platform/`: native path・font・IME・text viewportの小さなOS差分
+- `tests/`: 所有権・競合・cache・Unicode・大判PDF・実モデルの試験
+
+## ライセンス
+
+このプロジェクトの新規コード・文書・fixture・iconは[MIT License](LICENSE)です。
+静的に組み込む依存、フォント、別途選択するモデルにはそれぞれの条件が適用されます。
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)は固定ソースから生成した完全な通知文です。
+`python scripts/collect_notices.py --check` で入力と通知文のhashを照合できます。
+依存やモデルの利用条件をアプリのMIT Licenseに読み替えるものではありません。

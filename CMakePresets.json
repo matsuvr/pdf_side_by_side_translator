@@ -7,6 +7,21 @@
   },
   "configurePresets": [
     {
+      "name": "isolated-build-environment",
+      "hidden": true,
+      "environment": {
+        "CPATH": null,
+        "C_INCLUDE_PATH": null,
+        "CPLUS_INCLUDE_PATH": null,
+        "OBJC_INCLUDE_PATH": null,
+        "LIBRARY_PATH": null,
+        "CFLAGS": null,
+        "CXXFLAGS": null,
+        "LDFLAGS": null,
+        "SDKROOT": null
+      }
+    },
+    {
       "name": "windows-x64-release",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/windows-x64-release",
@@ -14,7 +29,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "OPT_TARGET": "windows-x64-release"
       },
-      "toolchainFile": "${sourceDir}/cmake/toolchains/windows.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows.cmake",
+      "inherits": "isolated-build-environment"
     },
     {
       "name": "windows-x64-debug",
@@ -24,7 +40,8 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "OPT_TARGET": "windows-x64-debug"
       },
-      "toolchainFile": "${sourceDir}/cmake/toolchains/windows.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows.cmake",
+      "inherits": "isolated-build-environment"
     },
     {
       "name": "macos-arm64-release",
@@ -36,7 +53,8 @@
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0"
       },
-      "toolchainFile": "${sourceDir}/cmake/toolchains/macos.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos.cmake",
+      "inherits": "isolated-build-environment"
     },
     {
       "name": "macos-arm64-debug",
@@ -48,7 +66,8 @@
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0"
       },
-      "toolchainFile": "${sourceDir}/cmake/toolchains/macos.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos.cmake",
+      "inherits": "isolated-build-environment"
     },
     {
       "name": "macos-x64-release",
@@ -60,7 +79,8 @@
         "CMAKE_OSX_ARCHITECTURES": "x86_64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0"
       },
-      "toolchainFile": "${sourceDir}/cmake/toolchains/macos.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos.cmake",
+      "inherits": "isolated-build-environment"
     }
   ],
   "buildPresets": [

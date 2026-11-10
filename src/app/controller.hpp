@@ -7,7 +7,7 @@ class ApplicationController final : public wxEvtHandler {
 public:
     ApplicationController();
     ~ApplicationController() override;
-    void start(const wxString& initial_pdf={});
+    void start(const wxString& initial_pdf={},const wxString& data_directory={});
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

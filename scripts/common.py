@@ -60,15 +60,34 @@ def checkout(entry, destination):
     head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=destination,
                           text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     current = head.stdout.strip() if head.returncode == 0 else None
+    if current:
+        assert_clean_checkout(destination)
+    actual_origin = run(["git", "remote", "get-url", "origin"], cwd=destination, capture=True).strip()
+    if actual_origin != entry["url"]:
+        raise RuntimeError("Dependency origin differs from the official lock: " + destination.name)
     if current != entry["revision"]:
         run(["git", "fetch", "--depth=1", "origin", entry["revision"]], cwd=destination)
         run(["git", "checkout", "--detach", entry["revision"]], cwd=destination)
     if entry.get("submodules"):
         run(["git", "submodule", "update", "--init", "--recursive", "--depth=1"], cwd=destination)
+    assert_clean_checkout(destination)
+
+
+def assert_clean_checkout(directory):
+    for options in (["diff", "--quiet", "--ignore-submodules=none"],
+                    ["diff", "--cached", "--quiet", "--ignore-submodules=none"]):
+        result = subprocess.run(["git", *options], cwd=directory)
+        if result.returncode:
+            raise RuntimeError("Tracked dependency source is modified; inspect before rebuilding: " + str(directory))
 
 
 def depot_environment():
     env = os.environ.copy()
+    # Do not let a developer's global include/library directories alter the
+    # fixed graph (or make a host-only build tool link against local libraries).
+    for key in ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+                "LIBRARY_PATH", "CFLAGS", "CXXFLAGS", "LDFLAGS", "SDKROOT"):
+        env.pop(key, None)
     depot = WORK / "src/depot_tools"
     env["PATH"] = str(depot) + os.pathsep + env["PATH"]
     env["DEPOT_TOOLS_UPDATE"] = "0"

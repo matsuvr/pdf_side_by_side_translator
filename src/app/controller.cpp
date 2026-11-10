@@ -14,6 +14,7 @@
 #include "ui/wx_path.hpp"
 #include "ui/shortcut_policy.hpp"
 #include "product.hpp"
+#include "build_info.hpp"
 #include <wx/wx.h>
 #include <wx/combobox.h>
 #include <wx/display.h>
@@ -245,6 +246,7 @@ struct ApplicationController::Impl {
     }
     std::string diagnostics()const{
         std::ostringstream out;out<<product::name<<" "<<product::version<<"\nBuild: "<<product::preset
+            <<"\nSource: "<<build::revision<<(build::dirty?" (modified)":"")<<"\nBuild identity: "<<build::identity
             <<"\nOS: "<<wxGetOsDescription().ToStdString(wxConvUTF8)<<"\nPDFium: "<<product::pdfium_revision
             <<"\nwxWidgets: "<<product::wx_revision<<"\nllama.cpp: "<<product::llama_revision
             <<"\nSQLite: 3.50.4\nModel profile: "<<model_profile.id<<"\nSupported metadata: plamo3 / tokenizer plamo3 / translate-0.8b"
@@ -934,7 +936,7 @@ struct ApplicationController::Impl {
         case Command::Quit:frame->Close();break;
         }
     }
-    void start(const wxString& initial){
+    void start(const wxString& initial,const wxString& data_directory){
         std::string error;
         const bool font_ok=register_private_font(native_path(wxStandardPaths::Get().GetResourcesDir()),error);
         frame=new wxFrame(nullptr,wxID_ANY,wxString::FromUTF8(product::name));
@@ -1073,12 +1075,12 @@ struct ApplicationController::Impl {
         native_shortcuts=std::make_unique<NativeShortcutMonitor>(*frame,[this](ShortcutKey key,ShortcutContext state){return handle_shortcut(key,state);});
         stream_timer.Start(50);
         position_timer.Start(1000);
-        const auto directory=native_path(wxStandardPaths::Get().GetUserLocalDataDir());
+        const auto directory=native_path(data_directory.empty()?wxStandardPaths::Get().GetUserLocalDataDir():data_directory);
         io=std::make_unique<IoService>(directory,directory/"Cache",[this](auto event){if(io_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(IO_WAKE));});
         if(!initial.empty())open_path(initial);
     }
 };
 ApplicationController::ApplicationController():impl_(std::make_unique<Impl>(*this)){}
 ApplicationController::~ApplicationController()=default;
-void ApplicationController::start(const wxString& initial){impl_->start(initial);}
+void ApplicationController::start(const wxString& initial,const wxString& data_directory){impl_->start(initial,data_directory);}
 }

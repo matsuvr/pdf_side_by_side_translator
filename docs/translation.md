@@ -40,3 +40,14 @@ Page attempts record every source interval, leaf status and replaced parent.
 Forced attempts retain cache bypass on resume; ungenerated leaves cannot count
 as complete. See [persistence evidence](persistence.md) for the subsequent I/O,
 semantic cache, batch and export implementation.
+
+## Real-context CPU fallback check
+
+The opt-in `translation_probe ... auto P01-simple.pdf fail-after-metal` adapter
+created an actual Metal model/context, injected a failure immediately after
+that construction, then exercised the production service's unload and CPU
+rebuild path. The resulting backend was CPU, and all three P01 text blocks
+completed with Japanese output (about 0.07–0.15 s per chunk in this run).
+The injected failure is available only in the test executable. This verifies
+cleanup/rebuild with actual resources; it does not reproduce a physical GPU
+or driver failure. The normal Metal and forced CPU paths were also exercised.

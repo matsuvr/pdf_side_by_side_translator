@@ -31,7 +31,8 @@
       "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf",
       "revision": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
       "license_url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
-      "sha256": "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5"
+      "sha256": "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5",
+      "license_sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
     }
   },
   "model_fixture": {
@@ -46,13 +47,22 @@
   "patches": [],
   "validated_build_configurations": {
     "macos-arm64-release": {
-      "stage": "M0 dependency probe only",
+      "stage": "Product through M5 checked on development Mac; M6 distribution acceptance in progress",
       "llvm": "llvmorg-24-init-14453-ge063be79-1",
       "xcode": "27.2 (27B52)",
       "sdk": "27.2",
       "deployment_target": "14.0",
       "executed_os": "27.2",
       "record": "docs/m0-macos-arm64.md"
+    },
+    "macos-x64-release": {
+      "stage": "Product cross-built on arm64; 23 tests, real CPU model and native text executed under Rosetta; physical Intel unverified",
+      "llvm": "llvmorg-24-init-14453-ge063be79-1",
+      "xcode": "27.2 (27B52)",
+      "sdk": "27.2",
+      "deployment_target": "14.0",
+      "executed_os": "27.2 under Rosetta on arm64",
+      "record": "docs/macos-x64.md"
     }
   }
 }
