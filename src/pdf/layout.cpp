@@ -127,6 +127,20 @@ void append(TextBlock& block,std::string_view bytes,std::vector<SourceCharRange>
     block.reading_mapping.push_back({reading,reading+bytes.size(),ranges});
     block.translation_mapping.push_back({translation,translation+bytes.size(),std::move(ranges)});
 }
+bool same_painted_glyph(const GlyphRecord& a,const GlyphRecord& b){
+    return b.index==a.index+a.source_count&&a.font_id==b.font_id&&std::hypot(a.origin.x-b.origin.x,a.origin.y-b.origin.y)<0.001&&
+        std::abs(a.angle_radians-b.angle_radians)<0.00001&&std::abs(a.bounds.left-b.bounds.left)<0.00001&&std::abs(a.bounds.right-b.bounds.right)<0.00001&&
+        std::abs(a.bounds.top-b.bounds.top)<0.00001&&std::abs(a.bounds.bottom-b.bounds.bottom)<0.00001;
+}
+void append_cluster(TextBlock& block,std::string_view bytes,SourceCharRange range,bool join){
+    if(bytes.empty())return;
+    if(!join||block.reading_mapping.empty()||block.translation_mapping.empty()){append(block,bytes,{range});return;}
+    block.reading_text_utf8+=bytes;block.translation_input_utf8+=bytes;
+    auto extend=[&](TextMapping& mapping,std::size_t end){mapping.utf8_end=end;
+        if(!mapping.source_ranges.empty()&&mapping.source_ranges.back().first+mapping.source_ranges.back().count==range.first)mapping.source_ranges.back().count+=range.count;
+        else mapping.source_ranges.push_back(range);};
+    extend(block.reading_mapping.back(),block.reading_text_utf8.size());extend(block.translation_mapping.back(),block.translation_input_utf8.size());
+}
 void append_fragment(TextBlock& block,const Fragment& fragment,const LayoutOptions& options,
                      const std::vector<GlyphRecord>& raw,bool new_line,bool omit_line_space){
     if(new_line&&!omit_line_space&&!block.reading_text_utf8.empty()&&block.reading_text_utf8.back()!='-')append(block," ",{});
@@ -152,7 +166,8 @@ void append_fragment(TextBlock& block,const Fragment& fragment,const LayoutOptio
             else if(!adjacent&&gap>fragment.height*options.word_gap&&
                     (!(wide(c)&&wide(previous->glyph->unicode))||gap>fragment.height*0.8))append(block," ",{});
         }
-        append(block,normalized(c),{{item.glyph->index,item.glyph->source_count}});previous=&item;
+        const bool join=previous&&previous->glyph->unicode!=0xad&&same_painted_glyph(*previous->glyph,*item.glyph);
+        append_cluster(block,normalized(c),{item.glyph->index,item.glyph->source_count},join);previous=&item;
     }
     PdfRect rect=fragment.items.front().glyph->bounds;
     for(const auto& item:fragment.items){const auto r=item.glyph->bounds;rect={std::min(rect.left,r.left),std::min(rect.bottom,r.bottom),std::max(rect.right,r.right),std::max(rect.top,r.top)};}
@@ -239,7 +254,7 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
         if(g.unicode>=0xd800&&g.unicode<=0xdbff&&i+1<result.glyphs.size()){
             auto& next=result.glyphs[i+1];
             if(next.unicode>=0xdc00&&next.unicode<=0xdfff&&next.index==g.index+1&&next.font_id==g.font_id&&
-               std::hypot(next.origin.x-g.origin.x,next.origin.y-g.origin.y)<0.01){
+               std::hypot(next.origin.x-g.origin.x,next.origin.y-g.origin.y)<0.01&&std::abs(next.angle_radians-g.angle_radians)<0.00001){
                 g.unicode=0x10000+((g.unicode-0xd800)<<10)+(next.unicode-0xdc00);g.source_count=2;
                 next.unicode_continuation=true;
                 if(next.valid_bounds){if(!g.valid_bounds)g.bounds=next.bounds;else g.bounds={std::min(g.bounds.left,next.bounds.left),std::min(g.bounds.bottom,next.bounds.bottom),std::max(g.bounds.right,next.bounds.right),std::max(g.bounds.top,next.bounds.top)};g.valid_bounds=true;}
@@ -255,6 +270,8 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
     for(const auto& g:result.glyphs){
         if(g.unicode_continuation)continue;
         if(!g.valid_bounds)continue;
+        if(!std::isfinite(g.bounds.left)||!std::isfinite(g.bounds.right)||!std::isfinite(g.bounds.top)||!std::isfinite(g.bounds.bottom)||
+           !std::isfinite(g.origin.x)||!std::isfinite(g.origin.y)||!std::isfinite(g.font_size)||!std::isfinite(g.angle_radians))continue;
         const auto p0=matrix.apply({g.bounds.left,g.bounds.bottom}),p1=matrix.apply({g.bounds.right,g.bounds.top});
         Rect visible{std::min(p0.x,p1.x),std::min(p0.y,p1.y),std::max(p0.x,p1.x),std::max(p0.y,p1.y)};
         if(visible.right<=0||visible.left>=width||visible.bottom<=0||visible.top>=height)continue;

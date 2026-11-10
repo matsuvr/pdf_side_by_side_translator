@@ -1,0 +1,32 @@
+{
+  "origin": "Original generated stress and interoperability documents",
+  "P09-large.pdf": {
+    "page_count": 300,
+    "media_box": [
+      0,
+      0,
+      30000,
+      30000
+    ],
+    "first_marker": "Large page 0001",
+    "last_marker": "Large page 0300",
+    "incremental_rows_on_first_page": 1000
+  },
+  "P10-complex.pdf": {
+    "contains": "Complex paths and an original procedural image.",
+    "path_count": 24000,
+    "image_size": [
+      1024,
+      1024
+    ]
+  },
+  "P11-password.pdf": {
+    "password": "reader-fixture",
+    "contains": "Password fixture: there are 11 samples.",
+    "security": "Legacy fixture encryption only, no real data"
+  },
+  "P12": {
+    "path": "P12 日本語 と 空白/長めのフォルダー 読書と翻訳の確認用/原文 PDF と 訳文.pdf",
+    "contains": "Native path fixture: 12 samples."
+  }
+}

@@ -43,16 +43,25 @@ PdfPageInfo describe(FPDF_PAGE page) {
     return {w,h,transform(page,1024,normalized_height,0).pdf_to_page_px,1024.0,static_cast<double>(normalized_height)};
 }
 struct ExtractedPage {PdfPageInfo info;std::shared_ptr<const PageLayout> layout;};
-ExtractedPage extract_page(Page& page,PageIndex index,const std::atomic_bool& stopping,
-                           const std::atomic<DocumentEpoch>& requested_document,DocumentEpoch epoch){
-    if(!page.text)page.text=FPDFText_LoadPage(page.page);
-    if(!page.text)throw std::runtime_error("このページの文字を抽出できません。");
+struct TextExtraction {
+    std::shared_ptr<Page> owner;
+    PageIndex index;
     std::vector<GlyphRecord> glyphs;
-    const int count=FPDFText_CountChars(page.text);
-    if(count<0)throw std::runtime_error("文字数を取得できません。");
-    glyphs.reserve(static_cast<std::size_t>(count));
-    for(int i=0;i<count&&!stopping.load();++i){
-        if(i%256==0&&requested_document.load()!=epoch)throw std::runtime_error("ページの抽出を中断しました。");
+    int cursor=0,count=0;
+    std::optional<PdfSearchRequest> search;
+    TextExtraction(std::shared_ptr<Page> page,PageIndex number,std::optional<PdfSearchRequest> request={})
+        :owner(std::move(page)),index(number),search(std::move(request)){
+        if(!owner->text)owner->text=FPDFText_LoadPage(owner->page);
+        if(!owner->text)throw std::runtime_error("このページの文字を抽出できません。");
+        count=FPDFText_CountChars(owner->text);if(count<0)throw std::runtime_error("文字数を取得できません。");
+        glyphs.reserve(static_cast<std::size_t>(count));
+    }
+    bool step(const std::atomic_bool& stopping,const std::atomic<DocumentEpoch>& wanted,DocumentEpoch epoch){
+        auto& page=*owner;const auto deadline=Clock::now()+std::chrono::milliseconds(10);
+        const auto slice_end=cursor+std::min(2048,count-cursor);
+        for(;cursor<slice_end;++cursor){
+        if(cursor%64==0){if(stopping.load()||wanted.load()!=epoch)throw std::runtime_error("ページの抽出を中断しました。");if(Clock::now()>=deadline)return false;}
+        const auto i=cursor;
         GlyphRecord g;g.index=static_cast<PdfCharIndex>(i);
         g.unicode=static_cast<char32_t>(FPDFText_GetUnicode(page.text,i));
         g.valid_bounds=FPDFText_GetCharBox(page.text,i,&g.bounds.left,&g.bounds.right,&g.bounds.bottom,&g.bounds.top);
@@ -73,12 +82,11 @@ ExtractedPage extract_page(Page& page,PageIndex index,const std::atomic_bool& st
             g.font_id=hash^static_cast<std::uint32_t>(flags);
         }
         glyphs.push_back(g);
+        }
+        return cursor==count;
     }
-    if(stopping.load()||requested_document.load()!=epoch)throw std::runtime_error("ページの抽出を中断しました。");
-    const auto info=describe(page.page);
-    return {info,std::make_shared<const PageLayout>(LayoutEngine{}.build(index,std::move(glyphs),
-        info.pdf_to_layout,info.layout_width,info.layout_height))};
-}
+    ExtractedPage finish(){const auto info=describe(owner->page);return {info,std::make_shared<const PageLayout>(LayoutEngine{}.build(index,std::move(glyphs),info.pdf_to_layout,info.layout_width,info.layout_height))};}
+};
 bool same_geometry(const TileKey& a,const ViewRequest& b) {
     return a.document==b.document&&a.page==b.page&&a.full_width==b.width&&
         a.full_height==b.height&&a.rotation==b.rotation;
@@ -97,9 +105,15 @@ struct PdfService::Impl {
     std::optional<ViewRequest> requested_view;
     std::optional<PdfSearchRequest> searching;
     std::deque<std::pair<DocumentEpoch,PageIndex>> extraction;
+    std::optional<std::pair<DocumentEpoch,PageIndex>> extracting;
     std::atomic_bool stopping{false},finished{false};
     std::atomic<std::uint64_t> request_generation{0};
     std::atomic<DocumentEpoch> requested_document{0};
+    std::atomic<PageIndex> displayed_page{0};
+    std::atomic<std::uint64_t> desired_query{0};
+    std::atomic<std::uint64_t> page_peak{0},queue_peak{0},tile_peak{0},render_slices{0},render_yields{0},text_slices{0},text_yields{0},render_max_us{0};
+    static void maximum(std::atomic<std::uint64_t>& target,std::uint64_t value){auto prior=target.load();while(prior<value&&!target.compare_exchange_weak(prior,value)){}}
+    void render_slice(Clock::time_point start,int status){++render_slices;if(status==FPDF_RENDER_TOBECONTINUED)++render_yields;maximum(render_max_us,std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-start).count());}
     std::thread worker;
     explicit Impl(Delivery callback,std::filesystem::path fonts):delivery(std::move(callback)),font_directory(std::move(fonts)),worker([this]{run();}){}
     ~Impl(){stopping=true;cv.notify_one();if(worker.joinable())worker.join();}
@@ -134,11 +148,12 @@ struct PdfService::Impl {
             FPDF_DOCUMENT document=nullptr;
             std::list<std::pair<PageIndex,std::shared_ptr<Page>>> pages;
             std::unique_ptr<ActiveRender> active;
+            std::unique_ptr<TextExtraction> text_work;
             std::deque<TileKey> tiles;
             std::optional<ViewRequest> view;
             DocumentEpoch epoch=0;
             unsigned page_count=0,completed_tiles=0;
-            auto release=[&]{active.reset();tiles.clear();view.reset();pages.clear();if(document)FPDF_CloseDocument(document);document=nullptr;file.reset();page_count=0;};
+            auto release=[&]{active.reset();text_work.reset();{std::lock_guard lock(mutex);extracting.reset();}tiles.clear();view.reset();pages.clear();if(document)FPDF_CloseDocument(document);document=nullptr;file.reset();page_count=0;};
             struct SessionGuard {decltype(release)& release;~SessionGuard(){release();}} session{release};
             auto get_page=[&](PageIndex index)->std::shared_ptr<Page>{
                 if(!document||index>=page_count)throw std::runtime_error("ページ番号が範囲外です。");
@@ -153,6 +168,7 @@ struct PdfService::Impl {
                     if(victim==pages.rend())break;
                     pages.erase(std::next(victim).base());
                 }
+                maximum(page_peak,pages.size());
                 return p;
             };
             while(!stopping.load()) {
@@ -167,6 +183,7 @@ struct PdfService::Impl {
                 }
                 PageIndex operation_page=view?view->page:0;
                 std::uint64_t operation_query=0;
+                bool text_operation=false;
                 try {
                     if(open){
                         release();epoch=open->epoch;
@@ -220,7 +237,9 @@ struct PdfService::Impl {
                     }
                     if(active){
                         active->deadline=Clock::now()+std::chrono::milliseconds(10);
+                        const auto slice_started=Clock::now();
                         active->status=FPDF_RenderPage_Continue(active->page->page,active.get());
+                        render_slice(slice_started,active->status);
                         if(active->status==FPDF_RENDER_TOBECONTINUED)continue;
                         if(active->status!=FPDF_RENDER_DONE)throw std::runtime_error("このタイルを描画できません。");
                         PdfEvent e;e.kind=PdfEvent::Kind::TileReady;e.document=epoch;e.page=active->key.page;
@@ -228,33 +247,71 @@ struct PdfService::Impl {
                         active.reset();emit(std::move(e));++completed_tiles;
                         continue;
                     }
+                    if(text_work&&text_work->search&&text_work->search->generation!=desired_query.load())text_work.reset();
                     std::optional<std::pair<DocumentEpoch,PageIndex>> text_request;
                     std::optional<PdfSearchRequest> search_request;
+                    std::optional<PageIndex> deferred;
                     if(tiles.empty()||completed_tiles>=4){
                         std::lock_guard lock(mutex);
-                        if(!extraction.empty()){text_request=extraction.front();extraction.pop_front();completed_tiles=0;}
-                        else if(searching){search_request=std::move(searching);searching.reset();completed_tiles=0;}
+                        // A visible-page request outranks background extraction
+                        // or search. Requeue only the request, not a second raw
+                        // glyph buffer, and continue after the prioritized page.
+                        auto visible=std::find(extraction.begin(),extraction.end(),std::pair{epoch,displayed_page.load()});
+                        if(text_work&&visible!=extraction.end()&&(text_work->search||text_work->index!=visible->second)){
+                            if(text_work->search){if(!searching&&text_work->search->generation==desired_query.load())searching=std::move(text_work->search);}
+                            else{
+                                const auto previous=std::pair{epoch,text_work->index};
+                                if(std::find(extraction.begin(),extraction.end(),previous)==extraction.end()){
+                                    if(extraction.size()<64)extraction.push_back(previous);else deferred=text_work->index;
+                                }
+                                extracting.reset();
+                            }
+                            text_work.reset();
+                        }
+                        if(!text_work){
+                            visible=std::find(extraction.begin(),extraction.end(),std::pair{epoch,displayed_page.load()});
+                            if(visible!=extraction.end()){text_request=*visible;extraction.erase(visible);}
+                            else if(!extraction.empty()){text_request=extraction.front();extraction.pop_front();}
+                            else if(searching){search_request=std::move(searching);searching.reset();}
+                        }
                     }
+                    if(deferred){PdfEvent e;e.kind=PdfEvent::Kind::ExtractionDeferred;e.document=epoch;e.page=*deferred;emit(std::move(e));}
                     if(text_request){
+                        text_operation=true;
                         if(text_request->first!=epoch)continue;
                         operation_page=text_request->second;
-                        auto extracted=extract_page(*get_page(operation_page),operation_page,stopping,requested_document,epoch);
-                        PdfEvent e;e.kind=PdfEvent::Kind::Extracted;e.document=epoch;e.page=operation_page;
-                        e.info=extracted.info;e.layout=std::move(extracted.layout);
-                        emit(std::move(e));continue;
+                        text_work=std::make_unique<TextExtraction>(get_page(operation_page),operation_page);
+                        {std::lock_guard lock(mutex);extracting=std::pair{epoch,operation_page};std::erase(extraction,*extracting);}
                     }
                     if(search_request){
+                        text_operation=true;
                         if(search_request->document!=epoch)continue;
                         operation_page=search_request->page;operation_query=search_request->generation;
                         if(!file||file->signature()!=file->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
                         auto layout=search_request->cached_layout;
                         if(!layout||layout->page!=operation_page||layout->layout_version!=PageLayout::current_version)
-                            layout=extract_page(*get_page(operation_page),operation_page,stopping,requested_document,epoch).layout;
-                        PdfEvent e;e.kind=PdfEvent::Kind::SearchResult;e.document=epoch;e.page=operation_page;
-                        e.query_generation=search_request->generation;e.layout=layout;
-                        e.hit=search_request->backward?find_text_backward(*layout,search_request->query,search_request->start,search_request->match_case):
-                            find_text(*layout,search_request->query,search_request->start,search_request->match_case);
-                        emit(std::move(e));continue;
+                            text_work=std::make_unique<TextExtraction>(get_page(operation_page),operation_page,std::move(search_request));
+                        else {
+                            PdfEvent e;e.kind=PdfEvent::Kind::SearchResult;e.document=epoch;e.page=operation_page;
+                            e.query_generation=search_request->generation;e.layout=layout;
+                            e.hit=search_request->backward?find_text_backward(*layout,search_request->query,search_request->start,search_request->match_case):find_text(*layout,search_request->query,search_request->start,search_request->match_case);
+                            emit(std::move(e));continue;
+                        }
+                    }
+                    if(text_work&&(tiles.empty()||completed_tiles>=4)){
+                        text_operation=true;
+                        completed_tiles=0;operation_page=text_work->index;operation_query=text_work->search?text_work->search->generation:0;
+                        if(!file||file->signature()!=file->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
+                        ++text_slices;const bool complete=text_work->step(stopping,requested_document,epoch);if(!complete)++text_yields;
+                        if(complete){
+                            auto extracted=text_work->finish();PdfEvent e;e.document=epoch;e.page=operation_page;e.info=extracted.info;e.layout=std::move(extracted.layout);
+                            if(text_work->search){const auto& s=*text_work->search;e.kind=PdfEvent::Kind::SearchResult;e.query_generation=s.generation;
+                                e.hit=s.backward?find_text_backward(*e.layout,s.query,s.start,s.match_case):find_text(*e.layout,s.query,s.start,s.match_case);}
+                            else e.kind=PdfEvent::Kind::Extracted;
+                            if(!text_work->search){std::lock_guard lock(mutex);extracting.reset();}
+                            text_work.reset();emit(std::move(e));
+                        }
+                        continue;
                     }
                     if(!tiles.empty()){
                         const auto key=tiles.front();tiles.pop_front();operation_page=key.page;
@@ -264,12 +321,15 @@ struct PdfService::Impl {
                         active->pixels=std::make_shared<RasterBuffer>();auto& r=*active->pixels;
                         r.width=std::min(512,key.full_width-key.x);r.height=std::min(512,key.full_height-key.y);r.stride=r.width*4;
                         r.bgra.resize(static_cast<std::size_t>(r.stride)*r.height,255);
+                        maximum(tile_peak,r.bgra.size());
                         active->bitmap=FPDFBitmap_CreateEx(r.width,r.height,FPDFBitmap_BGRA,r.bgra.data(),r.stride);
                         if(!active->bitmap)throw std::runtime_error("描画用メモリを確保できません。");
                         FPDFBitmap_FillRect(active->bitmap,0,0,r.width,r.height,0xffffffff);
                         active->deadline=Clock::now()+std::chrono::milliseconds(10);active->started=true;
+                        const auto slice_started=Clock::now();
                         active->status=FPDF_RenderPageBitmap_Start(active->bitmap,active->page->page,-key.x,-key.y,
                             key.full_width,key.full_height,key.rotation,key.flags,active.get());
+                        render_slice(slice_started,active->status);
                         if(active->status==FPDF_RENDER_DONE){
                             PdfEvent e;e.kind=PdfEvent::Kind::TileReady;e.document=epoch;e.page=key.page;e.key=key;
                             e.transform=active->mapping;e.pixels=active->pixels;active.reset();emit(std::move(e));++completed_tiles;
@@ -277,12 +337,13 @@ struct PdfService::Impl {
                         continue;
                     }
                 }catch(const std::exception& error){
-                    active.reset();tiles.clear();
+                    active.reset();
+                    if(text_operation){text_work.reset();std::lock_guard lock(mutex);extracting.reset();}else tiles.clear();
                     PdfEvent e;e.kind=PdfEvent::Kind::Failed;e.document=epoch;e.page=operation_page;
                     e.code=operation_query?"PdfSearch":open?"PdfOpen":"PdfPage";e.query_generation=operation_query;e.message=error.what();emit(std::move(e));
                 }
                 std::unique_lock lock(mutex);
-                cv.wait(lock,[&]{return stopping.load()||opening||requested_page||requested_view||searching||!extraction.empty();});
+                cv.wait(lock,[&]{return stopping.load()||opening||requested_page||requested_view||searching||!extraction.empty()||text_work;});
             }
         }catch(...){
             stopping=true;
@@ -296,32 +357,39 @@ PdfService::~PdfService()=default;
 void PdfService::open(DocumentEpoch epoch,const std::filesystem::path& path,std::string password){
     std::lock_guard lock(impl_->mutex);impl_->opening=Impl::OpenRequest{epoch,path,std::move(password)};
     impl_->requested_document=epoch;
+    impl_->displayed_page=0;
     impl_->requested_view.reset();impl_->requested_page.reset();impl_->extraction.clear();impl_->searching.reset();
     ++impl_->request_generation;impl_->cv.notify_one();
 }
 void PdfService::close(DocumentEpoch epoch){open(epoch,{});}
 void PdfService::page_info(DocumentEpoch epoch,PageIndex page){
-    std::lock_guard lock(impl_->mutex);impl_->requested_page=std::pair{epoch,page};
+    std::lock_guard lock(impl_->mutex);if(epoch!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->requested_page=std::pair{epoch,page};
+    impl_->displayed_page=page;
     ++impl_->request_generation;impl_->cv.notify_one();
 }
 void PdfService::viewport(ViewRequest request){
     if(request.tiles.size()>64)request.tiles.resize(64);
-    std::lock_guard lock(impl_->mutex);impl_->requested_view=std::move(request);
+    std::lock_guard lock(impl_->mutex);if(request.document!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->displayed_page=request.page;impl_->requested_view=std::move(request);
     ++impl_->request_generation;impl_->cv.notify_one();
 }
 bool PdfService::extract(DocumentEpoch epoch,PageIndex page){
     std::lock_guard lock(impl_->mutex);const auto key=std::pair{epoch,page};
-    if(impl_->stopping.load())return false;
+    if(impl_->stopping.load()||epoch!=impl_->requested_document.load())return false;
+    if(impl_->extracting==key)return true;
     if(std::find(impl_->extraction.begin(),impl_->extraction.end(),key)==impl_->extraction.end()){
         if(impl_->extraction.size()>=64)return false;
         impl_->extraction.push_back(key);
+        Impl::maximum(impl_->queue_peak,impl_->extraction.size());
     }
     impl_->cv.notify_one();return true;
 }
 void PdfService::search(PdfSearchRequest request){
-    std::lock_guard lock(impl_->mutex);impl_->searching=std::move(request);impl_->cv.notify_one();
+    std::lock_guard lock(impl_->mutex);if(request.document!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->desired_query=request.generation;impl_->searching=std::move(request);impl_->cv.notify_one();
 }
 void PdfService::stop() noexcept{impl_->stopping=true;impl_->cv.notify_one();}
 bool PdfService::done() const noexcept{return impl_->finished.load();}
 void PdfService::join(){if(impl_->worker.joinable())impl_->worker.join();}
+PdfServiceStats PdfService::stats()const noexcept{
+    const auto& p=*impl_;return {p.page_peak.load(),p.queue_peak.load(),p.tile_peak.load(),p.render_slices.load(),p.render_yields.load(),p.text_slices.load(),p.text_yields.load(),p.render_max_us.load()};
+}
 }

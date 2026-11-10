@@ -1,4 +1,5 @@
 #include "storage/io_service.hpp"
+#include "platform/access_path.hpp"
 #include <condition_variable>
 #include <deque>
 #include <fstream>
@@ -17,13 +18,13 @@ bool formal(std::string_view key){return key.starts_with("sha256:");}
 void atomic_export(const std::filesystem::path& destination,const std::function<void(std::ostream&)>& writer){
     auto temporary=destination;temporary+=std::filesystem::path(".tmp-"+new_uuid());
     try{
-        {std::ofstream file(temporary,std::ios::binary|std::ios::trunc);if(!file)throw std::runtime_error("Export destination cannot be opened");writer(file);file.flush();if(!file)throw std::runtime_error("Export write failed");}
+        {std::ofstream file(access_path(temporary),std::ios::binary|std::ios::trunc);if(!file)throw std::runtime_error("Export destination cannot be opened");writer(file);file.flush();if(!file)throw std::runtime_error("Export write failed");}
 #ifdef _WIN32
-        if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::system_error(GetLastError(),std::system_category(),"Replace export");
+        if(!MoveFileExW(access_path(temporary).c_str(),access_path(destination).c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::system_error(GetLastError(),std::system_category(),"Replace export");
 #else
         std::filesystem::rename(temporary,destination);
 #endif
-    }catch(...){std::error_code ignored;std::filesystem::remove(temporary,ignored);throw;}
+    }catch(...){std::error_code ignored;std::filesystem::remove(access_path(temporary),ignored);throw;}
 }
 }
 struct IoService::Impl {

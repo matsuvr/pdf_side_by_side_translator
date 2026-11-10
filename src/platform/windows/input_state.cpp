@@ -8,7 +8,7 @@ namespace opt {
 bool input_composing(wxWindow* focused){
     if(!focused)return false;auto handle=GetFocus();if(!handle)handle=(HWND)focused->GetHandle();
     const auto context=ImmGetContext(handle);if(!context)return false;
-    DWORD candidates=0;const bool composing=ImmGetCompositionStringW(context,GCS_COMPSTR,nullptr,0)>0||ImmGetCandidateListCountW(context,&candidates)>0;
+    const bool composing=ImmGetCompositionStringW(context,GCS_COMPSTR,nullptr,0)>0;
     ImmReleaseContext(handle,context);return composing;
 }
 struct NativeShortcutMonitor::Impl {};

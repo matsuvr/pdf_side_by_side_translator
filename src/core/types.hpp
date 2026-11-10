@@ -79,4 +79,5 @@ struct PageLayout {
     Availability availability=Availability::NoTextLayer;
 };
 std::string encode_utf8(char32_t scalar);
+std::size_t layout_memory_bytes(const PageLayout& layout);
 }

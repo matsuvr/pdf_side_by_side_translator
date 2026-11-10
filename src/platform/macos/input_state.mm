@@ -24,7 +24,7 @@ struct NativeShortcutMonitor::Impl {
             else if(character==NSF6FunctionKey)key=ShortcutKey::F6;else if(character==27)key=ShortcutKey::Escape;
             if(key==ShortcutKey::Other)return event;
             ShortcutContext context;context.composing=composing(state->window);context.primary=(modifiers&NSEventModifierFlagCommand)!=0;
-            context.shift=(modifiers&NSEventModifierFlagShift)!=0;context.alt=(modifiers&NSEventModifierFlagOption)!=0;
+            context.shift=(modifiers&NSEventModifierFlagShift)!=0;context.alt=(modifiers&(NSEventModifierFlagOption|NSEventModifierFlagControl))!=0;
             return state->handler(key,context)?nil:event;
         }];
     }

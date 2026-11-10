@@ -9,7 +9,7 @@
 #include <climits>
 
 namespace opt {
-namespace {constexpr int render_flags=1;constexpr std::size_t gui_cache_budget=64*1024*1024;}
+namespace {constexpr int render_flags=1;constexpr std::size_t gui_cache_budget=96*1024*1024;}
 PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxID_ANY),sink_(std::move(sink)){
     SetName(wxS("PDF原文"));SetBackgroundStyle(wxBG_STYLE_PAINT);SetScrollRate(1,1);
     Bind(wxEVT_PAINT,&PdfCanvas::paint,this);
@@ -232,9 +232,13 @@ void PdfCanvas::paint(wxPaintEvent&){
             auto highlight=[&](const auto& range,wxColour colour){
                 if(!range)return;
                 gc->SetBrush(wxBrush(colour));const auto [a,b]=*range;
+                std::optional<PdfRect> previous_box;
                 for(const auto source:source_ranges(*layout_,std::min(a,b),std::max(a,b)))
                     for(std::uint64_t i=source.first;i<static_cast<std::uint64_t>(source.first)+source.count&&i<layout_->glyphs.size();++i){
                         const auto& g=layout_->glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds||g.unicode_continuation)continue;
+                        if(g.bounds.right<=g.bounds.left||g.bounds.top<=g.bounds.bottom)continue;
+                        if(previous_box&&previous_box->left==g.bounds.left&&previous_box->right==g.bounds.right&&previous_box->top==g.bounds.top&&previous_box->bottom==g.bounds.bottom)continue;
+                        previous_box=g.bounds;
                         const auto p=transform_->pdf_to_page_px.apply({g.bounds.left,g.bounds.bottom});
                         const auto q=transform_->pdf_to_page_px.apply({g.bounds.right,g.bounds.top});
                         gc->DrawRectangle(origin_.x+std::min(p.x,q.x)/scale_,origin_.y+std::min(p.y,q.y)/scale_,

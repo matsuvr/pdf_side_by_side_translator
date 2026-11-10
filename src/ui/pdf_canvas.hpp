@@ -17,6 +17,7 @@ public:
     void set_zoom(ZoomMode mode,double percentage=100);
     void rotate(int quarter_delta);
     void accept(const PdfEvent& event);
+    void retry_missing_tiles(){last_request_.reset();schedule();}
     void clear_document();
     void set_layout(std::shared_ptr<const PageLayout> layout);
     bool copy_selection() const;

@@ -49,7 +49,7 @@ struct PdfSearchRequest {
     std::shared_ptr<const PageLayout> cached_layout;
 };
 struct PdfEvent {
-    enum class Kind { Opened, Closed, PageInfo, ViewReady, TileReady, Extracted, SearchResult, PasswordRequired, Failed };
+    enum class Kind { Opened, Closed, PageInfo, ViewReady, TileReady, Extracted, ExtractionDeferred, SearchResult, PasswordRequired, Failed };
     Kind kind=Kind::Failed;
     DocumentEpoch document=0;
     PageIndex page=0;
@@ -64,6 +64,9 @@ struct PdfEvent {
     std::uint64_t query_generation=0;
     std::optional<TextHit> hit;
     std::string code,message,detail;
+};
+struct PdfServiceStats {
+    std::uint64_t page_cache_peak=0,extraction_queue_peak=0,tile_bytes_peak=0,render_slices=0,render_yields=0,text_slices=0,text_yields=0,max_render_slice_us=0;
 };
 class PdfService {
 public:
@@ -81,6 +84,7 @@ public:
     void stop() noexcept;
     bool done() const noexcept;
     void join();
+    PdfServiceStats stats()const noexcept;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

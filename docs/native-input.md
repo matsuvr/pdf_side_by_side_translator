@@ -12,7 +12,7 @@ NSEvent monitor therefore handles only the declared shortcuts for the main
 window. Marked text, other windows and menu tracking pass through. This is an
 app-local event monitor, not a system keyboard hook. The public NSTextInputClient
 marked-text state is checked before dispatch. On Windows, the native composition
-string/candidate state comes from IMM32 and wx's key hook handles routing.
+string state comes from IMM32 and wx's key hook handles routing.
 
 Native macOS testing initially found that Primary+G did not reach the wx hook
 when there was no focused child. After the Cocoa monitor and initial PDF focus

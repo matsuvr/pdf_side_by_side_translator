@@ -1,6 +1,7 @@
 #include "pdf/layout.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <limits>
 
 void check(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
 int main(){
@@ -32,6 +33,12 @@ int main(){
         unknown[0].unicode=' ';unknown[0].unicode_map_error=false;
         auto whitespace=opt::LayoutEngine{}.build(0,unknown,{1,0,0,-1,0,100},300,100);
         check(whitespace.availability==opt::PageLayout::Availability::NoTranslatableText,"Whitespace was sent for translation");
+        std::vector<opt::GlyphRecord> pieces{{0,'f',{10,80,25,92},{10,80},12,0,1,false,true,false},{1,'i',{10,80,25,92},{10,80},12,0,1,false,true,false}};
+        auto piece_layout=opt::LayoutEngine{}.build(0,pieces,{1,0,0,-1,0,100},300,100);
+        check(piece_layout.reading_text_utf8=="fi"&&piece_layout.reading_mapping.size()==1&&piece_layout.reading_mapping[0].source_ranges[0].count==2,"PDFium's co-located ligature pieces were not one selectable glyph");
+        check(opt::nearest_text_position(piece_layout,{24,85})==2,"Selecting a ligature's right edge loses part of its text");
+        pieces[0].bounds.left=std::numeric_limits<double>::quiet_NaN();pieces.resize(1);
+        auto nonfinite=opt::LayoutEngine{}.build(0,pieces,{1,0,0,-1,0,100},300,100);check(nonfinite.reading_text_utf8.empty(),"Non-finite glyph geometry reached sorting/hit testing");
         std::cout<<"Normalization, source mapping, search, crop and availability checks passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

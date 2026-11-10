@@ -1,4 +1,5 @@
 #include "storage/store.hpp"
+#include "platform/access_path.hpp"
 #include "core/utf8.hpp"
 #include <sqlite3.h>
 #include <algorithm>
@@ -55,8 +56,8 @@ class StoreLease {
 #endif
 public:
     bool acquire(const std::filesystem::path& directory){
-        std::error_code error;std::filesystem::create_directories(directory,error);if(error)return false;
-        const auto path=directory/"storage.lock";
+        std::error_code error;std::filesystem::create_directories(access_path(directory),error);if(error)return false;
+        const auto path=access_path(directory/"storage.lock");
 #ifdef _WIN32
         file_=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
         if(file_==INVALID_HANDLE_VALUE)return false;
@@ -111,10 +112,10 @@ struct Store::Impl {
     bool memory_only=false;
     void owns()const{if(owner!=std::this_thread::get_id())throw std::logic_error("SQLite owner thread mismatch");}
     sqlite3* open(const std::filesystem::path& directory,const char* filename,const char* schema,bool disposable,bool& persistent){
-        sqlite3* db=nullptr;const auto file=directory/filename;bool future=false;
+        sqlite3* db=nullptr;const auto file=access_path(directory/filename);bool future=false;
         if(memory_only){check(sqlite3_open_v2(":memory:",&db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),db);sql(db,schema);return db;}
         try{
-            std::filesystem::create_directories(directory);
+            std::filesystem::create_directories(access_path(directory));
             check(sqlite3_open_v2(utf8(file).c_str(),&db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),db);
             sqlite3_busy_timeout(db,1000);
             std::int64_t version=0;{Statement s(db,"PRAGMA user_version");if(s.step())version=s.number(0);}

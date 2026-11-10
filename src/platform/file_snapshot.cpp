@@ -1,4 +1,5 @@
 #include "platform/file_snapshot.hpp"
+#include "platform/access_path.hpp"
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -45,7 +46,7 @@ FileSnapshot::~FileSnapshot()=default;
 std::shared_ptr<const FileSnapshot> FileSnapshot::open(const std::filesystem::path& path){
     auto impl=std::make_unique<Impl>();
 #ifdef _WIN32
-    impl->file=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
+    impl->file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OVERLAPPED|FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
     if(impl->file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open file");
 #else

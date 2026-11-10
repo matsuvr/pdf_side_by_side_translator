@@ -10,7 +10,7 @@ from pathlib import Path
 from common import ROOT
 
 
-def write_pdf(path, pages, attributes=None, image=False):
+def write_pdf(path, pages, attributes=None, image=False, page_size=(612, 792)):
     objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"",
                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
     if image:
@@ -27,7 +27,7 @@ def write_pdf(path, pages, attributes=None, image=False):
         stream = ("\n".join(commands) + "\n").encode("ascii")
         extra = attributes[index] if attributes else ""
         xobject = "/XObject << /Im0 4 0 R >>" if image else ""
-        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] {extra} /Resources << /Font << /F1 3 0 R >> {xobject} >> /Contents {stream_id} 0 R >>".encode())
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_size[0]} {page_size[1]}] {extra} /Resources << /Font << /F1 3 0 R >> {xobject} >> /Contents {stream_id} 0 R >>".encode())
         objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"endstream")
     objects[1] = f"<< /Type /Pages /Count {len(kids)} /Kids [{' '.join(kids)}] >>".encode()
     data = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")

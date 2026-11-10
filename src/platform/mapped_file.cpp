@@ -1,4 +1,5 @@
 #include "platform/mapped_file.hpp"
+#include "platform/access_path.hpp"
 #include "platform/file_snapshot.hpp"
 #include <limits>
 #include <stdexcept>
@@ -44,7 +45,7 @@ struct MappedFile::Impl {
 MappedFile::MappedFile(const std::filesystem::path& path):impl_(std::make_unique<Impl>()) {
     auto& p=*impl_;
 #ifdef _WIN32
-    p.file=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    p.file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(p.file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open file");
 #else
     p.file=open(path.c_str(),O_RDONLY|O_CLOEXEC);

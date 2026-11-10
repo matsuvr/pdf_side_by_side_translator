@@ -1,5 +1,6 @@
 #include "app/controller.hpp"
 #include "pdf/pdf_service.hpp"
+#include "pdf/delivery_inbox.hpp"
 #include "platform/font.hpp"
 #include "platform/text_view.hpp"
 #include "platform/input_state.hpp"
@@ -54,35 +55,6 @@ public:
     explicit PdfDropTarget(std::function<void(const wxString&)> callback):open_(std::move(callback)){}
     bool OnDropFiles(wxCoord,wxCoord,const wxArrayString& names) override {
         if(names.empty())return false;open_(names[0]);return true;
-    }
-};
-// Worker delivery has one pending wake event and a bounded raster payload budget.
-class PdfInbox {
-    std::mutex mutex_;
-    std::deque<std::shared_ptr<const PdfEvent>> queue_;
-    std::size_t bytes_=0;
-    bool wake_=false;
-    static std::size_t size(const std::shared_ptr<const PdfEvent>& e){return e->pixels?e->pixels->bgra.size():0;}
-public:
-    bool push(std::shared_ptr<const PdfEvent> e){
-        std::lock_guard lock(mutex_);
-        for(auto i=queue_.begin();i!=queue_.end();){
-            if((*i)->document!=e->document||
-               ((*i)->kind==e->kind&&(*i)->page==e->page&&(!e->pixels||(*i)->key==e->key))){
-                bytes_-=size(*i);i=queue_.erase(i);
-            }else ++i;
-        }
-        constexpr auto budget=32U*1024*1024;
-        while(!queue_.empty()&&(bytes_+size(e)>budget||queue_.size()>=64)){
-            auto victim=std::find_if(queue_.begin(),queue_.end(),[](const auto& p){return bool(p->pixels);});
-            if(victim==queue_.end())victim=queue_.begin();
-            bytes_-=size(*victim);queue_.erase(victim);
-        }
-        bytes_+=size(e);queue_.push_back(std::move(e));
-        const bool notify=!wake_;wake_=true;return notify;
-    }
-    auto take(){
-        std::lock_guard lock(mutex_);auto result=std::move(queue_);queue_.clear();bytes_=0;wake_=false;return result;
     }
 };
 class InferenceInbox {
@@ -197,7 +169,12 @@ struct ApplicationController::Impl {
     bool closing=false;
 
     explicit Impl(ApplicationController& receiver):owner(receiver),close_timer(&receiver),search_timer(&receiver),translate_timer(&receiver),stream_timer(&receiver),position_timer(&receiver),batch_timer(&receiver){
-        owner.Bind(PDF_WAKE,[this](wxThreadEvent&){for(auto& e:inbox.take())if(!closing)receive(*e);});
+        owner.Bind(PDF_WAKE,[this](wxThreadEvent&){
+            auto delivered=inbox.take();for(auto& e:delivered.events)if(!closing)receive(*e);
+            if(closing)return;
+            if(delivered.lost_layout){requested_layouts.clear();if(document_state==DocumentState::Ready){request_layout(page);if(scheduled_page)request_layout(*scheduled_page);if(search.active)search_step();}}
+            if(delivered.lost_raster)canvas->retry_missing_tiles();
+        });
         owner.Bind(INFERENCE_WAKE,[this](wxThreadEvent&){for(auto& e:inference_inbox.take())if(!closing)receive(*e);});
         owner.Bind(IO_WAKE,[this](wxThreadEvent&){for(auto& e:io_inbox.take())if(!closing)receive(*e);});
         owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){
@@ -610,13 +587,7 @@ struct ApplicationController::Impl {
         found->second.used=++layout_tick;return found->second.layout;
     }
     void cache_layout(PageIndex index,std::shared_ptr<const PageLayout> layout){
-        std::size_t bytes=sizeof(PageLayout)+layout->glyphs.size()*sizeof(GlyphRecord)+layout->reading_text_utf8.size()+layout->lines.size()*sizeof(TextLine);
-        auto mappings=[&](const auto& values){bytes+=values.size()*sizeof(TextMapping);for(const auto& m:values)bytes+=m.source_ranges.size()*sizeof(SourceCharRange);};
-        mappings(layout->reading_mapping);
-        for(const auto& block:layout->blocks){
-            bytes+=sizeof(TextBlock)+block.reading_text_utf8.size()+block.translation_input_utf8.size()+block.source_rects.size()*sizeof(PdfRect)+block.lines.size()*sizeof(TextLine);
-            mappings(block.reading_mapping);mappings(block.translation_mapping);
-        }
+        const auto bytes=layout_memory_bytes(*layout);
         if(auto old=layouts.find(index);old!=layouts.end())layout_bytes-=old->second.bytes;
         layouts.insert_or_assign(index,CachedLayout{std::move(layout),bytes,++layout_tick});layout_bytes+=bytes;
         while(layout_bytes>32U*1024*1024&&layouts.size()>1){
@@ -635,6 +606,9 @@ struct ApplicationController::Impl {
         const auto& source=existing==overrides.end()?layout.reading_text_utf8:*existing->second;
         auto text=new wxTextCtrl(&dialog,wxID_ANY,wxString::FromUTF8(source),wxDefaultPosition,wxDefaultSize,wxTE_MULTILINE);
         text->SetName(wxS("翻訳用原文"));text->SetFont(translation->GetFont());root->Add(text,1,wxEXPAND|wxALL,frame->FromDIP(8));
+#ifdef __WXMAC__
+        text->OSXEnableAutomaticQuoteSubstitution(false);text->OSXEnableAutomaticDashSubstitution(false);
+#endif
         auto buttons=new wxBoxSizer(wxHORIZONTAL);
         auto reset=new wxButton(&dialog,wxID_REVERT_TO_SAVED,wxS("自動抽出へ戻す"));buttons->Add(reset,0,wxALL,frame->FromDIP(4));buttons->AddStretchSpacer();
         buttons->Add(new wxButton(&dialog,wxID_CANCEL,wxS("キャンセル")),0,wxALL,frame->FromDIP(4));
@@ -730,6 +704,8 @@ struct ApplicationController::Impl {
                 if(scheduled_page&&*scheduled_page==event.page)translate_timer.StartOnce(1);
             }
             break;
+        case PdfEvent::Kind::ExtractionDeferred:
+            requested_layouts.erase(event.page);if(scheduled_page&&*scheduled_page==event.page)translate_timer.StartOnce(150);break;
         case PdfEvent::Kind::SearchResult:
             if(event.layout)cache_layout(event.page,event.layout);
             if(!search.active||event.query_generation!=search.generation||event.page!=search.cursor)break;
@@ -977,7 +953,11 @@ struct ApplicationController::Impl {
             if(code==WXK_RETURN||code==WXK_NUMPAD_ENTER)key=ShortcutKey::Enter;
             else if(code=='.')key=ShortcutKey::Period;else if(code==',')key=ShortcutKey::Comma;
             else if(code=='G'||code=='g')key=ShortcutKey::G;else if(code==WXK_F6)key=ShortcutKey::F6;else if(code==WXK_ESCAPE)key=ShortcutKey::Escape;
-            if(!handle_shortcut(key,{false,input_composing(wxWindow::FindFocus()),e.CmdDown(),e.ShiftDown(),e.AltDown(),false}))e.Skip();
+            bool extra_modifier=e.AltDown();
+#ifdef __WXMAC__
+            extra_modifier|=e.RawControlDown();
+#endif
+            if(!handle_shortcut(key,{false,input_composing(wxWindow::FindFocus()),e.CmdDown(),e.ShiftDown(),extra_modifier,false}))e.Skip();
         });
         frame->Bind(wxEVT_CLOSE_WINDOW,[this](wxCloseEvent& e){
             if(!closing){save_reading_position();save_preferences();stop_batch();invalidate_translation();closing=true;native_shortcuts.reset();translate_timer.Stop();stream_timer.Stop();position_timer.Stop();search_timer.Stop();pdf->stop();inference->stop();if(io)io->stop();frame->Disable();frame->SetStatusText(wxS("終了処理中…"),0);close_timer.Start(50);}

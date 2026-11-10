@@ -11,24 +11,7 @@ from pathlib import Path
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from common import ROOT
-
-
-def objects_pdf(path, objects):
-    data = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
-    offsets = [0]
-    for index, obj in enumerate(objects, 1):
-        offsets.append(len(data))
-        data.extend(f"{index} 0 obj\n".encode() + obj + b"\nendobj\n")
-    xref = len(data)
-    data.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
-    for at in offsets[1:]:
-        data.extend(f"{at:010d} 00000 n \n".encode())
-    data.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
-    path.write_bytes(data)
-
-
-def stream(body, extra=b""):
-    return f"<< /Length {len(body)} ".encode() + extra + b">>\nstream\n" + body + b"\nendstream"
+from pdf_fixture_writer import objects_pdf, stream
 
 
 def unicode_map(pairs):
@@ -51,7 +34,7 @@ def original_font(characters):
     for index, name in enumerate(names):
         char = characters[index - 1] if index else "?"
         pen = TTGlyphPen(None)
-        if char not in (" ", "\u200d"):
+        if char not in (" ", "\u200d", "\u00ad"):
             # Small original geometric marks distinguish each glyph by bars.
             # They test PDF mappings, not the appearance of a reading font.
             if char == "\u0301":
@@ -62,7 +45,7 @@ def original_font(characters):
                     x = 40 + bar * 95
                     pen.moveTo((x, 0)); pen.lineTo((x + 45, 0)); pen.lineTo((x + 45, height)); pen.lineTo((x, height)); pen.closePath()
         glyphs[name] = pen.glyph()
-        metrics[name] = (0 if char in ("\u0301", "\u200d") else 600, -350 if char == "\u0301" else 0)
+        metrics[name] = (0 if char in ("\u0301", "\u200d", "\u00ad") else 600, -350 if char == "\u0301" else 0)
     font.setupGlyf(glyphs)
     font.setupHorizontalMetrics(metrics)
     font.setupHorizontalHeader(ascent=900, descent=-200)
@@ -106,7 +89,7 @@ def main():
                stream(unicode_map([(ord(c), c) for c in sorted(set(japanese))]))]
     objects_pdf(directory / "P06-japanese-fallback.pdf", objects)
     expected = {"origin": "Original geometric font and authored Unicode expectations",
-                "P06-unicode.pdf": {"page_count": 1, "contains": ["office", "café", "e\u0301", "👩\u200d💻", "hyphen", "re-enter"], "excludes": ["\ufffd", "\ufb01", "\u00ad"], "surrogate_mapping": ["👩", "💻"]},
+                "P06-unicode.pdf": {"page_count": 1, "contains": ["office", "café", "e\u0301", "👩\u200d💻", "hyphen", "re-enter"], "excludes": ["\ufffd", "\ufb01", "\u00ad"], "surrogate_mapping": ["👩", "💻"], "paint_cluster_mapping": ["fi"]},
                 "P06-japanese-fallback.pdf": {"page_count": 1, "contains": [japanese]}}
     (directory / "unicode-ground-truth.json").write_text(json.dumps(expected, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

@@ -33,7 +33,7 @@ for name, expected in manifest.items():
             assert 0 <= mapping["begin"] < mapping["end"] <= len(data)
             for first, count in mapping["ranges"]:
                 assert 0 <= first < first + count <= page["glyphs"]
-        for marker in expected.get("surrogate_mapping", []):
+        for marker in expected.get("surrogate_mapping", []) + expected.get("paint_cluster_mapping", []):
             start = data.index(marker.encode("utf-8"))
             matches = [m for m in page["mapping"] if m["begin"] == start and m["end"] == start + len(marker.encode("utf-8"))]
             assert len(matches) == 1 and sum(count for _, count in matches[0]["ranges"]) == 2, (name, marker, matches)
