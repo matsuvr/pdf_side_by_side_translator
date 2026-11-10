@@ -111,6 +111,7 @@ struct Store::Impl {
     std::string session=new_uuid();
     StoreLease lease;
     bool memory_only=false;
+    std::filesystem::path state_directory,cache_directory;
     std::int64_t state_clock=0,cache_clock=0;
     static std::int64_t tick(std::int64_t& clock){
         if(clock==std::numeric_limits<std::int64_t>::max())throw std::runtime_error("Persisted update sequence is exhausted");
@@ -168,7 +169,7 @@ struct Store::Impl {
             check(sqlite3_open_v2(":memory:",&db,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),db);sql(db,schema);return db;
         }
     }
-    Impl(std::filesystem::path s,std::filesystem::path c,std::uint64_t bytes):limit(bytes){
+    Impl(std::filesystem::path s,std::filesystem::path c,std::uint64_t bytes):limit(bytes),state_directory(s),cache_directory(c){
         memory_only=!lease.acquire(s);
         if(memory_only)messages.push_back("Storage directory is unavailable or another app instance owns it; this instance uses isolated memory state and cache");
         state=open(s,"state.sqlite3",state_schema,false,state_disk);cache=open(c,"cache.sqlite3",cache_schema,true,cache_disk);
@@ -345,6 +346,35 @@ std::size_t Store::for_each_complete_page(std::string_view doc,std::string_view 
     }return count;
 }
 void Store::clear_cache(){impl_->owns();Transaction tx(impl_->cache);sql(impl_->cache,"DELETE FROM attempt_chunks;DELETE FROM page_attempts;DELETE FROM completed_chunks;DELETE FROM session_completed_chunks;DELETE FROM fingerprint_promotions");tx.commit();}
+void Store::export_state(const std::filesystem::path& destination){
+    impl_->owns();
+    const auto parent=std::filesystem::weakly_canonical(access_path(destination.parent_path()));
+    for(const auto& directory:{impl_->state_directory,impl_->cache_directory}){
+        if(parent==std::filesystem::weakly_canonical(access_path(directory)))throw std::invalid_argument("Choose a destination outside active app storage");
+        for(const auto& name:{"state.sqlite3","cache.sqlite3","storage.lock"}){
+            std::error_code ec;if(std::filesystem::equivalent(access_path(destination),access_path(directory/name),ec)&&!ec)
+                throw std::invalid_argument("Cannot replace active app storage");
+        }
+    }
+    auto temporary=destination;temporary+=".tmp-"+new_uuid();sqlite3* copy=nullptr;
+    try{
+        check(sqlite3_open_v2(utf8(access_path(temporary)).c_str(),&copy,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr),copy);
+        auto* backup=sqlite3_backup_init(copy,"main",impl_->state,"main");if(!backup)throw std::runtime_error(sqlite3_errmsg(copy));
+        int result=SQLITE_OK;do{result=sqlite3_backup_step(backup,128);}while(result==SQLITE_OK);
+        const auto finished=sqlite3_backup_finish(backup);check(result==SQLITE_DONE?SQLITE_OK:result,copy);check(finished,copy);
+        // The source may use WAL; publish a self-contained single-file backup.
+        sql(copy,"PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
+        check(sqlite3_close(copy),copy);copy=nullptr;
+#ifdef _WIN32
+        if(!MoveFileExW(access_path(temporary).c_str(),access_path(destination).c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::system_error(GetLastError(),std::system_category(),"Replace state backup");
+#else
+        std::filesystem::rename(temporary,destination);
+#endif
+    }catch(...){
+        if(copy)sqlite3_close(copy);
+        for(const auto& suffix:{"","-wal","-shm","-journal"}){std::error_code ec;std::filesystem::remove(access_path(native(utf8(temporary)+suffix)),ec);}throw;
+    }
+}
 bool Store::maintain(){
     impl_->owns();
     for(;;){

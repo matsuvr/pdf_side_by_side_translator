@@ -15,7 +15,9 @@ namespace opt {
 namespace {
 std::string utf8(const std::filesystem::path& p){auto s=p.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
 bool formal(std::string_view key){return key.starts_with("sha256:");}
-void export_header(std::ostream& out,Form form){out<<"Offline PDF Translator\nモデル: PLaMo 3 Translate 0.8B\n文体: "<<(form==Form::Plain?"常体":"敬体")<<"\n\n";}
+void export_header(std::ostream& out,Form form){out<<"Offline PDF Translator\nモデル: PLaMo 3 Translate 0.8B\n文体: "<<(form==Form::Plain?"常体":"敬体")
+    <<"\nPLaMoを翻訳に利用しています。この生成物を利用して学習したモデルにはPLaMoコミュニティライセンス契約が適用されます。"
+    <<"\n利用条件: https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/blob/1cf96ae02133958a20074bfdfab76517bb737d00/LICENSE/ja\n\n";}
 void atomic_export(const std::filesystem::path& destination,const std::function<void(std::ostream&)>& writer){
     auto temporary=destination;temporary+=std::filesystem::path(".tmp-"+new_uuid());
     try{
@@ -185,6 +187,17 @@ bool IoService::export_complete(std::filesystem::path path,CacheContext context,
         IoEvent e;e.kind=IoEvent::Kind::Exported;e.message=std::to_string(count)+"ページの完成訳を書き出しました。";p->emit(std::move(e));});
 }
 bool IoService::clear_cache(){return impl_->enqueue("",[p=impl_.get()](Store& store){store.clear_cache();IoEvent e;e.kind=IoEvent::Kind::CacheCleared;p->emit(std::move(e));});}
+bool IoService::export_state(std::filesystem::path destination){
+    return impl_->enqueue("",[p=impl_.get(),destination=std::move(destination)](Store& store){store.export_state(destination);
+        IoEvent e;e.kind=IoEvent::Kind::Exported;e.message="設定・原文編集・読書位置の退避コピーを保存しました。現在の保存先は変わりません。";p->emit(std::move(e));});
+}
+bool IoService::diagnostic(DiagnosticRecord record){
+    return impl_->enqueue("diagnostic:"+std::to_string(static_cast<unsigned>(record.code)),[p=impl_.get(),record](Store&){
+        // Optional logs cannot make usable state appear unsaved. The GUI keeps
+        // its own bounded recent-code summary if the log destination fails.
+        try{append_diagnostic(p->state_directory/"logs",record);}catch(const std::exception&){}
+    });
+}
 void IoService::stop()noexcept{impl_->stop();}
 bool IoService::done()const noexcept{return impl_->finished.load();}
 void IoService::join(){if(impl_->worker.joinable())impl_->worker.join();}

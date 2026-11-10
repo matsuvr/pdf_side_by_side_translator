@@ -1,2 +1,31 @@
 #include <windows.h>
+101 ICON "@PROJECT_SOURCE_DIR@/resources/app-icon.ico"
 201 RCDATA "@OPT_FONT_RESOURCE@"
+1 VERSIONINFO
+FILEVERSION @OPT_WINDOWS_VERSION@
+PRODUCTVERSION @OPT_WINDOWS_VERSION@
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "matsuvr\0"
+      VALUE "FileDescription", "@OPT_PRODUCT_NAME@\0"
+      VALUE "FileVersion", "@OPT_VERSION@\0"
+      VALUE "InternalName", "@OPT_EXECUTABLE_NAME@\0"
+      VALUE "LegalCopyright", "Copyright (c) 2026 matsuvr; MIT License and third-party notices\0"
+      VALUE "OriginalFilename", "@OPT_EXECUTABLE_NAME@.exe\0"
+      VALUE "ProductName", "@OPT_PRODUCT_NAME@\0"
+      VALUE "ProductVersion", "@OPT_VERSION@\0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

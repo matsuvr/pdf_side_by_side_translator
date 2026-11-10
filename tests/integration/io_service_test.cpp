@@ -42,6 +42,7 @@ int main(){const auto root=std::filesystem::temp_directory_path()/std::filesyste
             // Barrier: export is sequenced after the pending edit and promotion.
             const auto output=root/"translation.txt";require(service.export_current(output,0,"日本語の訳文",PageState::Partial),"UTF-8 export queued");inbox.wait(IoEvent::Kind::Exported);
             require(bytes(output).find("未完了・部分結果")!=std::string::npos&&bytes(output).find("日本語の訳文")!=std::string::npos,"partial export labelled and encoded UTF-8");
+            require(bytes(output).find("文体: 常体")!=std::string::npos&&bytes(output).find("PLaMo 3 Translate 0.8B")!=std::string::npos&&bytes(output).find("学習したモデル")!=std::string::npos,"export retains model, form and output-use notice");
             service.stop();service.join();require(service.done(),"worker drains durable mutations on stop");
         }
         {

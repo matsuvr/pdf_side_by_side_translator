@@ -1,0 +1,316 @@
+{
+  "schema": 1,
+  "dependency_lock_sha256": "b4d11b5adf4c44a8f3e93563b8f8bfc514de00c8d80d14ed9e44876f50b548d6",
+  "notices_sha256": "da803881f21a72473145f1b8b360d5d2683133615ad80787337d6025d42b3372",
+  "inputs": [
+    {
+      "component": "Application original source/resources",
+      "root": "project",
+      "path": "LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "8e7c90b3d5c9906cb706b3894956c6e2fa4836fb905c021430c9589dc25343d2"
+    },
+    {
+      "component": "PDFium, including embedded Foxit font/CMap data",
+      "root": "pdfium",
+      "path": "LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9"
+    },
+    {
+      "component": "Chromium support and PartitionAlloc",
+      "root": "project",
+      "path": "licenses/Chromium-BSD.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    {
+      "component": "PDFium / Anti-Grain Geometry 2.3",
+      "root": "pdfium",
+      "path": "third_party/agg23/copying",
+      "encoding": "utf-8-sig",
+      "sha256": "0e16f9c2285583269242e94c6f502de0c9910dfcbbc7b386e236cdf29ecd4333"
+    },
+    {
+      "component": "PDFium / Abseil",
+      "root": "pdfium",
+      "path": "third_party/abseil-cpp/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+    },
+    {
+      "component": "PDFium / Brotli decoder",
+      "root": "pdfium",
+      "path": "third_party/brotli/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+    },
+    {
+      "component": "PDFium / Dragonbox (Boost alternative selected)",
+      "root": "pdfium",
+      "path": "third_party/dragonbox/src/LICENSE-Boost",
+      "encoding": "utf-8-sig",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+    },
+    {
+      "component": "PDFium / fast_float (MIT alternative selected)",
+      "root": "pdfium",
+      "path": "third_party/fast_float/src/LICENSE-MIT",
+      "encoding": "utf-8-sig",
+      "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6"
+    },
+    {
+      "component": "PDFium / FreeType (FTL alternative selected)",
+      "root": "pdfium",
+      "path": "third_party/freetype/FTL.TXT",
+      "encoding": "iso-8859-1",
+      "sha256": "f4b133e25df1f86ad3ffea453aa0e613f0474f34778dbbb3e437e7b2724937d8"
+    },
+    {
+      "component": "PDFium / Little CMS",
+      "root": "pdfium",
+      "path": "third_party/lcms/src/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31"
+    },
+    {
+      "component": "PDFium / OpenJPEG",
+      "root": "pdfium",
+      "path": "third_party/libopenjpeg/src/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    {
+      "component": "PDFium / HarfBuzz",
+      "root": "pdfium",
+      "path": "third_party/harfbuzz/src/COPYING",
+      "encoding": "utf-8-sig",
+      "sha256": "ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64"
+    },
+    {
+      "component": "PDFium / HarfBuzz",
+      "root": "pdfium",
+      "path": "third_party/harfbuzz/src/src/ms-use/COPYING",
+      "encoding": "utf-8-sig",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "component": "PDFium / Highway",
+      "root": "pdfium",
+      "path": "third_party/highway/src/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
+    },
+    {
+      "component": "PDFium / ICU and Unicode data",
+      "root": "pdfium",
+      "path": "third_party/icu/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af"
+    },
+    {
+      "component": "PDFium / libjpeg-turbo",
+      "root": "pdfium",
+      "path": "third_party/libjpeg_turbo/LICENSE.md",
+      "encoding": "utf-8-sig",
+      "sha256": "96f5b328adbb78eeaaec6980d73fd558cb1e4d62560ed615646bc3cf5e532430"
+    },
+    {
+      "component": "PDFium / libjpeg-turbo",
+      "root": "pdfium",
+      "path": "third_party/libjpeg_turbo/README.ijg",
+      "encoding": "utf-8-sig",
+      "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+    },
+    {
+      "component": "PDFium / libyuv",
+      "root": "pdfium",
+      "path": "third_party/libyuv/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "2b2cc1180c7e6988328ad2033b04b80117419db9c4c584918bbb3cfec7e9364f"
+    },
+    {
+      "component": "PDFium / zlib",
+      "root": "pdfium",
+      "path": "third_party/zlib/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    {
+      "component": "PDFium / LLVM libc++",
+      "root": "pdfium",
+      "path": "third_party/libc++/src/LICENSE.TXT",
+      "encoding": "utf-8-sig",
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "component": "PDFium / LLVM libc++abi",
+      "root": "pdfium",
+      "path": "third_party/libc++abi/src/LICENSE.TXT",
+      "encoding": "utf-8-sig",
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    },
+    {
+      "component": "PDFium / LLVM libc subset",
+      "root": "pdfium",
+      "path": "third_party/llvm-libc/src/LICENSE.TXT",
+      "encoding": "utf-8-sig",
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
+    },
+    {
+      "component": "LLVM compiler runtime",
+      "root": "project",
+      "path": "licenses/LLVM-compiler-rt.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d"
+    },
+    {
+      "component": "wxWidgets core/base (wxWindows exception applies)",
+      "root": "wx",
+      "path": "docs/licence.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "7132837c2af55bd7ce8bfc72ef837e0caafee6b1e5eefb9cecdee713c29f57cc"
+    },
+    {
+      "component": "wxWidgets core/base (wxWindows exception applies)",
+      "root": "wx",
+      "path": "docs/lgpl.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "cc535c21133c895b56b374c8a1dc1eb948d99003ed2b47372069456b62f42b24"
+    },
+    {
+      "component": "wxWidgets / PCRE2",
+      "root": "wx",
+      "path": "3rdparty/pcre/LICENCE.md",
+      "encoding": "utf-8-sig",
+      "sha256": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811"
+    },
+    {
+      "component": "wxWidgets / PCRE2",
+      "root": "wx",
+      "path": "3rdparty/pcre/deps/sljit/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb"
+    },
+    {
+      "component": "wxWidgets / libpng",
+      "root": "wx",
+      "path": "src/png/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+    },
+    {
+      "component": "wxWidgets / libtiff",
+      "root": "wx",
+      "path": "src/tiff/LICENSE.md",
+      "encoding": "utf-8-sig",
+      "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade"
+    },
+    {
+      "component": "wxWidgets / Independent JPEG Group",
+      "root": "wx",
+      "path": "src/jpeg/README",
+      "encoding": "utf-8-sig",
+      "sha256": "913af09f785683accdf660b85dcf27fdd567d4ad649daa95cb8771b040db79d1"
+    },
+    {
+      "component": "wxWidgets / zlib",
+      "root": "wx",
+      "path": "src/zlib/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    {
+      "component": "wxWidgets / libwebp and SharpYUV",
+      "root": "wx",
+      "path": "3rdparty/libwebp/COPYING",
+      "encoding": "utf-8-sig",
+      "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+    },
+    {
+      "component": "llama.cpp and ggml",
+      "root": "llama",
+      "path": "LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    },
+    {
+      "component": "llama.cpp / xxHash",
+      "root": "llama",
+      "path": "vendor/hash/xxhash/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "6ffedbc0f7878612d2b23589f1ff2ab15633e1df7963a5d9fc750ec5500c7e7a"
+    },
+    {
+      "component": "llama.cpp / SHA-256",
+      "root": "llama",
+      "path": "vendor/hash/sha256/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "b81d0022ca6367918c67b57e9647d3513ee58809fd4b0ef0b3492f1356bced25"
+    },
+    {
+      "component": "llama.cpp / rotate-bits",
+      "root": "llama",
+      "path": "vendor/hash/rotate-bits/LICENSE.md",
+      "encoding": "utf-8-sig",
+      "sha256": "ca0b44aec101afb6b46f4c39b23369fa06a64fb9c0add37c2689d702156fee55"
+    },
+    {
+      "component": "SQLite public-domain declaration",
+      "root": "project",
+      "path": "licenses/SQLite-public-domain.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "79ae05d9ff7bcd33aa131bd86f62cf7d78b87d227fa5472a2ed9dcf03080821f"
+    },
+    {
+      "component": "Noto Sans CJK JP Regular font",
+      "root": "resources",
+      "path": "NotoSansCJK-LICENSE.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+    },
+    {
+      "component": "PLaMo Community License: reference terms for the separately supplied model",
+      "root": "project",
+      "path": "licenses/PLaMo-Community-ja.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "7dd74339bbf9a39fe33e271a89657aacf06f452b082fcb1273fb792b8d6b7db2"
+    },
+    {
+      "component": "PLaMo Community License: reference terms for the separately supplied model",
+      "root": "project",
+      "path": "licenses/PLaMo-Community-en.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "ca0c5e90f6de6799fc2d2d4f2b2647cc088444c19f286f689e525d4ad28f9ed6"
+    }
+  ],
+  "origins": {
+    "pdfium": {
+      "url": "https://pdfium.googlesource.com/pdfium.git",
+      "revision": "96b71fa413f9fd9231bdc3e0a09e16ffcc5766f4",
+      "checkout_configuration": "minimal",
+      "transitive_dependencies": "upstream DEPS at this revision"
+    },
+    "wx": {
+      "url": "https://github.com/wxWidgets/wxWidgets.git",
+      "revision": "6a42a4b999b127cf28a8b5fe686da6b8ca93a9b8",
+      "version": "3.3.4",
+      "submodules": true
+    },
+    "llama": {
+      "url": "https://github.com/ggml-org/llama.cpp.git",
+      "revision": "a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5",
+      "required_tokenizer_ancestor": "abeada335e2e78bd3fe63febafab7e900ce75810"
+    },
+    "LLVM-compiler-rt": "https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT",
+    "Chromium-BSD": "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/LICENSE (text SHA-256 fixed in inputs)",
+    "model_license": {
+      "repository": "pfnet/plamo-3-translate-0.8b-GGUF",
+      "revision": "1cf96ae02133958a20074bfdfab76517bb737d00",
+      "paths": [
+        "LICENSE/ja",
+        "LICENSE/en"
+      ]
+    }
+  }
+}

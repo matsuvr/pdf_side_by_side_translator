@@ -46,6 +46,7 @@ public:
     std::size_t for_each_complete_page(std::string_view document_key,std::string_view model_key,std::string_view profile,
         const std::function<void(PageIndex,std::string_view)>& consume,std::string_view native_source_key={});
     void clear_cache();
+    void export_state(const std::filesystem::path& destination);
     bool maintain();
 private:
     struct Impl;std::unique_ptr<Impl> impl_;

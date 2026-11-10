@@ -1,6 +1,7 @@
 #pragma once
 #include "storage/store.hpp"
 #include "platform/file_snapshot.hpp"
+#include "storage/diagnostic_log.hpp"
 #include <atomic>
 
 namespace opt {
@@ -37,6 +38,8 @@ public:
     bool export_current(std::filesystem::path path,PageIndex page,std::string text,PageState state,Form form=Form::Plain);
     bool export_complete(std::filesystem::path path,CacheContext context,Form form=Form::Plain);
     bool clear_cache();
+    bool export_state(std::filesystem::path destination);
+    bool diagnostic(DiagnosticRecord record);
     void stop()noexcept;
     bool done()const noexcept;
     void join();

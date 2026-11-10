@@ -20,6 +20,7 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
         std::shared_ptr<PreparedChunk> prepared;
         {
             Store store(s,c,1);require(store.state_persistent()&&store.cache_persistent(),"databases on disk");
+            bool protected_destination=false;try{store.export_state(s/"state.sqlite3");}catch(const std::invalid_argument&){protected_destination=true;}require(protected_destination,"backup cannot replace the active database");
             store.settings({{"form","plain"},{"model","日本語/model.gguf"}});
             {Store second(s,c);require(!second.state_persistent()&&!second.cache_persistent(),"second owner uses isolated memory instead of clearing active pins");second.settings({{"form","secondary"}});require(store.settings().at("form")=="plain","second owner cannot overwrite first owner state");}
             store.save_override(provisional,"","fixture.pdf",{0,3,std::string("old edit")});
@@ -74,8 +75,11 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
         bool backup=false;for(const auto& entry:std::filesystem::directory_iterator(c))if(entry.path().filename().string().find(".corrupt-")!=std::string::npos)backup=true;
         require(backup,"corrupt cache backup retained");
         const auto blocked=directory/"not-a-directory";{std::ofstream out(blocked);out<<"preserve me";}
-        {Store store(blocked,directory/"fallback-cache");require(!store.state_persistent(),"unwritable state destination falls back to memory");store.settings({{"session","usable"}});require(store.settings().at("session")=="usable","memory state remains usable");}
+        {Store store(blocked,directory/"fallback-cache");require(!store.state_persistent(),"unwritable state destination falls back to memory");store.settings({{"session","usable"}});require(store.settings().at("session")=="usable","memory state remains usable");
+            store.save_override("recovery-native","","fixture.pdf",{0,1,std::string("retained session edit")});store.export_state(directory/"rescued.sqlite3");}
         require(file_text(blocked)=="preserve me","failed state destination is never replaced");
+        std::filesystem::create_directory(directory/"restored-state");std::filesystem::rename(directory/"rescued.sqlite3",directory/"restored-state/state.sqlite3");
+        {Store restored(directory/"restored-state",directory/"restored-cache");require(restored.settings().at("session")=="usable"&&*restored.document("recovery-native","recovery-native").overrides.at(0).source=="retained session edit","single-file rescue backup restores memory settings and pending source edits");}
         // Simulate process loss after recording promotion intent, before either
         // state fingerprint write or cache rekey commit. The forced attempt must
         // remain the newest attempt, with bypass intact, after recovery.
