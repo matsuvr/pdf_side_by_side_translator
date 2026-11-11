@@ -2,6 +2,36 @@
 
 The current product specification is [DESIGN.md](../DESIGN.md).
 
+## Bundled model startup and old-data disposal
+
+Startup now reads `plamo-3-translate-0.8b-Q4_K_M.gguf` beside the Windows
+executable or beside the macOS `.app` bundle. Only a missing companion opens
+the file picker. The initial PDF opens after that picker returns, avoiding a
+second password modal during model selection. The model path is not persisted.
+
+Old automatic state/cache files and logs in the default app-data directory are
+discarded by the I/O owner before it publishes a fresh in-memory session.
+No old database is opened, migrated or backed up. Known files and then empty
+directories are removed; unrelated files and directory-link targets are left
+alone. See [session-data.md](session-data.md) for the exact scope.
+
+Follow-up validation used the Linux auxiliary environment described below:
+
+- **All 16 C++ headless tests passed with ASan/UBSan**, including new companion
+  path tests, legacy-file disposal tests, and the updated I/O startup test.
+  Coverage includes Unicode/spaces in paths, decoy models in the working
+  directory or inside `.app`, missing versus present-but-invalid model files,
+  corrupt old databases, repeated cleanup, retained exports, symlink targets,
+  and an actual permission-denied removal followed by retry.
+- The complete headless CTest run had **18 passes out of 19 entries**. The two
+  Python regression entries passed. `pinned_third_party_notices` still stops at
+  the missing bootstrap PDFium `LICENSE` input; dependency locks and notices
+  are unchanged by this follow-up.
+- GUI controller/app entry code passed the wxWidgets-header syntax check,
+  and `git diff --check` passed. Windows/macOS packaged GUI startup and the
+  Windows junction branch still need native execution; these Linux checks do
+  not claim that coverage.
+
 ## Session-only safety changes
 
 The safety changes tracked by [#11](https://github.com/matsuvr/pdf_side_by_side_translator/issues/11)

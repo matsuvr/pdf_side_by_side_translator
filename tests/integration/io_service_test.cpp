@@ -29,6 +29,14 @@ int main(){const auto root=std::filesystem::temp_directory_path()/std::filesyste
     try{
         std::filesystem::create_directories(root);const auto file=root/"document.pdf",model=root/"model.gguf";
         const std::string input(8*1024*1024,'x');write(file,input);write(model,"model input");
+        {
+            const auto old=root/"legacy";std::filesystem::create_directories(old/"Cache");
+            write(old/"state.sqlite3","invalid old database must be discarded, never read");write(old/"Cache"/"cache.sqlite3","old cache");
+            Inbox startup;IoService service([&](auto e){startup.push(std::move(e));},{},old);
+            const auto initialized=startup.wait(IoEvent::Kind::Initialized);
+            require(!std::filesystem::exists(old)&&initialized->settings.empty()&&initialized->recent_paths.empty(),"I/O owner discards legacy files before publishing a fresh memory session");
+            service.stop();service.join();
+        }
         auto snapshot=FileSnapshot::open(file);const auto native=provisional_file_key(snapshot->initial_signature());
         Inbox inbox;
         {

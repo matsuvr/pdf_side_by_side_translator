@@ -1,4 +1,5 @@
 #include "app/controller.hpp"
+#include "app/bundled_files.hpp"
 #include "app/resources.hpp"
 #include "app/session_sources.hpp"
 #include "pdf/pdf_service.hpp"
@@ -57,13 +58,16 @@ wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(IO_WAKE,wxThreadEvent);
 enum class Command { Open, Close, Previous, Next, GoPage, FocusPage, FitWidth, FitPage, Zoom, Left, Right, Equal, TextSize, Copy, SelectAll, CopySource, EditSource, Find, FindNext, FindPrevious, CloseSearch, Retranslate, Automatic, Plain, Easy, ModelSettings, ExportPage, ExportComplete, ClearCache, ExportState, Help, Diagnostics, Licenses, About, Quit };
 enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,FitPage,Zoom,Left,Right,Equal,TextSize,Help,Diagnostics,Licenses,About,CopySource,EditSource,Find,FindNext,FindPrevious,CloseSearch,Retranslate,Automatic,Plain,Easy,ModelSettings,ExportPage,ExportComplete,ClearCache,ExportState };
-wxString model_license_path(){
-    auto directory=native_path(wxStandardPaths::Get().GetExecutablePath()).parent_path();
+std::filesystem::path application_directory(){
 #ifdef __WXMAC__
-    // The license sits beside the .app, outside Contents/MacOS.
-    directory=directory.parent_path().parent_path().parent_path();
+    constexpr auto layout=ExecutableLayout::MacAppBundle;
+#else
+    constexpr auto layout=ExecutableLayout::Standalone;
 #endif
-    return display_path(directory/"PLaMo-Community-ja.txt");
+    return distribution_directory(native_path(wxStandardPaths::Get().GetExecutablePath()),layout);
+}
+wxString model_license_path(){
+    return display_path(application_directory()/"PLaMo-Community-ja.txt");
 }
 [[noreturn]] void terminate_stalled_process() noexcept {
 #ifdef _WIN32
@@ -563,10 +567,22 @@ struct ApplicationController::Impl {
         if(io)io->protect_model(model_path);
         frame->SetStatusText(wxS("モデル読込中…"),1);inference->load(model_epoch,model_path,BackendPreference::Automatic);
     }
+    void load_startup_model(){
+        if(model_state!=ModelState::Unconfigured||!model_path.empty())return;
+        const auto directory=application_directory();
+        if(const auto bundled=bundled_model(directory))model_path=*bundled;
+        else{
+            wxFileDialog file(frame,wxS("同梱GGUFが見つかりません。モデルを選択してください"),display_path(directory),
+                wxString::FromUTF8(bundled_model_filename),wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+            if(show_modal(file)!=wxID_OK||closing||close_requested)return;
+            model_path=native_path(file.GetPath());
+        }
+        load_model();
+    }
     void model_settings(){
         wxDialog dialog(frame,wxID_ANY,wxS("モデル設定"),wxDefaultPosition,frame->FromDIP(wxSize(720,250)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
         auto root=new wxBoxSizer(wxVERTICAL);const auto gap=frame->FromDIP(8);
-        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("PLaMo 3 Translate 0.8B のローカルGGUFを選択してください。\nリリースZIPに同梱のGGUFを選べます。利用条件は同じフォルダーのPLaMoライセンスで確認してください。"));
+        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("起動時はアプリと同じフォルダーの同梱GGUFを自動で読み込みます。\nここでは別のPLaMo 3 Translate 0.8B GGUFを選択できます。利用条件は同梱のPLaMoライセンスで確認してください。"));
         root->Add(description,0,wxALL|wxEXPAND,gap);
         if(!model_error.empty()){
             auto failure=new wxStaticText(&dialog,wxID_ANY,wxString::FromUTF8(model_error));failure->Wrap(frame->FromDIP(660));root->Add(failure,0,wxALL|wxEXPAND,gap);
@@ -1229,8 +1245,15 @@ struct ApplicationController::Impl {
         native_shortcuts=std::make_unique<NativeShortcutMonitor>(*frame,[this](ShortcutKey key,ShortcutContext state){return handle_shortcut(key,state);});
         stream_timer.Start(50);
         position_timer.Start(1000);
-        io=std::make_unique<IoService>([this](auto event){if(io_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(IO_WAKE));});
-        if(!initial.empty())open_path(initial);
+        io=std::make_unique<IoService>([this](auto event){if(io_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(IO_WAKE));},
+            std::function<void()>{},native_path(wxStandardPaths::Get().GetUserLocalDataDir()));
+        owner.CallAfter([this,initial]{
+            if(closing||close_requested)return;
+            load_startup_model();
+            // A password-protected initial PDF must not open another modal
+            // while the missing-model picker is still active.
+            if(!closing&&!close_requested&&!initial.empty())open_path(initial);
+        });
     }
 };
 ApplicationController::ApplicationController():impl_(std::make_unique<Impl>(*this)){}
