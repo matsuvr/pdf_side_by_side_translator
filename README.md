@@ -9,8 +9,7 @@ Built with PLaMo
 
 1. [リリースページ](https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest)から、使うOSのZIPをダウンロードして展開します。
 2. Windowsでは `offline-pdf-translator.exe`、Macでは `Offline PDF Translator.app` を起動します。
-3. 「モデル設定」→「モデルを選択…」で、同梱の `plamo-3-translate-0.8b-Q4_K_M.gguf` を指定します。
-4. PDFを開きます。左に原文、右に現在のページの日本語訳が表示されます。
+3. PDFを開きます。左に原文、右に現在のページの日本語訳が表示されます。
 
 原文の左右の矢印でページを移動します。ページ番号を入力すると、そのページへ移動します。
 PDFの倍率は原文枠の上部で、訳文の文字サイズは「表示」メニューで調整します。
