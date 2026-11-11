@@ -25,7 +25,9 @@ public:
     using Delivery=std::function<void(std::shared_ptr<const IoEvent>)>;
     // The optional hook is a test-only fault-injection seam, never a product
     // setting. It runs on the I/O owner immediately before an accepted job.
-    IoService(Delivery delivery,std::function<void()> before_job={});
+    // The optional legacy directory is only a discard target. No files are
+    // imported or created there; the current Store always starts in memory.
+    IoService(Delivery delivery,std::function<void()> before_job={},std::filesystem::path legacy_directory={});
     ~IoService();
     // Path registration is synchronous and does not access the filesystem. It
     // protects selected inputs while PDF/model workers are still opening them.

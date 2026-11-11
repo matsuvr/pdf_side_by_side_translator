@@ -1,4 +1,5 @@
 #include "storage/io_service.hpp"
+#include "storage/legacy_data.hpp"
 #include "platform/access_path.hpp"
 #include <algorithm>
 #include <condition_variable>
@@ -49,6 +50,7 @@ struct IoService::Impl {
     };
     Delivery delivery;
     std::function<void()> before_job;
+    std::filesystem::path legacy_directory;
     std::mutex mutex;std::condition_variable cv;std::deque<Job> jobs;
     std::atomic_bool stopping{false},finished{false};
     std::atomic<std::size_t> pending_exports{0};
@@ -61,7 +63,7 @@ struct IoService::Impl {
     std::vector<std::byte> hash_buffer=std::vector<std::byte>(1024*1024);
     bool hash_turn=false,dirty=false;
     std::thread worker;
-    Impl(Delivery sink,std::function<void()> hook):delivery(std::move(sink)),before_job(std::move(hook)){
+    Impl(Delivery sink,std::function<void()> hook,std::filesystem::path old_directory):delivery(std::move(sink)),before_job(std::move(hook)),legacy_directory(std::move(old_directory)){
         worker=std::thread([this]{run();});
     }
     ~Impl(){stop();if(worker.joinable())worker.join();}
@@ -125,9 +127,12 @@ struct IoService::Impl {
     }
     void run()noexcept{
         try{
+            const auto cleanup=discard_legacy_data(legacy_directory);
             Store store;
             IoEvent initialized;initialized.kind=IoEvent::Kind::Initialized;initialized.settings=store.settings();initialized.recent_paths=store.recent_documents();
             initialized.warnings=store.warnings();initialized.persistent=store.state_persistent()&&store.cache_persistent();emit(std::move(initialized));
+            if(cleanup.error)error(utf8(cleanup.failed_path)+": "+cleanup.error.message(),false,
+                "旧版の保存データを一部削除できませんでした。旧版のアプリを終了し、保存先の権限を確認してください。この起動中の閲覧・翻訳は続けられます。");
             for(;;){
                 std::optional<Job> job;
                 {std::unique_lock lock(mutex);cv.wait(lock,[&]{return stopping.load()||!jobs.empty()||document_hash||model_hash||dirty;});
@@ -149,7 +154,7 @@ struct IoService::Impl {
         finished=true;
     }
 };
-IoService::IoService(Delivery sink,std::function<void()> hook):impl_(std::make_unique<Impl>(std::move(sink),std::move(hook))){}
+IoService::IoService(Delivery sink,std::function<void()> hook,std::filesystem::path old_directory):impl_(std::make_unique<Impl>(std::move(sink),std::move(hook),std::move(old_directory))){}
 IoService::~IoService()=default;
 void IoService::protect_document(std::filesystem::path path){impl_->protect(false,std::move(path));}
 void IoService::protect_model(std::filesystem::path path){impl_->protect(true,std::move(path));}
