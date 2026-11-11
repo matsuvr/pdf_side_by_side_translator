@@ -11,12 +11,38 @@
 
 namespace opt {
 namespace {
+// Charge before growing containers. Vector/string growth is charged at twice
+// the appended payload; this includes geometric spare capacity. Scratch charges
+// are not refunded, so the total also bounds concurrently live intermediate
+// copies during recursive region splitting.
+class LayoutWork {
+    const LayoutOptions& options_;
+    const std::function<bool()>& cancelled_;
+    std::size_t working_=0,output_=0,ticks_=0;
+public:
+    LayoutWork(const LayoutOptions& options,const std::function<bool()>& cancelled)
+        :options_(options),cancelled_(cancelled){checkpoint();}
+    void checkpoint() const {if(cancelled_&&cancelled_())throw LayoutCancelled();}
+    void poll(){if((++ticks_&255U)==0)checkpoint();}
+    void charge(std::size_t bytes,bool output=false){
+        poll();
+        if(bytes>options_.working_bytes-working_||(output&&bytes>options_.output_bytes-output_))throw LayoutResourceLimit();
+        working_+=bytes;if(output)output_+=bytes;
+    }
+    template<class T> void grow(std::size_t count=1,bool output=false){
+        if(count>std::numeric_limits<std::size_t>::max()/(2*sizeof(T)))throw LayoutResourceLimit();
+        charge(count*2*sizeof(T),output);
+    }
+    template<class It,class Compare> void sort(It begin,It end,Compare compare){
+        checkpoint();std::sort(begin,end,[&](const auto& a,const auto& b){poll();return compare(a,b);});checkpoint();
+    }
+};
 struct Rect {double left=0,top=0,right=0,bottom=0;};
 Rect unite(Rect a,Rect b){return {std::min(a.left,b.left),std::min(a.top,b.top),std::max(a.right,b.right),std::max(a.bottom,b.bottom)};}
-double median(std::vector<double> values){
+double median(std::vector<double> values,LayoutWork& work){
     if(values.empty())return 1;
     auto middle=values.begin()+static_cast<std::ptrdiff_t>(values.size()/2);
-    std::nth_element(values.begin(),middle,values.end());return std::max(0.001,*middle);
+    std::nth_element(values.begin(),middle,values.end(),[&](double a,double b){work.poll();return a<b;});return std::max(0.001,*middle);
 }
 bool space(char32_t c){return c==' '||c=='\r'||c=='\n'||c=='\t'||c==0xa0||c==0x3000;}
 std::string normalized(char32_t c){
@@ -31,28 +57,37 @@ bool combining(char32_t c){return (c>=0x300&&c<=0x36f)||(c>=0x1ab0&&c<=0x1aff)||
 struct Item {const GlyphRecord* glyph;Rect box;double baseline,height,sort_x;};
 struct Fragment {std::vector<Item> items;Rect box;double baseline=0,height=0;int orientation=0;std::shared_ptr<TextBlock> table;};
 using Fragments=std::vector<Fragment>;
-Rect bounds(const Fragments& fs){Rect r=fs.front().box;for(const auto& f:fs)r=unite(r,f.box);return r;}
+Rect bounds(const Fragments& fs,LayoutWork& work){Rect r=fs.front().box;for(const auto& f:fs){work.poll();r=unite(r,f.box);}return r;}
 struct Gutter {double left=0,right=0;std::size_t crossing=0;bool valid=false;};
-Gutter vertical_gutter(const Fragments& fs,double h,const LayoutOptions& options){
+Gutter vertical_gutter(const Fragments& fs,double h,const LayoutOptions& options,LayoutWork& work){
     if(fs.size()<4)return {};
-    const auto total=bounds(fs);
+    const auto total=bounds(fs,work);
     std::vector<std::pair<double,int>> edges;
-    for(const auto& f:fs){edges.emplace_back(f.box.left,1);edges.emplace_back(f.box.right,-1);}
-    std::sort(edges.begin(),edges.end());
+    work.grow<std::pair<double,int>>(fs.size()*2);edges.reserve(fs.size()*2);
+    std::vector<const Fragment*> left,right;
+    work.grow<const Fragment*>(fs.size()*2);left.reserve(fs.size());right.reserve(fs.size());
+    for(const auto& f:fs){work.poll();edges.emplace_back(f.box.left,1);edges.emplace_back(f.box.right,-1);left.push_back(&f);right.push_back(&f);}
+    work.sort(edges.begin(),edges.end(),std::less<>{});
+    work.sort(left.begin(),left.end(),[](auto a,auto b){return a->box.right<b->box.right;});
+    work.sort(right.begin(),right.end(),[](auto a,auto b){return a->box.left<b->box.left;});
+    // Prefix/suffix bounds replace a full fragment scan for every candidate
+    // gap. Candidate evaluation is now O(log n), instead of O(n).
+    work.grow<Rect>(fs.size()*2);std::vector<Rect> left_bounds(fs.size()),right_bounds(fs.size());
+    for(std::size_t i=0;i<fs.size();++i){work.poll();left_bounds[i]=i?unite(left_bounds[i-1],left[i]->box):left[i]->box;}
+    for(std::size_t i=fs.size();i-->0;){work.poll();right_bounds[i]=i+1<fs.size()?unite(right_bounds[i+1],right[i]->box):right[i]->box;}
     int occupied=0;Gutter best;
     for(std::size_t i=0;i<edges.size();){
+        work.poll();
         const double position=edges[i].first;
         while(i<edges.size()&&edges[i].first==position)occupied+=edges[i++].second;
         if(i==edges.size())break;
         const double next=edges[i].first;
         if(next-position<h*options.minimum_gutter||position<total.left+(total.right-total.left)*0.15||
            next>total.right-(total.right-total.left)*0.15||occupied>static_cast<int>(std::max<std::size_t>(1,fs.size()/5)))continue;
-        std::size_t left=0,right=0;Rect l{},r{};
-        for(const auto& f:fs){
-            if(f.box.right<=position){l=left++?unite(l,f.box):f.box;}
-            else if(f.box.left>=next){r=right++?unite(r,f.box):f.box;}
-        }
-        if(left<2||right<2)continue;
+        const auto left_count=static_cast<std::size_t>(std::upper_bound(left.begin(),left.end(),position,[](double value,auto f){return value<f->box.right;})-left.begin());
+        const auto right_start=static_cast<std::size_t>(std::lower_bound(right.begin(),right.end(),next,[](auto f,double value){return f->box.left<value;})-right.begin());
+        if(left_count<2||fs.size()-right_start<2)continue;
+        const auto l=left_bounds[left_count-1],r=right_bounds[right_start];
         const double overlap=std::min(l.bottom,r.bottom)-std::max(l.top,r.top);
         if(overlap<std::min(l.bottom-l.top,r.bottom-r.top)*0.4)continue;
         if(!best.valid||static_cast<std::size_t>(occupied)<best.crossing||
@@ -61,12 +96,14 @@ Gutter vertical_gutter(const Fragments& fs,double h,const LayoutOptions& options
     }
     return best;
 }
-std::optional<double> horizontal_cut(const Fragments& fs,double h,const LayoutOptions& options){
+std::optional<double> horizontal_cut(const Fragments& fs,double h,const LayoutOptions& options,LayoutWork& work){
     std::vector<std::pair<double,double>> bands;
-    for(const auto& f:fs)bands.emplace_back(f.box.top,f.box.bottom);
-    std::sort(bands.begin(),bands.end());
+    work.grow<std::pair<double,double>>(fs.size());bands.reserve(fs.size());
+    for(const auto& f:fs){work.poll();bands.emplace_back(f.box.top,f.box.bottom);}
+    work.sort(bands.begin(),bands.end(),std::less<>{});
     double bottom=bands.front().second,best=options.horizontal_band_gap*h,cut=0;
     for(std::size_t i=1;i<bands.size();++i){
+        work.poll();
         const auto [a,b]=bands[i];
         if(a-bottom>best){best=a-bottom;cut=(a+bottom)/2;}
         bottom=std::max(bottom,b);
@@ -74,54 +111,61 @@ std::optional<double> horizontal_cut(const Fragments& fs,double h,const LayoutOp
     if(best>options.horizontal_band_gap*h)return cut;
     return {};
 }
-void regions(Fragments fs,double h,const LayoutOptions& options,unsigned depth,std::vector<Fragments>& out){
+void regions(Fragments fs,double h,const LayoutOptions& options,unsigned depth,std::vector<Fragments>& out,LayoutWork& work){
+    work.checkpoint();
     if(fs.empty())return;
     if(depth<options.maximum_depth&&fs.size()>1){
-        if(auto cut=horizontal_cut(fs,h,options)){
+        if(auto cut=horizontal_cut(fs,h,options,work)){
             Fragments top,bottom;
-            for(auto& f:fs)(f.box.top<*cut?top:bottom).push_back(std::move(f));
-            regions(std::move(top),h,options,depth+1,out);regions(std::move(bottom),h,options,depth+1,out);return;
+            work.grow<Fragment>(fs.size());
+            for(auto& f:fs){work.poll();(f.box.top<*cut?top:bottom).push_back(std::move(f));}
+            regions(std::move(top),h,options,depth+1,out,work);regions(std::move(bottom),h,options,depth+1,out,work);return;
         }
-        const auto gutter=vertical_gutter(fs,h,options);
+        const auto gutter=vertical_gutter(fs,h,options,work);
         if(gutter.valid){
-            Fragments crossing;
-            for(const auto& f:fs)if(f.box.right>gutter.left&&f.box.left<gutter.right)crossing.push_back(f);
+            std::vector<const Fragment*> crossing;
+            for(const auto& f:fs){work.poll();if(f.box.right>gutter.left&&f.box.left<gutter.right){work.grow<const Fragment*>();crossing.push_back(&f);}}
             if(crossing.empty()){
                 Fragments left,right;
-                for(auto& f:fs)(f.box.right<=gutter.left?left:right).push_back(std::move(f));
-                regions(std::move(left),h,options,depth+1,out);regions(std::move(right),h,options,depth+1,out);return;
+                work.grow<Fragment>(fs.size());
+                for(auto& f:fs){work.poll();(f.box.right<=gutter.left?left:right).push_back(std::move(f));}
+                regions(std::move(left),h,options,depth+1,out,work);regions(std::move(right),h,options,depth+1,out,work);return;
             }
             // Spanning title/caption rows separate local column regions.
-            std::sort(crossing.begin(),crossing.end(),[](const auto& a,const auto& b){return a.box.top<b.box.top;});
+            work.sort(crossing.begin(),crossing.end(),[](auto a,auto b){return a->box.top<b->box.top;});
             std::vector<Rect> bands;
-            for(const auto& f:crossing){
-                if(bands.empty()||f.box.top>bands.back().bottom+h*0.3)bands.push_back(f.box);
-                else bands.back()=unite(bands.back(),f.box);
+            for(const auto* f:crossing){
+                work.poll();
+                if(bands.empty()||f->box.top>bands.back().bottom+h*0.3){work.grow<Rect>();bands.push_back(f->box);}
+                else bands.back()=unite(bands.back(),f->box);
             }
             Fragments remaining=std::move(fs);
             for(const auto& band:bands){
                 Fragments before,row,after;
+                work.grow<Fragment>(remaining.size());
                 for(auto& f:remaining){
+                    work.poll();
                     if(f.box.bottom<band.top)before.push_back(std::move(f));
                     else if(f.box.top<=band.bottom)row.push_back(std::move(f));
                     else after.push_back(std::move(f));
                 }
-                regions(std::move(before),h,options,depth+1,out);
-                std::sort(row.begin(),row.end(),[](const auto& a,const auto& b){return a.box.left<b.box.left;});
-                if(!row.empty())out.push_back(std::move(row));
+                regions(std::move(before),h,options,depth+1,out,work);
+                work.sort(row.begin(),row.end(),[](const auto& a,const auto& b){return a.box.left<b.box.left;});
+                if(!row.empty()){work.grow<Fragments>();out.push_back(std::move(row));}
                 remaining=std::move(after);
             }
-            regions(std::move(remaining),h,options,depth+1,out);return;
+            regions(std::move(remaining),h,options,depth+1,out,work);return;
         }
     }
-    std::sort(fs.begin(),fs.end(),[](const auto& a,const auto& b){
+    work.sort(fs.begin(),fs.end(),[](const auto& a,const auto& b){
         if(a.baseline!=b.baseline)return a.baseline<b.baseline;
         return a.box.left<b.box.left;
     });
-    out.push_back(std::move(fs));
+    work.grow<Fragments>();out.push_back(std::move(fs));
 }
-void append(TextBlock& block,std::string_view bytes,std::vector<SourceCharRange> ranges){
+void append(TextBlock& block,std::string_view bytes,std::vector<SourceCharRange> ranges,LayoutWork& work){
     if(bytes.empty())return;
+    work.grow<char>(bytes.size()*2,true);work.grow<TextMapping>(2,true);work.grow<SourceCharRange>(ranges.size()*2,true);
     const auto reading=block.reading_text_utf8.size(),translation=block.translation_input_utf8.size();
     block.reading_text_utf8+=bytes;block.translation_input_utf8+=bytes;
     block.reading_mapping.push_back({reading,reading+bytes.size(),ranges});
@@ -132,21 +176,23 @@ bool same_painted_glyph(const GlyphRecord& a,const GlyphRecord& b){
         std::abs(a.angle_radians-b.angle_radians)<0.00001&&std::abs(a.bounds.left-b.bounds.left)<0.00001&&std::abs(a.bounds.right-b.bounds.right)<0.00001&&
         std::abs(a.bounds.top-b.bounds.top)<0.00001&&std::abs(a.bounds.bottom-b.bounds.bottom)<0.00001;
 }
-void append_cluster(TextBlock& block,std::string_view bytes,SourceCharRange range,bool join){
+void append_cluster(TextBlock& block,std::string_view bytes,SourceCharRange range,bool join,LayoutWork& work){
     if(bytes.empty())return;
-    if(!join||block.reading_mapping.empty()||block.translation_mapping.empty()){append(block,bytes,{range});return;}
+    if(!join||block.reading_mapping.empty()||block.translation_mapping.empty()){append(block,bytes,{range},work);return;}
+    work.grow<char>(bytes.size()*2,true);
     block.reading_text_utf8+=bytes;block.translation_input_utf8+=bytes;
     auto extend=[&](TextMapping& mapping,std::size_t end){mapping.utf8_end=end;
         if(!mapping.source_ranges.empty()&&mapping.source_ranges.back().first+mapping.source_ranges.back().count==range.first)mapping.source_ranges.back().count+=range.count;
-        else mapping.source_ranges.push_back(range);};
+        else {work.grow<SourceCharRange>(1,true);mapping.source_ranges.push_back(range);}};
     extend(block.reading_mapping.back(),block.reading_text_utf8.size());extend(block.translation_mapping.back(),block.translation_input_utf8.size());
 }
 void append_fragment(TextBlock& block,const Fragment& fragment,const LayoutOptions& options,
-                     const std::vector<GlyphRecord>& raw,bool new_line,bool omit_line_space){
-    if(new_line&&!omit_line_space&&!block.reading_text_utf8.empty()&&block.reading_text_utf8.back()!='-')append(block," ",{});
+                     const std::vector<GlyphRecord>& raw,bool new_line,bool omit_line_space,LayoutWork& work){
+    if(new_line&&!omit_line_space&&!block.reading_text_utf8.empty()&&block.reading_text_utf8.back()!='-')append(block," ",{},work);
     const auto line_begin=block.reading_text_utf8.size();
     const Item* previous=nullptr;
     for(const auto& item:fragment.items){
+        work.poll();
         const auto c=item.glyph->unicode;
         if(previous){
             const double gap=item.box.left-previous->box.right;
@@ -156,34 +202,38 @@ void append_fragment(TextBlock& block,const Fragment& fragment,const LayoutOptio
             if(last>first&&last-first<=64&&last<raw.size()){
                 adjacent=true;
                 for(auto i=first+1;i<last;++i){
-                    if(space(raw[i].unicode))blanks.push_back({i,1});
+                    if(space(raw[i].unicode)){work.grow<SourceCharRange>();blanks.push_back({i,1});}
                     else if(raw[i].unicode!=0xad&&!raw[i].unicode_continuation){adjacent=false;blanks.clear();break;}
                 }
             }
             // Ink bounds contain side bearings: they are not glyph advances.
             // Prefer explicit/generated PDF spaces between neighboring records.
-            if(!blanks.empty())append(block," ",std::move(blanks));
+            if(!blanks.empty())append(block," ",std::move(blanks),work);
             else if(!adjacent&&gap>fragment.height*options.word_gap&&
-                    (!(wide(c)&&wide(previous->glyph->unicode))||gap>fragment.height*0.8))append(block," ",{});
+                    (!(wide(c)&&wide(previous->glyph->unicode))||gap>fragment.height*0.8))append(block," ",{},work);
         }
         const bool join=previous&&previous->glyph->unicode!=0xad&&same_painted_glyph(*previous->glyph,*item.glyph);
-        append_cluster(block,normalized(c),{item.glyph->index,item.glyph->source_count},join);previous=&item;
+        append_cluster(block,normalized(c),{item.glyph->index,item.glyph->source_count},join,work);previous=&item;
     }
     PdfRect rect=fragment.items.front().glyph->bounds;
-    for(const auto& item:fragment.items){const auto r=item.glyph->bounds;rect={std::min(rect.left,r.left),std::min(rect.bottom,r.bottom),std::max(rect.right,r.right),std::max(rect.top,r.top)};}
+    for(const auto& item:fragment.items){work.poll();const auto r=item.glyph->bounds;rect={std::min(rect.left,r.left),std::min(rect.bottom,r.bottom),std::max(rect.right,r.right),std::max(rect.top,r.top)};}
+    work.grow<PdfRect>(1,true);work.grow<TextLine>(1,true);
     block.source_rects.push_back(rect);
     block.lines.push_back({line_begin,block.reading_text_utf8.size(),rect});
 }
 Fragments recognize_tables(Fragments fragments,const std::vector<GlyphRecord>& raw,
-                           PageIndex page,double h,const LayoutOptions& options){
+                           PageIndex page,double h,const LayoutOptions& options,LayoutWork& work){
     std::vector<Fragments> rows;
     for(auto& f:fragments){
-        if(rows.empty()||rows.back().front().baseline!=f.baseline)rows.push_back({});
+        work.poll();
+        if(rows.empty()||rows.back().front().baseline!=f.baseline){work.grow<Fragments>();rows.push_back({});}
+        work.grow<Fragment>();
         rows.back().push_back(std::move(f));
     }
-    auto numeric=[](const Fragment& cell){
+    auto numeric=[&](const Fragment& cell){
         bool digit=false;
         for(const auto& item:cell.items){
+            work.poll();
             const auto c=item.glyph->unicode;
             if(c>='0'&&c<='9')digit=true;
             else if(c!='.'&&c!=','&&c!='-'&&c!='+'&&c!='%'&&!space(c))return false;
@@ -192,14 +242,16 @@ Fragments recognize_tables(Fragments fragments,const std::vector<GlyphRecord>& r
     };
     Fragments out;
     for(std::size_t i=0;i<rows.size();){
+        work.poll();
         std::size_t end=i+1;
         const auto columns=rows[i].size();
         if(columns>=3){
             while(end<rows.size()&&rows[end].size()==columns&&
                   rows[end].front().baseline-rows[end-1].front().baseline<=h*2.5){
                 bool aligned=true;
-                for(std::size_t c=0;c<columns;++c)
+                for(std::size_t c=0;c<columns;++c){work.poll();
                     if(std::abs(rows[end][c].box.left-rows[i][c].box.left)>h*0.75||rows[end][c].items.size()>32)aligned=false;
+                }
                 if(!aligned)break;
                 ++end;
             }
@@ -207,19 +259,20 @@ Fragments recognize_tables(Fragments fragments,const std::vector<GlyphRecord>& r
         std::size_t numeric_cells=0;
         for(auto r=i;r<end;++r)for(const auto& cell:rows[r])if(numeric(cell))++numeric_cells;
         if(end-i>=3&&columns>=3&&numeric_cells>=2*(end-i-1)){
+            work.charge(sizeof(TextBlock),true);
             auto table=std::make_shared<TextBlock>();table->page=page;table->kind=BlockKind::Table;table->layout_confidence=0.95F;
             Rect box=rows[i].front().box;
             for(auto r=i;r<end;++r){
-                if(r>i)append(*table,"\n",{});
+                if(r>i)append(*table,"\n",{},work);
                 for(std::size_t c=0;c<columns;++c){
-                    if(c)append(*table,"\t",{});
-                    append_fragment(*table,rows[r][c],options,raw,false,false);box=unite(box,rows[r][c].box);
+                    if(c)append(*table,"\t",{},work);
+                    append_fragment(*table,rows[r][c],options,raw,false,false,work);box=unite(box,rows[r][c].box);
                 }
             }
             Fragment placeholder{{},box,rows[i].front().baseline,h,rows[i].front().orientation,table};
-            out.push_back(std::move(placeholder));i=end;
+            work.grow<Fragment>();out.push_back(std::move(placeholder));i=end;
         }else{
-            for(auto& f:rows[i])out.push_back(std::move(f));++i;
+            for(auto& f:rows[i]){work.grow<Fragment>();out.push_back(std::move(f));}++i;
         }
     }
     return out;
@@ -235,21 +288,30 @@ bool equation(const TextBlock& block){
     }
     return true;
 }
-std::string block_id(const TextBlock& block){
+std::string block_id(const TextBlock& block,LayoutWork& work){
     std::uint64_t hash=14695981039346656037ULL;
-    for(unsigned char c:block.reading_text_utf8){hash^=c;hash*=1099511628211ULL;}
+    for(unsigned char c:block.reading_text_utf8){work.poll();hash^=c;hash*=1099511628211ULL;}
     std::ostringstream out;out<<"layout1-p"<<block.page<<"-o"<<block.reading_order<<'-'<<std::hex<<hash;return out.str();
 }
 std::string folded(std::string_view text){std::string out(text);for(char& c:out)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');return out;}
 }
 
-PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Affine2D matrix,double width,double height) const{
+void LayoutEngine::check_glyph_budget(std::size_t count) const{
+    const auto budget=std::min(options_.working_bytes,options_.output_bytes);
+    if(budget<sizeof(PageLayout)||count>(budget-sizeof(PageLayout))/sizeof(GlyphRecord))throw LayoutResourceLimit();
+}
+PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Affine2D matrix,double width,double height,
+                             const std::function<bool()>& cancelled) const{
+    check_glyph_budget(glyphs.capacity());
+    LayoutWork work(options_,cancelled);
+    work.charge(sizeof(PageLayout)+glyphs.capacity()*sizeof(GlyphRecord),true);
     PageLayout result;result.page=page;result.glyphs=std::move(glyphs);result.pdf_to_layout=matrix;
     if(result.glyphs.empty())return result;
     // The pinned PDFium can expose UTF-16 surrogate code units as two character
     // records for one ToUnicode mapping, even on platforms with 32-bit wchar_t.
     // Keep both original PDF indices while emitting one valid UTF-8 scalar.
     for(std::size_t i=0;i<result.glyphs.size();++i){
+        work.poll();
         auto& g=result.glyphs[i];if(g.unicode_continuation)continue;
         if(g.unicode>=0xd800&&g.unicode<=0xdbff&&i+1<result.glyphs.size()){
             auto& next=result.glyphs[i+1];
@@ -268,6 +330,7 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
     bool unicode_available=false,usable_visible_text=false,visible_character=false;
     const double unit=(std::hypot(matrix.a,matrix.b)+std::hypot(matrix.c,matrix.d))/2;
     for(const auto& g:result.glyphs){
+        work.poll();
         if(g.unicode_continuation)continue;
         if(!g.valid_bounds)continue;
         if(!std::isfinite(g.bounds.left)||!std::isfinite(g.bounds.right)||!std::isfinite(g.bounds.top)||!std::isfinite(g.bounds.bottom)||
@@ -295,36 +358,43 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
                 sort_x=std::min(pa.x,pb.x);
             }
         }
+        work.grow<Item>();work.grow<double>();
         directions[direction].push_back({&g,box,oriented(origin).y,font_height,sort_x});heights.push_back(font_height);
     }
-    const auto typical=median(heights);
+    const auto typical=median(std::move(heights),work);
     for(int direction=0;direction<4;++direction){
+        work.checkpoint();
         auto& items=directions[direction];
-        std::sort(items.begin(),items.end(),[](const auto& a,const auto& b){if(a.baseline!=b.baseline)return a.baseline<b.baseline;return a.box.left<b.box.left;});
+        work.sort(items.begin(),items.end(),[](const auto& a,const auto& b){if(a.baseline!=b.baseline)return a.baseline<b.baseline;return a.box.left<b.box.left;});
         std::vector<std::vector<Item>> rows;
         for(const auto& item:items){
             if(rows.empty()||std::abs(item.baseline-rows.back().front().baseline)>
-               options_.baseline_tolerance*std::max(item.height,rows.back().front().height)+0.5*std::abs(item.height-rows.back().front().height))rows.push_back({});
+               options_.baseline_tolerance*std::max(item.height,rows.back().front().height)+0.5*std::abs(item.height-rows.back().front().height)){work.grow<std::vector<Item>>();rows.push_back({});}
+            work.grow<Item>();
             rows.back().push_back(item);
         }
         Fragments fragments;
         for(auto& row:rows){
-            std::sort(row.begin(),row.end(),[](const auto& a,const auto& b){if(a.sort_x!=b.sort_x)return a.sort_x<b.sort_x;return a.glyph->index<b.glyph->index;});
-            std::vector<double> sizes;for(const auto& item:row)sizes.push_back(item.height);const double h=median(sizes);
+            work.sort(row.begin(),row.end(),[](const auto& a,const auto& b){if(a.sort_x!=b.sort_x)return a.sort_x<b.sort_x;return a.glyph->index<b.glyph->index;});
+            work.grow<double>(row.size());std::vector<double> sizes;sizes.reserve(row.size());for(const auto& item:row){work.poll();sizes.push_back(item.height);}const double h=median(std::move(sizes),work);
             for(const auto& item:row){
-                if(fragments.empty()||fragments.back().baseline!=row.front().baseline||item.box.left-fragments.back().box.right>h*options_.fragment_gap)
+                if(fragments.empty()||fragments.back().baseline!=row.front().baseline||item.box.left-fragments.back().box.right>h*options_.fragment_gap){
+                    work.grow<Fragment>();
                     fragments.push_back({{},item.box,row.front().baseline,h,direction});
+                }
+                work.grow<Item>();
                 auto& f=fragments.back();f.items.push_back(item);f.box=unite(f.box,item.box);
             }
         }
-        fragments=recognize_tables(std::move(fragments),result.glyphs,page,typical,options_);
-        std::vector<Fragments> leaves;regions(std::move(fragments),typical,options_,0,leaves);
+        fragments=recognize_tables(std::move(fragments),result.glyphs,page,typical,options_,work);
+        std::vector<Fragments> leaves;regions(std::move(fragments),typical,options_,0,leaves,work);
         for(const auto& leaf:leaves){
             const Fragment* previous=nullptr;
             TextBlock* block=nullptr;
             for(const auto& f:leaf){
+                work.poll();
                 if(f.table){
-                    auto table=*f.table;table.reading_order=static_cast<std::uint32_t>(result.blocks.size());
+                    work.grow<TextBlock>(1,true);auto table=std::move(*f.table);table.reading_order=static_cast<std::uint32_t>(result.blocks.size());
                     result.blocks.push_back(std::move(table));previous=nullptr;block=nullptr;continue;
                 }
                 const double overlap=previous?std::min(previous->box.right,f.box.right)-std::max(previous->box.left,f.box.left):0;
@@ -332,30 +402,35 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
                 const bool same=previous&&f.baseline>previous->baseline&&f.baseline-previous->baseline<=options_.paragraph_baseline_gap*std::max(previous->height,f.height)&&
                     f.height/previous->height>0.72&&f.height/previous->height<1.38&&overlap>span*0.5;
                 if(!same){
+                    work.grow<TextBlock>(1,true);
                     TextBlock b;b.page=page;b.reading_order=static_cast<std::uint32_t>(result.blocks.size());
                     b.kind=f.height>typical*1.35?BlockKind::Heading:BlockKind::Paragraph;b.layout_confidence=direction==0?0.85F:0.6F;
                     result.blocks.push_back(std::move(b));block=&result.blocks.back();
                 }
                 const bool no_space=previous&&(previous->items.back().glyph->unicode==0xad||
                     (wide(previous->items.back().glyph->unicode)&&wide(f.items.front().glyph->unicode)));
-                append_fragment(*block,f,options_,result.glyphs,same,no_space);previous=&f;
+                append_fragment(*block,f,options_,result.glyphs,same,no_space,work);previous=&f;
             }
         }
     }
     for(auto& block:result.blocks){
-        const auto lower=folded(block.reading_text_utf8);
+        work.charge(block.reading_text_utf8.size());
+        std::string lower=block.reading_text_utf8;for(char& c:lower){work.poll();if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');}
         if(block.kind!=BlockKind::Table){
             if(lower.starts_with("figure ")||lower.starts_with("fig. ")||lower.starts_with("table "))block.kind=BlockKind::Caption;
             else if(equation(block))block.kind=BlockKind::Equation;
         }
-        block.block_id=block_id(block);
-        if(!result.reading_text_utf8.empty())result.reading_text_utf8+="\n\n";
+        block.block_id=block_id(block,work);work.grow<char>(block.block_id.capacity(),true);
+        if(!result.reading_text_utf8.empty()){work.grow<char>(2,true);result.reading_text_utf8+="\n\n";}
+        work.grow<char>(block.reading_text_utf8.size(),true);
         const auto offset=result.reading_text_utf8.size();result.reading_text_utf8+=block.reading_text_utf8;
-        for(auto m:block.reading_mapping){m.utf8_begin+=offset;m.utf8_end+=offset;result.reading_mapping.push_back(std::move(m));}
-        for(auto line:block.lines){line.utf8_begin+=offset;line.utf8_end+=offset;result.lines.push_back(line);}
+        for(const auto& original:block.reading_mapping){work.grow<TextMapping>(1,true);work.grow<SourceCharRange>(original.source_ranges.size(),true);auto m=original;m.utf8_begin+=offset;m.utf8_end+=offset;result.reading_mapping.push_back(std::move(m));}
+        for(auto line:block.lines){work.grow<TextLine>(1,true);line.utf8_begin+=offset;line.utf8_end+=offset;result.lines.push_back(line);}
     }
     result.availability=!visible_character?PageLayout::Availability::NoTranslatableText:!unicode_available?PageLayout::Availability::UnicodeUnavailable:
         usable_visible_text&&!result.reading_text_utf8.empty()?PageLayout::Availability::TextAvailable:PageLayout::Availability::NoTranslatableText;
+    work.checkpoint();
+    if(layout_memory_bytes(result)>options_.output_bytes)throw LayoutResourceLimit();
     return result;
 }
 std::vector<SourceCharRange> source_ranges(const PageLayout& layout,std::size_t begin,std::size_t end){

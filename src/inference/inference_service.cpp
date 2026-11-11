@@ -83,13 +83,17 @@ struct InferenceService::Impl {
                     try{
                         if(!backend)throw std::runtime_error("Model unavailable");
                         auto chunk=std::make_shared<const PreparedChunk>(ChunkPlanner::prepare(plan->request,backend->capacity(),
-                            [&](std::string_view source,Form form){return backend->prepare(source,form);}));
+                            [&](std::string_view source,Form form){return backend->prepare(source,form);},
+                            [&]{return cancelled.load();}));
                         {
                             std::lock_guard lock(mutex);if(plan->serial!=serial||cancelled.load())continue;phase=Phase::Prepared;
                         }
                         InferenceEvent e;e.kind=InferenceEvent::Kind::Prepared;e.model=plan->request.stamp.model;
                         e.stamp=plan->request.stamp;e.chunk=std::move(chunk);emit(std::move(e));
+                    }catch(const PreparationCancelled&){
+                        // A superseding request or shutdown owns the next state.
                     }catch(const std::exception& error){
+                        {std::lock_guard lock(mutex);if(plan->serial!=serial||cancelled.load())continue;}
                         InferenceEvent e;e.kind=InferenceEvent::Kind::PreparationFailed;e.model=plan->request.stamp.model;
                         e.stamp=plan->request.stamp;e.message="翻訳の入力を準備できません。原文を確認して再試行できます。";e.detail=error.what();
                         e.result.reason=dynamic_cast<const Utf8Error*>(&error)?FinishReason::InvalidEncoding:FinishReason::DecodeError;emit(std::move(e));

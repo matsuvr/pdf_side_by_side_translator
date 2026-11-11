@@ -15,6 +15,7 @@ struct State {
     std::mutex mutex;
     std::vector<std::thread::id> owners;
     std::atomic_bool fail_metal{true},block_load{false},load_started{false};
+    std::atomic_bool block_prepare{false},prepare_started{false};
     std::atomic<unsigned> loads{0},generations{0},destroyed{0};
     void record(){std::lock_guard lock(mutex);owners.push_back(std::this_thread::get_id());}
 };
@@ -33,7 +34,10 @@ public:
     }
     void unload() override{state_->record();}
     opt::PreparedInput prepare(std::string_view source,opt::Form) const override{
-        state_->record();opt::PreparedInput out;out.tokens={1};out.stop_ids={99};out.output_limit=8;
+        state_->record();state_->prepare_started=true;
+        while(state_->block_prepare.load()&&!cancel_.load())std::this_thread::sleep_for(2ms);
+        if(cancel_.load())throw opt::PreparationCancelled();
+        opt::PreparedInput out;out.tokens={1};out.stop_ids={99};out.output_limit=8;
         for(auto scalar:opt::utf8_scalars(source))out.tokens.push_back(static_cast<int>(scalar.value));
         out.source_tokens=static_cast<std::uint32_t>(out.tokens.size()-1);return out;
     }
@@ -88,6 +92,16 @@ int main(int argc,char** argv){
             check(!service.execute(first)&&service.execute(second),"A delayed old cache response executed the wrong page");
             check(inbox.wait(opt::InferenceEvent::Kind::Finished,2)->result.reason==opt::FinishReason::Completed,"Independent next job failed");
             service.cancel_job();check(!service.execute(second),"Stop allowed a completed job to restart");
+            state->block_prepare=true;state->prepare_started=false;
+            check(service.plan(request(3,2)),"Cancellable preparation was not accepted");
+            const auto deadline=std::chrono::steady_clock::now()+3s;
+            while(!state->prepare_started&&std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(2ms);
+            check(state->prepare_started,"Preparation did not start");
+            service.cancel_job();state->block_prepare=false;
+            check(service.plan(request(4,3)),"Cancelled preparation blocked the next page");
+            auto fourth=inbox.wait(opt::InferenceEvent::Kind::Prepared,4)->chunk;
+            check(service.execute(fourth),"Prepared next page could not execute");
+            check(inbox.wait(opt::InferenceEvent::Kind::Finished,4)->result.reason==opt::FinishReason::Completed,"Cancelled preparation poisoned the next job");
             service.stop();service.join();check(service.done(),"Inference worker did not finish");
         }
         check(state->destroyed==1,"Backend was not destroyed");

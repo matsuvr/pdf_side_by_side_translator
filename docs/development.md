@@ -55,6 +55,21 @@ fixtureはこのプロジェクトのために新規作成したPDFです。フ�
 - `src/pdf/`: PDFium専用worker、段階的tile描画、layoutと原文mapping
 - `src/inference/`: llama専用worker、PFML3、実token長に基づく分割
 - `src/translation/`: page attempt、再開・ページ単位の翻訳
-- `src/storage/`: I/O専用worker、state/cache、同一open objectのhash、書き出し
+- `src/storage/`: I/O専用worker、メモリ内state/cache、同一open objectのhash、明示的な書き出し
 - `src/platform/`: native path・font・IME・text viewportの小さなOS差分
 - `tests/`: 所有権・競合・cache・Unicode・大判PDF・実モデルの試験
+
+
+## セッションデータの回帰試験
+
+文書データの自動永続化は行いません。[現在の仕様](session-data.md)を参照してください。
+`store_test` はSQLiteの割当失敗を注入し、構築途中の例外後に割当量が元に戻ることも確認します。
+`io_service_test` は通常キューが満杯の間の手編集、入力の別名への書き出し拒否、置き換え直前の再検査、遅い書き出しと終了を確認します。
+`session_sources_test` はページ移動・遅延した読込・自動抽出へのリセットの組合せで、GUIが保持する編集内容を検証します。
+
+layoutと安全なファイルreadの単体試験はPDFiumなしでも構築できます。
+PDFiumを使う統合試験は、固定版の依存を用意した通常のpresetで実行してください。
+実モデル試験は `inference_probe` にlockと一致するGGUFを渡して行い（準備処理のみは末尾に `--prepare-only` を追加）、長大入力の容量判定・キャンセルとPFML3の参照token列も確認します。
+
+ASan/UBSanを利用できるホストでは、関連するC++試験を両sanitizer付きで実行します。
+メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。

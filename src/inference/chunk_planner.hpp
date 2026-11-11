@@ -31,6 +31,6 @@ class ChunkPlanner {
 public:
     using Prepare=std::function<PreparedInput(std::string_view,Form)>;
     static PreparedChunk prepare(const ChunkRequest& request,std::uint32_t context_capacity,
-                                 const Prepare& prompt);
+                                 const Prepare& prompt,const std::function<bool()>& cancelled={});
 };
 }

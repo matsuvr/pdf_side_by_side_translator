@@ -66,7 +66,7 @@ struct TextBlock {
     float layout_confidence=0;
 };
 struct PageLayout {
-    enum class Availability { TextAvailable, NoTextLayer, UnicodeUnavailable, NoTranslatableText };
+    enum class Availability { TextAvailable, NoTextLayer, UnicodeUnavailable, NoTranslatableText, ResourceLimited };
     PageIndex page=0;
     static constexpr std::uint32_t current_version=2;
     std::uint32_t layout_version=current_version;

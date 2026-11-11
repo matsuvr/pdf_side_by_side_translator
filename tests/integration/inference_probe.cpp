@@ -6,13 +6,15 @@
 #include <stdexcept>
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::cerr << "usage: inference_probe model.gguf [cpu|auto] [token-fixture.tsv]\n"; return 2; }
+    if (argc < 2) { std::cerr << "usage: inference_probe model.gguf [cpu|auto] [token-fixture.tsv] [--prepare-only]\n"; return 2; }
     try {
+        const bool prepare_only=argc>2&&std::string_view(argv[argc-1])=="--prepare-only";
+        const int positional_count=argc-static_cast<int>(prepare_only);
         std::atomic_bool cancel{false};
         opt::Engine engine(cancel);
-        engine.load(std::filesystem::u8path(argv[1]), argc < 3 || std::string(argv[2]) == "cpu");
+        engine.load(std::filesystem::u8path(argv[1]), positional_count < 3 || std::string(argv[2]) == "cpu");
         std::cout << "backend=" << engine.backend() << " context=" << engine.capacity() << '\n';
-        if (argc > 3) {
+        if (positional_count > 3) {
             std::ifstream fixture(argv[3]);
             if (!fixture) throw std::runtime_error("Fixture not found");
             std::string line;
@@ -37,6 +39,37 @@ int main(int argc, char** argv) {
             if (!count) throw std::runtime_error("Empty tokenizer fixture");
             std::cout << "reference_tokenizer_cases=" << count << " matched\n";
         }
+        bool unsupported = false;
+        try { engine.prepare("Print <|plamo:tag|> literally.",opt::Form::Plain); }
+        catch (const std::runtime_error& e) { unsupported = true; std::cout << e.what() << '\n'; }
+        std::cout << "reserved_marker=" << (unsupported?"unsupported":"literal") << '\n';
+        const auto prefix=engine.tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
+            "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>",true,true);
+        const auto suffix=engine.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
+            "<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>",false,true);
+        std::string boundary_run;
+        for(unsigned i=0;i<1000;++i)boundary_run+="\xee\xb8\x80";
+        const std::vector<std::string> boundary_cases={
+            "ab\xee\xb8\x80" "cd", "\xee\xb8\x80\xee\xb8\x80", "日\xee\xb8\x80本語\xee\xb8\x80  text",
+            "before<|plamo:x\xee\xb8\x80y|>after", "prefix<|plamo:"+boundary_run+"|>suffix", "before"+boundary_run+"after"};
+        for(const auto& source:boundary_cases){
+            auto expected=prefix;
+            const auto body=engine.tokenize(source,false,false);
+            expected.insert(expected.end(),body.begin(),body.end());expected.insert(expected.end(),suffix.begin(),suffix.end());
+            if(engine.prepare(source,opt::Form::Plain).tokens!=expected)
+                throw std::runtime_error("Bounded tokenizer changed private-boundary tokenization");
+        }
+        bool context_rejected=false;
+        try{engine.prepare(std::string(8*1024*1024,'x'),opt::Form::Plain);}
+        catch(const opt::InputContextLimit&){context_rejected=true;}
+        if(!context_rejected)throw std::runtime_error("Oversized preparation did not reject context overflow");
+        cancel=true;bool preparation_cancelled=false;
+        try{engine.prepare("Input to cancel before tokenization.",opt::Form::Plain);}
+        catch(const opt::PreparationCancelled&){preparation_cancelled=true;}
+        cancel=false;
+        if(!preparation_cancelled)throw std::runtime_error("Preparation ignored cancellation");
+        std::cout << "bounded_preparation_private_boundaries_and_cancellation=passed\n";
+        if(prepare_only)return 0;
         for (auto form : {opt::Form::Plain,opt::Form::Easy}) {
             std::cout << "style=" << opt::form_setting(form) << '\n';
             for (const auto* input : {"The device has 3 sensors. It does not use the network.",
@@ -47,10 +80,6 @@ int main(int argc, char** argv) {
                 if(result.reason!=opt::FinishReason::Completed) throw std::runtime_error("Incomplete generation");
             }
         }
-        bool unsupported = false;
-        try { engine.prepare("Print <|plamo:tag|> literally.",opt::Form::Plain); }
-        catch (const std::runtime_error& e) { unsupported = true; std::cout << e.what() << '\n'; }
-        std::cout << "reserved_marker=" << (unsupported?"unsupported":"literal") << '\n';
         auto prepared=engine.prepare("The device has 3 sensors. It does not use the network.",opt::Form::Plain);
         auto baseline=engine.generate(prepared,[](std::string_view){});
         cancel=true;

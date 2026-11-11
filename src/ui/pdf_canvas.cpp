@@ -9,7 +9,7 @@
 #include <climits>
 
 namespace opt {
-namespace {constexpr int render_flags=1;constexpr std::size_t gui_cache_budget=96*1024*1024;}
+namespace {constexpr std::size_t gui_cache_budget=96*1024*1024;}
 PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxID_ANY),sink_(std::move(sink)){
     SetName(wxS("PDF原文"));SetBackgroundStyle(wxBG_STYLE_PAINT);SetScrollRate(1,1);
     Bind(wxEVT_PAINT,&PdfCanvas::paint,this);
@@ -172,7 +172,7 @@ void PdfCanvas::request_visible(){
     ViewRequest request{document_,page_,width_,height_,rotation_,{}};
     for(std::int64_t y=static_cast<int>(top)/512*512;y<bottom&&request.tiles.size()<64;y+=512)
         for(std::int64_t x=static_cast<int>(left)/512*512;x<right&&request.tiles.size()<64;x+=512){
-            TileKey key{document_,page_,width_,height_,rotation_,render_flags,static_cast<int>(x),static_cast<int>(y)};
+            TileKey key{document_,page_,width_,height_,rotation_,pdf_render_flags,static_cast<int>(x),static_cast<int>(y)};
             if(!cache_.contains(key))request.tiles.emplace_back(key.x,key.y);
         }
     if(last_request_&&last_request_->document==request.document&&last_request_->page==request.page&&
@@ -195,13 +195,16 @@ void PdfCanvas::accept(const PdfEvent& e){
     }
     if(e.kind!=PdfEvent::Kind::TileReady||!e.pixels)return;
     const auto& r=*e.pixels;
+    if(r.width<=0||r.width>512||r.height<=0||r.height>512||r.stride<r.width*4||
+       static_cast<std::size_t>(r.stride)>r.bgra.size()/static_cast<std::size_t>(r.height))return;
     wxImage image(r.width,r.height);
+    if(!image.IsOk()||!image.GetData())return;
     auto* rgb=image.GetData();
     for(int y=0;y<r.height;++y)for(int x=0;x<r.width;++x){
         const auto i=static_cast<std::size_t>(y)*r.stride+x*4,j=(static_cast<std::size_t>(y)*r.width+x)*3;
         rgb[j]=r.bgra[i+2];rgb[j+1]=r.bgra[i+1];rgb[j+2]=r.bgra[i];
     }
-    wxBitmap bitmap(image);bitmap.SetScaleFactor(scale_);
+    wxBitmap bitmap(image);if(!bitmap.IsOk())return;bitmap.SetScaleFactor(scale_);
     const auto bytes=static_cast<std::size_t>(r.width)*r.height*4;
     if(auto old=cache_.find(e.key);old!=cache_.end())cache_bytes_-=old->second.bytes;
     cache_.insert_or_assign(e.key,CachedTile{std::move(bitmap),bytes,++tick_});cache_bytes_+=bytes;

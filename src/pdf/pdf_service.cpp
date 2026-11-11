@@ -1,5 +1,6 @@
 #include "pdf/pdf_service.hpp"
 #include "pdf/font_adapter.hpp"
+#include "pdf/file_reader.hpp"
 #include "platform/mapped_file.hpp"
 #include "pdf/layout.hpp"
 #include "fpdfview.h"
@@ -12,6 +13,7 @@
 #include <condition_variable>
 #include <deque>
 #include <list>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -19,6 +21,7 @@
 
 namespace opt {
 namespace {
+static_assert(pdf_render_flags==(FPDF_ANNOT|FPDF_RENDER_LIMITEDIMAGECACHE));
 using Clock=std::chrono::steady_clock;
 struct Page {
     FPDF_PAGE page=nullptr;
@@ -48,12 +51,15 @@ struct TextExtraction {
     PageIndex index;
     std::vector<GlyphRecord> glyphs;
     int cursor=0,count=0;
+    LayoutOptions options;
     std::optional<PdfSearchRequest> search;
-    TextExtraction(std::shared_ptr<Page> page,PageIndex number,std::optional<PdfSearchRequest> request={})
-        :owner(std::move(page)),index(number),search(std::move(request)){
+    TextExtraction(std::shared_ptr<Page> page,PageIndex number,LayoutOptions limits,std::optional<PdfSearchRequest> request={})
+        :owner(std::move(page)),index(number),options(limits),search(std::move(request)){
         if(!owner->text)owner->text=FPDFText_LoadPage(owner->page);
         if(!owner->text)throw std::runtime_error("このページの文字を抽出できません。");
         count=FPDFText_CountChars(owner->text);if(count<0)throw std::runtime_error("文字数を取得できません。");
+        try{LayoutEngine(options).check_glyph_budget(static_cast<std::size_t>(count));}
+        catch(...){FPDFText_ClosePage(owner->text);owner->text=nullptr;throw;}
         glyphs.reserve(static_cast<std::size_t>(count));
     }
     bool step(const std::atomic_bool& stopping,const std::atomic<DocumentEpoch>& wanted,DocumentEpoch epoch){
@@ -73,19 +79,25 @@ struct TextExtraction {
         std::string large;
         const char* name=buffer.data();
         if(length>buffer.size()){
+            // Font names are parser metadata, not user text. Avoid allocating an
+            // attacker-controlled font-name buffer larger than the layout budget.
+            if(length>options.working_bytes-glyphs.capacity()*sizeof(GlyphRecord))throw LayoutResourceLimit();
             large.resize(length);name=large.data();
             if(FPDFText_GetFontInfo(page.text,i,large.data(),length,&flags)!=length)name=nullptr;
         }
         if(name&&length){
             std::uint32_t hash=2166136261U;
-            for(unsigned long j=0;j<length;++j){hash^=static_cast<unsigned char>(name[j]);hash*=16777619U;}
+            for(unsigned long j=0;j<length;++j){
+                if((j&65535UL)==0&&(stopping.load()||wanted.load()!=epoch))throw LayoutCancelled();
+                hash^=static_cast<unsigned char>(name[j]);hash*=16777619U;
+            }
             g.font_id=hash^static_cast<std::uint32_t>(flags);
         }
         glyphs.push_back(g);
         }
         return cursor==count;
     }
-    ExtractedPage finish(){const auto info=describe(owner->page);return {info,std::make_shared<const PageLayout>(LayoutEngine{}.build(index,std::move(glyphs),info.pdf_to_layout,info.layout_width,info.layout_height))};}
+    ExtractedPage finish(const std::function<bool()>& cancelled){const auto info=describe(owner->page);return {info,std::make_shared<const PageLayout>(LayoutEngine(options).build(index,std::move(glyphs),info.pdf_to_layout,info.layout_width,info.layout_height,cancelled))};}
 };
 bool same_geometry(const TileKey& a,const ViewRequest& b) {
     return a.document==b.document&&a.page==b.page&&a.full_width==b.width&&
@@ -98,6 +110,7 @@ struct PdfService::Impl {
     struct OpenRequest {DocumentEpoch epoch;std::filesystem::path path;std::string password;};
     Delivery delivery;
     std::filesystem::path font_directory;
+    LayoutOptions layout_options;
     std::mutex mutex;
     std::condition_variable cv;
     std::optional<OpenRequest> opening;
@@ -115,7 +128,7 @@ struct PdfService::Impl {
     static void maximum(std::atomic<std::uint64_t>& target,std::uint64_t value){auto prior=target.load();while(prior<value&&!target.compare_exchange_weak(prior,value)){}}
     void render_slice(Clock::time_point start,int status){++render_slices;if(status==FPDF_RENDER_TOBECONTINUED)++render_yields;maximum(render_max_us,std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-start).count());}
     std::thread worker;
-    explicit Impl(Delivery callback,std::filesystem::path fonts):delivery(std::move(callback)),font_directory(std::move(fonts)),worker([this]{run();}){}
+    explicit Impl(Delivery callback,std::filesystem::path fonts,LayoutOptions limits):delivery(std::move(callback)),font_directory(std::move(fonts)),layout_options(limits),worker([this]{run();}){}
     ~Impl(){stop();if(worker.joinable())worker.join();}
     void stop() noexcept{std::lock_guard lock(mutex);stopping=true;cv.notify_one();}
     void emit(PdfEvent event){delivery(std::make_shared<const PdfEvent>(std::move(event)));}
@@ -145,7 +158,15 @@ struct PdfService::Impl {
         try {
             Library library;
             PdfFontAdapter font_adapter(font_directory);
-            std::unique_ptr<MappedFile> file;
+            std::unique_ptr<PdfFileReader> file;
+            FPDF_FILEACCESS file_access{};
+#ifdef _WIN32
+            // FPDF_FILEACCESS uses 32-bit unsigned long on Windows. Preserve
+            // support for files above 4 GiB without copying them into RAM/disk.
+            // Win32 forbids truncation while a mapped view exists:
+            // https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-setendoffile
+            std::unique_ptr<MappedFile> large_windows_file;
+#endif
             FPDF_DOCUMENT document=nullptr;
             std::list<std::pair<PageIndex,std::shared_ptr<Page>>> pages;
             std::unique_ptr<ActiveRender> active;
@@ -154,14 +175,19 @@ struct PdfService::Impl {
             std::optional<ViewRequest> view;
             DocumentEpoch epoch=0;
             unsigned page_count=0,completed_tiles=0;
-            auto release=[&]{active.reset();text_work.reset();{std::lock_guard lock(mutex);extracting.reset();}tiles.clear();view.reset();pages.clear();if(document)FPDF_CloseDocument(document);document=nullptr;file.reset();page_count=0;};
-            struct SessionGuard {decltype(release)& release;~SessionGuard(){release();}} session{release};
+            auto release=[&]{active.reset();text_work.reset();{std::lock_guard lock(mutex);extracting.reset();}tiles.clear();view.reset();pages.clear();if(document)FPDF_CloseDocument(document);document=nullptr;file.reset();
+#ifdef _WIN32
+                large_windows_file.reset();
+#endif
+                page_count=0;};
+            struct SessionGuard {decltype(release)& cleanup;~SessionGuard(){cleanup();}} session{release};
             auto get_page=[&](PageIndex index)->std::shared_ptr<Page>{
                 if(!document||index>=page_count)throw std::runtime_error("ページ番号が範囲外です。");
-                if(file->signature()!=file->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
+                file->check();
                 auto it=std::find_if(pages.begin(),pages.end(),[&](const auto& p){return p.first==index;});
                 if(it!=pages.end()){auto p=it->second;pages.splice(pages.begin(),pages,it);return p;}
                 auto p=std::make_shared<Page>();p->page=FPDF_LoadPage(document,static_cast<int>(index));
+                file->check();
                 if(!p->page)throw std::runtime_error("このページを読み込めません。別のページは引き続き開けます。");
                 pages.emplace_front(index,p);
                 while(pages.size()>8){
@@ -189,10 +215,32 @@ struct PdfService::Impl {
                     if(open){
                         release();epoch=open->epoch;
                         if(open->path.empty()){PdfEvent e;e.kind=PdfEvent::Kind::Closed;e.document=epoch;emit(std::move(e));continue;}
-                        file=std::make_unique<MappedFile>(open->path);
-                        auto bytes=file->bytes();
-                        document=FPDF_LoadMemDocument64(bytes.data(),bytes.size(),open->password.empty()?nullptr:open->password.c_str());
+                        auto snapshot=FileSnapshot::open(open->path);
+                        if(!snapshot->initial_signature().size)throw std::runtime_error("空のファイルです。");
+                        // A synchronous PDFium parse has no cancellation API.
+                        // Finish that call, then discard stale work; deliberate
+                        // callback read failures can violate parser invariants.
+                        file=std::make_unique<PdfFileReader>(snapshot);
+#ifdef _WIN32
+                        if(snapshot->initial_signature().size>std::numeric_limits<unsigned long>::max()){
+                            large_windows_file=std::make_unique<MappedFile>(open->path);
+                            if(large_windows_file->initial_signature()!=snapshot->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
+                            file=std::make_unique<PdfFileReader>(large_windows_file->snapshot());
+                            const auto bytes=large_windows_file->bytes();
+                            document=FPDF_LoadMemDocument64(bytes.data(),bytes.size(),open->password.empty()?nullptr:open->password.c_str());
+                        }else
+#endif
+                        {
+                            if(snapshot->initial_signature().size>std::numeric_limits<unsigned long>::max())throw std::runtime_error("この環境のPDF読込APIで扱えるファイルサイズを超えています。");
+                            file_access.m_FileLen=static_cast<unsigned long>(snapshot->initial_signature().size);
+                            file_access.m_Param=file.get();
+                            file_access.m_GetBlock=[](void* parameter,unsigned long offset,unsigned char* buffer,unsigned long size) noexcept ->int{
+                                return static_cast<PdfFileReader*>(parameter)->read(offset,{reinterpret_cast<std::byte*>(buffer),size})?1:0;
+                            };
+                            document=FPDF_LoadCustomDocument(&file_access,open->password.empty()?nullptr:open->password.c_str());
+                        }
                         std::fill(open->password.begin(),open->password.end(),'\0');
+                        file->check();
                         if(!document){
                             const auto error=FPDF_GetLastError();file.reset();
                             PdfEvent e;e.document=epoch;e.code="PdfOpen";e.detail=std::to_string(error);
@@ -205,7 +253,7 @@ struct PdfService::Impl {
                         page_count=static_cast<unsigned>(count);
                         PdfEvent e;e.kind=PdfEvent::Kind::Opened;e.document=epoch;e.page_count=page_count;
                         e.file_signature=file->initial_signature();
-                        try{e.file_snapshot=file->snapshot();}catch(const std::exception&){e.detail="Fingerprint file object unavailable";}
+                        e.file_snapshot=file->snapshot();
                         e.info=describe(get_page(0)->page);emit(std::move(e));continue;
                     }
                     if(page_request){
@@ -229,17 +277,18 @@ struct PdfService::Impl {
                         for(const auto& [x,y]:view->tiles){
                             if(tiles.size()>=64)break;
                             if(x<0||y<0||x>=view->width||y>=view->height||x%512||y%512)continue;
-                            TileKey k{epoch,view->page,view->width,view->height,view->rotation,FPDF_ANNOT,x,y};
+                            TileKey k{epoch,view->page,view->width,view->height,view->rotation,pdf_render_flags,x,y};
                             if((!active||active->key!=k)&&std::find(tiles.begin(),tiles.end(),k)==tiles.end())tiles.push_back(k);
                         }
                         PdfEvent e;e.kind=PdfEvent::Kind::ViewReady;e.document=epoch;e.page=view->page;
-                        e.key={epoch,view->page,view->width,view->height,view->rotation,FPDF_ANNOT,0,0};
+                        e.key={epoch,view->page,view->width,view->height,view->rotation,pdf_render_flags,0,0};
                         e.transform=transform(get_page(view->page)->page,view->width,view->height,view->rotation);emit(std::move(e));
                     }
                     if(active){
                         active->deadline=Clock::now()+std::chrono::milliseconds(10);
                         const auto slice_started=Clock::now();
                         active->status=FPDF_RenderPage_Continue(active->page->page,active.get());
+                        file->check();
                         render_slice(slice_started,active->status);
                         if(active->status==FPDF_RENDER_TOBECONTINUED)continue;
                         if(active->status!=FPDF_RENDER_DONE)throw std::runtime_error("このタイルを描画できません。");
@@ -281,17 +330,18 @@ struct PdfService::Impl {
                         text_operation=true;
                         if(text_request->first!=epoch)continue;
                         operation_page=text_request->second;
-                        text_work=std::make_unique<TextExtraction>(get_page(operation_page),operation_page);
+                        text_work=std::make_unique<TextExtraction>(get_page(operation_page),operation_page,layout_options);
                         {std::lock_guard lock(mutex);extracting=std::pair{epoch,operation_page};std::erase(extraction,*extracting);}
                     }
                     if(search_request){
                         text_operation=true;
                         if(search_request->document!=epoch)continue;
                         operation_page=search_request->page;operation_query=search_request->generation;
-                        if(!file||file->signature()!=file->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
+                        if(!file)throw std::runtime_error("PDFが閉じられました。");
+                        file->check();
                         auto layout=search_request->cached_layout;
                         if(!layout||layout->page!=operation_page||layout->layout_version!=PageLayout::current_version)
-                            text_work=std::make_unique<TextExtraction>(get_page(operation_page),operation_page,std::move(search_request));
+                            text_work=std::make_unique<TextExtraction>(get_page(operation_page),operation_page,layout_options,std::move(search_request));
                         else {
                             PdfEvent e;e.kind=PdfEvent::Kind::SearchResult;e.document=epoch;e.page=operation_page;
                             e.query_generation=search_request->generation;e.layout=layout;
@@ -302,10 +352,12 @@ struct PdfService::Impl {
                     if(text_work&&(tiles.empty()||completed_tiles>=4)){
                         text_operation=true;
                         completed_tiles=0;operation_page=text_work->index;operation_query=text_work->search?text_work->search->generation:0;
-                        if(!file||file->signature()!=file->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
+                        if(!file)throw std::runtime_error("PDFが閉じられました。");
+                        file->check();
                         ++text_slices;const bool complete=text_work->step(stopping,requested_document,epoch);if(!complete)++text_yields;
                         if(complete){
-                            auto extracted=text_work->finish();PdfEvent e;e.document=epoch;e.page=operation_page;e.info=extracted.info;e.layout=std::move(extracted.layout);
+                            const auto query=operation_query;
+                            auto extracted=text_work->finish([&]{return stopping.load()||requested_document.load()!=epoch||(query&&desired_query.load()!=query);});file->check();PdfEvent e;e.document=epoch;e.page=operation_page;e.info=extracted.info;e.layout=std::move(extracted.layout);
                             if(text_work->search){const auto& s=*text_work->search;e.kind=PdfEvent::Kind::SearchResult;e.query_generation=s.generation;
                                 e.hit=s.backward?find_text_backward(*e.layout,s.query,s.start,s.match_case):find_text(*e.layout,s.query,s.start,s.match_case);}
                             else e.kind=PdfEvent::Kind::Extracted;
@@ -330,6 +382,7 @@ struct PdfService::Impl {
                         const auto slice_started=Clock::now();
                         active->status=FPDF_RenderPageBitmap_Start(active->bitmap,active->page->page,-key.x,-key.y,
                             key.full_width,key.full_height,key.rotation,key.flags,active.get());
+                        file->check();
                         render_slice(slice_started,active->status);
                         if(active->status==FPDF_RENDER_DONE){
                             PdfEvent e;e.kind=PdfEvent::Kind::TileReady;e.document=epoch;e.page=key.page;e.key=key;
@@ -337,6 +390,12 @@ struct PdfService::Impl {
                         }else if(active->status!=FPDF_RENDER_TOBECONTINUED)throw std::runtime_error("このタイルを描画できません。");
                         continue;
                     }
+                }catch(const LayoutResourceLimit& error){
+                    if(text_work&&text_work->owner->text){FPDFText_ClosePage(text_work->owner->text);text_work->owner->text=nullptr;}
+                    text_work.reset();{std::lock_guard lock(mutex);extracting.reset();}
+                    auto layout=std::make_shared<PageLayout>();layout->page=operation_page;layout->availability=PageLayout::Availability::ResourceLimited;
+                    PdfEvent e;e.kind=operation_query?PdfEvent::Kind::SearchResult:PdfEvent::Kind::Extracted;e.document=epoch;e.page=operation_page;
+                    e.layout=std::move(layout);e.query_generation=operation_query;e.code="PdfTextBudget";e.message=error.what();emit(std::move(e));continue;
                 }catch(const std::exception& error){
                     active.reset();
                     if(text_operation){text_work.reset();std::lock_guard lock(mutex);extracting.reset();}else tiles.clear();
@@ -353,7 +412,7 @@ struct PdfService::Impl {
         finished=true;
     }
 };
-PdfService::PdfService(Delivery callback,std::filesystem::path fonts):impl_(std::make_unique<Impl>(std::move(callback),std::move(fonts))){}
+PdfService::PdfService(Delivery callback,std::filesystem::path fonts,LayoutOptions limits):impl_(std::make_unique<Impl>(std::move(callback),std::move(fonts),limits)){}
 PdfService::~PdfService()=default;
 void PdfService::open(DocumentEpoch epoch,const std::filesystem::path& path,std::string password){
     std::lock_guard lock(impl_->mutex);impl_->opening=Impl::OpenRequest{epoch,path,std::move(password)};

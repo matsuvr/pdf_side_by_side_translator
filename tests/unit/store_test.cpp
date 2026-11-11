@@ -7,101 +7,115 @@
 using namespace opt;
 void require(bool value,const char* why){if(!value)throw std::runtime_error(why);}
 std::shared_ptr<PreparedChunk> prepare(const ChunkRequest& r){return std::make_shared<PreparedChunk>(ChunkPlanner::prepare(r,8192,[](std::string_view s,Form){PreparedInput p;p.tokens.assign(s.size(),17);p.source_tokens=s.size();p.output_limit=512;return p;}));}
-std::string file_text(const std::filesystem::path& path){std::ifstream in(path,std::ios::binary);return {std::istreambuf_iterator<char>(in),{}};}
+std::string bytes(const std::filesystem::path& path){std::ifstream in(path,std::ios::binary);return {std::istreambuf_iterator<char>(in),{}};}
 std::string path_text(const std::filesystem::path& path){const auto s=path.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
+namespace {
+sqlite3_mem_methods allocator{};
+int fail_at=0,allocations=0;
+void* fault_malloc(int n){++allocations;if(fail_at>0&&allocations==fail_at)return nullptr;return allocator.xMalloc(n);}
+void* fault_realloc(void* p,int n){++allocations;if(fail_at>0&&allocations==fail_at)return nullptr;return allocator.xRealloc(p,n);}
+void constructor_failures(){
+    require(sqlite3_shutdown()==SQLITE_OK,"shutdown before allocator injection");
+    require(sqlite3_config(SQLITE_CONFIG_GETMALLOC,&allocator)==SQLITE_OK,"get SQLite allocator");
+    auto injected=allocator;injected.xMalloc=fault_malloc;injected.xRealloc=fault_realloc;
+    require(sqlite3_config(SQLITE_CONFIG_MALLOC,&injected)==SQLITE_OK,"set SQLite fault allocator");
+    require(sqlite3_initialize()==SQLITE_OK,"initialize SQLite");
+    allocations=0;{Store warm;}const auto constructor_allocations=allocations;
+    const auto baseline=sqlite3_memory_used();int failures=0;
+    // Exercise every allocation site reached by successful construction,
+    // including second-database and later schema/pragma failures.
+    for(int at=1;at<=constructor_allocations;++at){
+        allocations=0;fail_at=at;try{Store failed;}catch(const std::exception&){++failures;}
+        fail_at=0;
+        require(sqlite3_memory_used()==baseline,"constructor failure leaked a SQLite allocation or handle");
+    }
+    require(failures>10,"allocation injection reached partial initialization failures");
+}
+}
 int main(){const auto directory=std::filesystem::temp_directory_path()/std::filesystem::path("opt-store-"+new_uuid());
     try{
-        const auto s=directory/"state",c=directory/"cache";const std::string provisional="provisional:file:original",doc="sha256:document",model="sha256:model";
+        constructor_failures();
+        std::filesystem::create_directories(directory);
         const auto source=std::make_shared<const std::string>("Original paragraph.");
+        const std::string native="provisional:file:original",doc="sha256:document",model="sha256:model";
         CacheContext context{"provisional:session:document","provisional:session:model","profile","source",0};
         auto full=context;full.document_key=doc;full.model_key=model;
-        std::string forced_id;
-        std::shared_ptr<PreparedChunk> prepared;
+        std::shared_ptr<PreparedChunk> prepared;AttemptSnapshot complete;
         {
-            Store store(s,c,1);require(store.state_persistent()&&store.cache_persistent(),"databases on disk");
-            bool protected_destination=false;try{store.export_state(s/"state.sqlite3");}catch(const std::invalid_argument&){protected_destination=true;}require(protected_destination,"backup cannot replace the active database");
+            Store store;require(!store.state_persistent()&&!store.cache_persistent(),"state and cache start in isolated memory");
+            require(store.warnings().empty(),"session-only operation is normal, not a failure");
             store.settings({{"form","plain"},{"model","日本語/model.gguf"}});
-            {Store second(s,c);require(!second.state_persistent()&&!second.cache_persistent(),"second owner uses isolated memory instead of clearing active pins");second.settings({{"form","secondary"}});require(store.settings().at("form")=="plain","second owner cannot overwrite first owner state");}
-            store.save_override(provisional,"","fixture.pdf",{0,3,std::string("old edit")});
-            store.save_override(provisional,"","fixture.pdf",{0,5,std::string("latest edit")});
-            store.save_override(provisional,"","fixture.pdf",{0,4,std::string("late old edit")});
-            store.promote_overrides(provisional,doc);
-            auto saved=store.document(doc,provisional);require(saved.overrides.size()==1&&saved.overrides[0].revision==5&&*saved.overrides[0].source=="latest edit","promotion keeps newest revision");
-            store.save_override(provisional,doc,"fixture.pdf",{0,6,std::nullopt});store.promote_overrides(provisional,doc);
-            require(store.document(doc,provisional).overrides.empty(),"reset tombstone deletes source override");
+            {Store second;require(second.settings().empty(),"separate instances have isolated session state");}
+            store.save_override(native,"","fixture.pdf",{0,3,std::string("old edit")});
+            store.save_override(native,"","fixture.pdf",{0,5,std::string("latest edit")});
+            store.save_override(native,"","fixture.pdf",{0,4,std::string("late old edit")});
+            store.promote_overrides(native,doc);
+            auto saved=store.document(doc,native);require(saved.overrides.size()==1&&saved.overrides[0].revision==5&&*saved.overrides[0].source=="latest edit","promotion keeps newest edit");
+            store.save_override(native,doc,"fixture.pdf",{0,6,std::nullopt});store.promote_overrides(native,doc);
+            require(store.document(doc,native).overrides.empty(),"reset tombstone removes an earlier source override");
             FileSignature signature{"native-identity",123,456};store.fingerprint("日本語.pdf",signature,sha256("object"));
-            require(store.fingerprint("日本語.pdf",signature)==sha256("object"),"matching native signature reuses hash");signature.identity="replaced";require(!store.fingerprint("日本語.pdf",signature),"same path replaced object misses fingerprint");
-            store.save_position(doc,"日本語.pdf",{2,PdfPoint{3.5,4.25},8});require(store.recent_documents().at(0)=="日本語.pdf","native recent path persisted");
+            require(store.fingerprint("日本語.pdf",signature)==sha256("object"),"matching signature reuses a session fingerprint");
+            signature.identity="replaced";require(!store.fingerprint("日本語.pdf",signature),"replacement file misses fingerprint");
+            store.save_position(doc,"日本語.pdf",{2,PdfPoint{3.5,4.25},8});
+            require(store.document(doc,native).position.text_anchor==8,"logical position is available during session");
             PageAttempt attempt({1,0,1,1,1},context.condition_key(),source,Form::Plain);
             auto request=attempt.next_request();prepared=prepare(*request);attempt.prepared(prepared);attempt.finished(prepared->stamp,{FinishReason::Completed,"翻訳された文章。",4});
-            store.save_attempt(context,attempt.snapshot());require(store.completed(context,*prepared)=="翻訳された文章。","completed chunk reused");
-            std::size_t exported_count=store.for_each_complete_page(context.document_key,context.model_key,"profile",[](PageIndex,std::string_view text){require(text=="翻訳された文章。","export same completed attempt");});
-            require(exported_count==1,"completed page exported incrementally");
+            complete=attempt.snapshot();store.save_attempt(context,complete);
+            require(store.completed(context,*prepared)=="翻訳された文章。","completed chunk is reused within session");
+            auto invalid=complete;invalid.chunks.front().text=std::string("prefix\0hidden",13);bool rejected=false;
+            try{store.save_attempt(context,invalid);}catch(const std::invalid_argument&){rejected=true;}
+            require(rejected&&store.completed(context,*prepared)=="翻訳された文章。","invalid completed text is rejected without replacing valid cache data");
+            require(store.for_each_complete_page(context.document_key,context.model_key,"profile",[](PageIndex,std::string_view text){require(text=="翻訳された文章。","export uses matching completed attempt");})==1,"complete page exports incrementally");
             store.save_override("other-native",context.document_key,"fixture.pdf",{0,15,std::string("changed after generation")});
-            require(store.for_each_complete_page(context.document_key,context.model_key,"profile",[](PageIndex,std::string_view){throw std::runtime_error("obsolete source must not export");})==0,"source change invalidates export even before retranslation starts");
+            require(store.for_each_complete_page(context.document_key,context.model_key,"profile",[](PageIndex,std::string_view){throw std::runtime_error("obsolete source exported");})==0,"source change invalidates export before retranslation");
             store.save_override("other-native",context.document_key,"fixture.pdf",{0,16,std::nullopt});store.promote_overrides("other-native",context.document_key);
-            store.pin_document(context.document_key);store.maintain();require(store.attempt(context).has_value(),"active document pinned beyond byte limit");
             store.promote_cache(false,context.document_key,doc);store.promote_cache(true,context.model_key,model);
-            require(!store.completed(context,*prepared)&&store.completed(full,*prepared)=="翻訳された文章。","both fingerprints atomically rekey completion and references");
-            auto restored=store.attempt(full);require(restored&&restored->state==PageState::Complete&&restored->condition_key==full.condition_key(),"manifest follows fingerprint promotion");
-            PageAttempt replay({2,0,2,1,1},full.condition_key(),source,Form::Plain,false,restored);require(replay.state()==PageState::Complete,"complete persisted attempt restores");
-            PageAttempt forced({2,0,2,1,1},full.condition_key(),source,Form::Plain,true);forced_id=forced.snapshot().id;
+            require(!store.completed(context,*prepared)&&store.completed(full,*prepared)=="翻訳された文章。","fingerprints rekey completion and manifest references");
+            auto restored=store.attempt(full);require(restored&&restored->state==PageState::Complete,"complete session attempt restores");
+            PageAttempt forced({2,0,2,1,1},full.condition_key(),source,Form::Plain,true);
             auto r=forced.next_request();auto p=prepare(*r);forced.prepared(p);forced.delta(p->stamp,"途中の文章");forced.interrupt();store.save_attempt(full,forced.snapshot());
-            auto saved_force=store.attempt(full);require(saved_force&&saved_force->id==forced_id&&saved_force->bypass_cache,"new forced attempt is selected over old completion");
-            PageAttempt resume({3,0,3,1,1},full.condition_key(),source,Form::Plain,false,saved_force);require(!resume.may_read_cache()&&resume.state()!=PageState::Complete&&resume.next_request(),"restart cannot fill forced attempt from prior cache");
-            const auto exported=store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("old completed attempt must not export");});require(exported==0,"new partial attempt supersedes old export");
+            auto saved_force=store.attempt(full);require(saved_force&&saved_force->id==forced.snapshot().id&&saved_force->bypass_cache,"forced attempt supersedes completion");
+            require(store.cache_usage().attempts==1&&store.cache_usage().chunks==0,"superseded manifests and orphan translations are removed");
+            require(store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("superseded completed attempt exported");})==0,"partial attempt suppresses old export");
+            store.save_override(native,doc,"fixture.pdf",{0,20,std::string("session edit")});
+            store.clear_cache();require(*store.document(doc,native).overrides[0].source=="session edit","cache clear does not discard user edits");
+            store.export_state(directory/"explicit.sqlite3");
+            int checks=0;bool replacement_rejected=false;
+            try{store.export_state(directory/"explicit.sqlite3",[&]{if(++checks==2)throw std::runtime_error("destination became an input");});}catch(const std::runtime_error&){replacement_rejected=true;}
+            require(checks==2&&replacement_rejected,"state export rechecks destination immediately before publication");
         }
         {
-            Store store(s,c,1);require(store.settings().at("model")=="日本語/model.gguf","settings survive restart");
-            auto saved=store.document(doc,provisional);require(saved.position.page==2&&saved.position.pdf_anchor->x==3.5&&saved.position.text_anchor==8,"logical reading position survives restart");
-            require(store.attempt(full)->id==forced_id,"forced manifest durable");
-            require(!store.completed(full,*prepared,true)&&store.completed(full,*prepared).has_value(),"unfingerprinted global cache reuse is restricted to its originating session");
-            store.pin_document("");store.maintain();require(!store.completed(full,*prepared)&&!store.attempt(full),"LRU deletes inactive completion with dependent manifests");
-            store.save_override(provisional,doc,"fixture.pdf",{0,10,std::string("user source")});store.clear_cache();require(*store.document(doc,provisional).overrides[0].source=="user source","cache clear never removes user source");
-            store.save_position(provisional,"unhashed.pdf",{4,PdfPoint{12,13},5});store.promote_overrides(provisional,doc);
-            auto promoted=store.document(doc,provisional,true);require(promoted.position.page==4&&promoted.position.text_anchor==5,"reading positions promote with native file key");
+            Store restarted;require(restarted.settings().empty()&&restarted.document(doc,native).overrides.empty()&&!restarted.attempt(full),"settings, source and translations do not survive restart");
+            require(!restarted.fingerprint("日本語.pdf",{"native-identity",123,456}),"fingerprints do not survive restart");
         }
-        // Future state schema is preserved byte-for-byte and runs in memory.
-        sqlite3* db=nullptr;sqlite3_open(path_text(s/"state.sqlite3").c_str(),&db);sqlite3_exec(db,"PRAGMA user_version=999",nullptr,nullptr,nullptr);sqlite3_close(db);
-        const auto original=file_text(s/"state.sqlite3");
-        {Store store(s,c);require(!store.state_persistent(),"future state schema uses memory");store.settings({{"new","value"}});require(!store.warnings().empty(),"fallback warning available");}
-        require(file_text(s/"state.sqlite3")==original,"future state database not overwritten");
-        // Supported schema upgrades run inside a transaction, retaining state.
-        sqlite3_open(path_text(s/"state.sqlite3").c_str(),&db);sqlite3_exec(db,"PRAGMA user_version=1",nullptr,nullptr,nullptr);sqlite3_close(db);
-        {Store store(s,c);require(store.state_persistent()&&store.settings().at("form")=="plain","known schema upgrade retains settings");}
-        {std::ofstream bad(c/"cache.sqlite3",std::ios::binary|std::ios::trunc);bad<<"not a database";}
-        {Store store(s,c);require(store.cache_persistent(),"corrupt cache replaced after backup");}
-        bool backup=false;for(const auto& entry:std::filesystem::directory_iterator(c))if(entry.path().filename().string().find(".corrupt-")!=std::string::npos)backup=true;
-        require(backup,"corrupt cache backup retained");
-        const auto blocked=directory/"not-a-directory";{std::ofstream out(blocked);out<<"preserve me";}
-        {Store store(blocked,directory/"fallback-cache");require(!store.state_persistent(),"unwritable state destination falls back to memory");store.settings({{"session","usable"}});require(store.settings().at("session")=="usable","memory state remains usable");
-            store.save_override("recovery-native","","fixture.pdf",{0,1,std::string("retained session edit")});store.export_state(directory/"rescued.sqlite3");}
-        require(file_text(blocked)=="preserve me","failed state destination is never replaced");
-        std::filesystem::create_directory(directory/"restored-state");std::filesystem::rename(directory/"rescued.sqlite3",directory/"restored-state/state.sqlite3");
-        {Store restored(directory/"restored-state",directory/"restored-cache");require(restored.settings().at("session")=="usable"&&*restored.document("recovery-native","recovery-native").overrides.at(0).source=="retained session edit","single-file rescue backup restores memory settings and pending source edits");}
-        // Simulate process loss after recording promotion intent, before either
-        // state fingerprint write or cache rekey commit. The forced attempt must
-        // remain the newest attempt, with bypass intact, after recovery.
-        CacheContext provisional_context{"provisional:document:native-signature","provisional:model:native-signature","profile","source",0};
-        auto formal_context=provisional_context;formal_context.document_key="sha256:crash-document";formal_context.model_key="sha256:crash-model";
-        std::string crash_id;
-        {Store store(directory/"crash-state",directory/"crash-cache");PageAttempt a({1,0,1,1,1},provisional_context.condition_key(),source,Form::Plain,true);crash_id=a.snapshot().id;store.save_attempt(provisional_context,a.snapshot());
-            store.prepare_cache_promotion(false,provisional_context.document_key,formal_context.document_key);store.prepare_cache_promotion(true,provisional_context.model_key,formal_context.model_key);}
-        {Store store(directory/"crash-state",directory/"crash-cache");auto saved=store.attempt(formal_context);require(saved&&saved->id==crash_id&&saved->bypass_cache,"interrupted cross-database promotion recovers forced attempt");
-            require(store.promoted_key(true,provisional_context.model_key)==formal_context.model_key,"native signature alias survives missing state fingerprint commit");}
-        // Persist a completion from a clock in the future, then restart at the
-        // host's present clock. A new forced attempt still owns this condition.
-        const auto clock_state=directory/"clock-state",clock_cache=directory/"clock-cache";
-        {Store store(clock_state,clock_cache);PageAttempt a({1,0,1,1,1},full.condition_key(),source,Form::Plain);
-            auto r=a.next_request();auto p=prepare(*r);a.prepared(p);a.finished(p->stamp,{FinishReason::Completed,"完成した訳文。",3});store.save_attempt(full,a.snapshot());
-            auto unsafe=a.snapshot();unsafe.chunks.front().text=std::string("prefix\0hidden",13);bool rejected=false;
-            try{store.save_attempt(full,unsafe);}catch(const std::invalid_argument&){rejected=true;}require(rejected,"invalid display controls cannot enter completed cache");}
-        sqlite3_open(path_text(clock_cache/"cache.sqlite3").c_str(),&db);
-        require(sqlite3_exec(db,"UPDATE page_attempts SET modified_at=2100000000000000000",nullptr,nullptr,nullptr)==SQLITE_OK,"future timestamp fixture");sqlite3_close(db);
-        {Store store(clock_state,clock_cache);PageAttempt forced({2,0,1,1,1},full.condition_key(),source,Form::Plain,true);store.save_attempt(full,forced.snapshot());
-            require(store.attempt(full)->id==forced.snapshot().id,"clock rollback cannot select older completed attempt");
-            require(store.for_each_complete_page(doc,model,"profile",[](PageIndex,std::string_view){throw std::runtime_error("future-clock old attempt exported");})==0,"clock rollback cannot export superseded completion");}
-        {Store store(clock_state,clock_cache);auto previous=store.attempt(full);store.switch_to_memory();require(!store.state_persistent()&&!store.cache_persistent()&&store.attempt(full)->id==previous->id,"runtime fallback retains cache manifest and marks both stores unsaved");}
-        std::filesystem::remove_all(directory);std::cout<<"durable state, canonical promotion, forced resume, pinning and recovery passed\n";
+        {
+            Store store;auto older=complete;older.condition_key=full.condition_key();store.save_attempt(full,older);
+            auto newer=complete;newer.id=new_uuid();newer.bypass_cache=true;newer.chunks.front().text="新しい強制翻訳の結果";store.save_attempt(context,newer);
+            store.promote_cache(false,context.document_key,doc);store.promote_cache(true,context.model_key,model);
+            auto promoted=store.attempt(full);require(promoted&&promoted->id==newer.id&&promoted->bypass_cache&&promoted->chunks.front().text=="新しい強制翻訳の結果","promotion collision retains latest forced output");
+            require(store.cache_usage().attempts==1&&store.cache_usage().chunks==1,"promotion removes superseded manifests and duplicate payloads");
+        }
+        sqlite3* exported=nullptr;require(sqlite3_open_v2(path_text(directory/"explicit.sqlite3").c_str(),&exported,SQLITE_OPEN_READONLY,nullptr)==SQLITE_OK,"explicit state export opens");
+        sqlite3_stmt* q=nullptr;require(sqlite3_prepare_v2(exported,"SELECT source_utf8 FROM source_overrides WHERE document_hash='sha256:document' AND page_index=0",-1,&q,nullptr)==SQLITE_OK,"query explicit state export");
+        require(sqlite3_step(q)==SQLITE_ROW&&std::string(reinterpret_cast<const char*>(sqlite3_column_text(q,0)))=="session edit","explicit export contains requested session edit");
+        sqlite3_finalize(q);sqlite3_close(exported);
+        // Repeated forced attempts for the active document used to escape the
+        // cache limit. Real database pages and both kinds of rows are bounded.
+        {
+            constexpr std::uint64_t budget=64*1024;Store store(budget);
+            auto data=complete;data.bypass_cache=true;data.chunks.front().text=std::string(8192,'x');
+            for(int i=0;i<256;++i){data.id=new_uuid();store.save_attempt(context,data);auto usage=store.cache_usage();require(usage.bytes<=budget&&usage.attempts==1&&usage.chunks==1,"retranslation accumulates neither manifests nor translated payloads");}
+            for(PageIndex page=1;page<128;++page){auto next=context;next.page=page;data.id=new_uuid();data.condition_key=next.condition_key();store.save_attempt(next,data);require(store.cache_usage().bytes<=budget,"active document obeys allocation budget during insertion");}
+            require(store.cache_usage().attempts<16,"old active-document pages are evicted under pressure");
+            data.condition_key=context.condition_key();data.chunks.front().text=std::string(2*1024*1024,'x');store.save_attempt(context,data);
+            require(!store.attempt(context)&&store.cache_usage().bytes<=budget,"oversized single attempt is not admitted or allowed to resurrect old data");
+            const std::string edit(128*1024,'e');store.save_override(native,doc,"fixture.pdf",{0,1,edit});store.clear_cache();store.maintain();
+            require(*store.document(doc,native).overrides[0].source==edit,"user edits are independent of cache budget");
+        }
+        // There is no startup path that consults, migrates, deletes or appends
+        // to earlier persistent stores. Only explicit exports exist here.
+        require(std::distance(std::filesystem::directory_iterator(directory),std::filesystem::directory_iterator{})==1,"no automatic DB, WAL, lock, log or temporary file remains");
+        std::filesystem::remove_all(directory);
+        std::cout<<"memory-only state, bounded active cache, revision preservation, atomic export and constructor failure cleanup passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<" (fixtures at "<<directory<<")\n";return 1;}
 }

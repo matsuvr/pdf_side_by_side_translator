@@ -44,6 +44,7 @@ int main(int argc,char** argv){
         const auto restored=view->transform.page_px_to_pdf.apply(device);
         if(std::abs(restored.x-48)>1e-8||std::abs(restored.y-736)>1e-8)throw std::runtime_error("Coordinate round trip failed");
         auto tile=wait(opt::PdfEvent::Kind::TileReady,1);
+        if(tile->key.flags!=opt::pdf_render_flags||view->key.flags!=opt::pdf_render_flags)throw std::runtime_error("Worker and tile identity lost limited PDFium image caching");
         if(!tile->pixels||tile->pixels->width!=512||tile->pixels->height!=512||tile->pixels->bgra.size()!=512*512*4)
             throw std::runtime_error("Unbounded or malformed tile");
         bool dark=false;
@@ -102,6 +103,13 @@ int main(int argc,char** argv){
         if(std::hypot(combined.x-1128,combined.y-1472)>1)throw std::runtime_error("Intrinsic and user rotation do not compose correctly");
         service.stop();service.join();
         if(!service.done()||wrong_thread)throw std::runtime_error("PDF thread ownership or shutdown failed");
+        opt::LayoutOptions small;small.output_bytes=1024;
+        opt::PdfService constrained([&](auto event){std::lock_guard lock(mutex);events.push_back(std::move(event));cv.notify_one();},{},small);
+        constrained.open(6,std::filesystem::u8path(argv[1]));wait(opt::PdfEvent::Kind::Opened,6);
+        constrained.extract(6,0);auto limited=wait(opt::PdfEvent::Kind::Extracted,6);
+        if(!limited->layout||limited->layout->availability!=opt::PageLayout::Availability::ResourceLimited||!limited->layout->glyphs.empty())throw std::runtime_error("Over-budget text did not produce a small, editable result");
+        constrained.viewport({6,0,612,792,0,{{0,0}}});wait(opt::PdfEvent::Kind::TileReady,6);
+        constrained.stop();constrained.join();
         std::cout<<"Async PDF ownership, bounded tiles, replacement, rotation and extraction passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
