@@ -1,3 +1,5 @@
+> Historical validation before the session-only safety changes. File logging, persistence recovery and state restoration described below are removed; see [session data](session-data.md) for current behavior.
+
 # Embedded resources and diagnostics
 
 The product embeds the Japanese help, complete notices and PNG icon as compiled

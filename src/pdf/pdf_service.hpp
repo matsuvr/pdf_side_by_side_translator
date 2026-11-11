@@ -12,6 +12,9 @@
 
 namespace opt {
 class FileSnapshot;
+// FPDF_ANNOT | FPDF_RENDER_LIMITEDIMAGECACHE. Kept here so UI tile identities
+// use exactly the worker's render flags without importing PDFium into the UI.
+inline constexpr int pdf_render_flags=0x001|0x200;
 struct TileKey {
     DocumentEpoch document=0;
     PageIndex page=0;
@@ -71,7 +74,7 @@ struct PdfServiceStats {
 class PdfService {
 public:
     using Delivery=std::function<void(std::shared_ptr<const PdfEvent>)>;
-    explicit PdfService(Delivery delivery,std::filesystem::path font_resource_directory={});
+    explicit PdfService(Delivery delivery,std::filesystem::path font_resource_directory={},LayoutOptions layout_options={});
     ~PdfService();
     PdfService(const PdfService&)=delete;
     PdfService& operator=(const PdfService&)=delete;

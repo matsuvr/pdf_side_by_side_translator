@@ -16,12 +16,12 @@ class Inbox {
     std::mutex mutex;std::condition_variable cv;std::deque<std::shared_ptr<const PdfEvent>> events;
 public:
     void push(std::shared_ptr<const PdfEvent> e){std::lock_guard lock(mutex);events.push_back(std::move(e));cv.notify_one();}
-    template<class Predicate> auto wait(Predicate match){
+    template<class Predicate> auto wait(Predicate match,bool accept_failure=false){
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);std::unique_lock lock(mutex);
         for(;;){
             if(!cv.wait_until(lock,deadline,[&]{return !events.empty();}))throw std::runtime_error("PDF stress event timeout");
             auto e=events.front();events.pop_front();
-            if(e->kind==PdfEvent::Kind::Failed)throw std::runtime_error(e->message);
+            if(e->kind==PdfEvent::Kind::Failed&&!accept_failure)throw std::runtime_error(e->message);
             if(e->pixels)require(e->pixels->bgra.size()<=1024*1024,"tile exceeds 512-pixel bound");
             if(match(*e))return e;
         }
@@ -68,6 +68,15 @@ int main(int argc,char** argv){
         require(target.u8string().size()>260,"native path fixture is long as well as non-ASCII");
         service.open(6,target);inbox.wait(6,PdfEvent::Kind::Opened);service.extract(6,0);
         require(inbox.wait(6,PdfEvent::Kind::Extracted)->layout->reading_text_utf8.find("3 sensors")!=std::string::npos,"long Japanese/space path reaches PDFium end to end");
+        const auto changed=temporary/"externally-changed.pdf";
+        std::filesystem::copy_file(fixtures/"P01-simple.pdf",changed);
+        service.open(7,changed);inbox.wait(7,PdfEvent::Kind::Opened);
+        std::filesystem::resize_file(changed,0);
+        service.viewport({7,0,612,792,0,{{0,0}}});
+        auto failure=inbox.wait([](const auto& e){return e.document==7&&e.kind==PdfEvent::Kind::Failed;},true);
+        require(failure->code=="PdfPage","External truncation should fail only the changed document operation");
+        service.open(8,fixtures/"P01-simple.pdf");inbox.wait(8,PdfEvent::Kind::Opened);service.extract(8,0);
+        require(inbox.wait(8,PdfEvent::Kind::Extracted)->layout->reading_text_utf8.find("3 sensors")!=std::string::npos,"PDF worker did not recover after input truncation");
         service.stop();service.join();
         const auto stats=service.stats();std::cout<<"first_large_tile_ms="<<first_tile_ms<<" page_cache_peak="<<stats.page_cache_peak<<" tile_bytes_peak="<<stats.tile_bytes_peak
             <<" render_slices="<<stats.render_slices<<" render_yields="<<stats.render_yields<<" max_render_slice_us="<<stats.max_render_slice_us<<" text_slices="<<stats.text_slices<<" text_yields="<<stats.text_yields<<'\n';

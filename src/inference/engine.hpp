@@ -22,6 +22,12 @@ inline Form form_from_setting(std::string_view value){return value=="easy"||valu
 class ModelInputUnsupported final : public std::runtime_error {
 public: using std::runtime_error::runtime_error;
 };
+class PreparationCancelled final : public std::runtime_error {
+public: PreparationCancelled():std::runtime_error("Input preparation cancelled"){}
+};
+class InputContextLimit final : public std::runtime_error {
+public: InputContextLimit():std::runtime_error("Page exceeds the model context"){}
+};
 struct PreparedInput {
     std::vector<std::int32_t> tokens;
     std::vector<std::int32_t> stop_ids;

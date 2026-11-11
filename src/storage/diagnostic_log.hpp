@@ -1,6 +1,5 @@
 #pragma once
 #include <cstdint>
-#include <filesystem>
 #include <string>
 namespace opt {
 enum class DiagnosticCode { SessionStarted,ModelReady,ModelFailed,PdfOpened,PdfFailed,ChunkFinished,StorageWarning,SessionClosing };
@@ -13,6 +12,4 @@ struct DiagnosticRecord {
     double seconds=0;
 };
 std::string diagnostic_line(const DiagnosticRecord& record);
-void append_diagnostic(const std::filesystem::path& directory,const DiagnosticRecord& record);
-inline constexpr std::uintmax_t diagnostic_log_limit=256*1024;
 }

@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace opt {
@@ -41,9 +42,13 @@ private:
     std::string pending_;
 };
 struct Utf8Scalar {std::size_t begin,end;char32_t value;};
-inline std::vector<Utf8Scalar> utf8_scalars(std::string_view text){
-    std::vector<Utf8Scalar> result;
+// Validation and predicates must not materialize a mapping for every scalar.
+// Checkpoints are bounded by bytes, including long runs of ASCII or whitespace.
+template<class Visitor,class Checkpoint>
+inline void visit_utf8(std::string_view text,Visitor&& visit,Checkpoint&& checkpoint){
+    std::size_t next_checkpoint=0;
     for(std::size_t i=0;i<text.size();){
+        if(i>=next_checkpoint){checkpoint();next_checkpoint=i+4096;}
         const auto first=static_cast<unsigned char>(text[i]);
         const unsigned count=first<0x80?1:first>=0xc2&&first<=0xdf?2:first>=0xe0&&first<=0xef?3:first>=0xf0&&first<=0xf4?4:0;
         if(!count||text.size()-i<count)throw Utf8Error("Incomplete or invalid UTF-8 scalar");
@@ -55,17 +60,33 @@ inline std::vector<Utf8Scalar> utf8_scalars(std::string_view text){
         }
         if((count==2&&value<0x80)||(count==3&&value<0x800)||(count==4&&value<0x10000)||
            value>0x10ffff||(value>=0xd800&&value<=0xdfff))throw Utf8Error("Invalid UTF-8 scalar value");
-        result.push_back({i,i+count,value});i+=count;
+        visit(Utf8Scalar{i,i+count,value});i+=count;
     }
+    checkpoint();
+}
+inline void validate_utf8(std::string_view text){
+    visit_utf8(text,[](const Utf8Scalar&){},[]{});
+}
+inline std::vector<Utf8Scalar> utf8_scalars(std::string_view text){
+    std::vector<Utf8Scalar> result;
+    visit_utf8(text,[&](const Utf8Scalar& scalar){result.push_back(scalar);},[]{});
     return result;
 }
 inline bool unicode_space(char32_t value){
     return value==0x20||(value>=9&&value<=13)||value==0x85||value==0xa0||value==0x1680||
         (value>=0x2000&&value<=0x200a)||value==0x2028||value==0x2029||value==0x202f||value==0x205f||value==0x3000||value==0xfeff;
 }
+template<class Checkpoint>
+inline bool has_usable_text(std::string_view text,Checkpoint&& checkpoint){
+    bool usable=false;
+    visit_utf8(text,[&](const Utf8Scalar& scalar){
+        usable|=!unicode_space(scalar.value)&&scalar.value!=0xfffd;
+    },std::forward<Checkpoint>(checkpoint));
+    // Do not return early: an invalid suffix must still be rejected.
+    return usable;
+}
 inline bool has_usable_text(std::string_view text){
-    for(const auto scalar:utf8_scalars(text))if(!unicode_space(scalar.value)&&scalar.value!=0xfffd)return true;
-    return false;
+    return has_usable_text(text,[]{});
 }
 // Native text widgets cannot faithfully display embedded NUL or terminal
 // controls. Keep ordinary whitespace and the original generated UTF-8 intact.

@@ -16,7 +16,10 @@ std::string prompt_digest(const PreparedInput& input){
     return CanonicalKey{}.text("format","prompt-ids-i32le-v1").number("count",input.tokens.size()).bytes("ids",bytes).finish();
 }
 }
-PreparedChunk ChunkPlanner::prepare(const ChunkRequest& request,std::uint32_t capacity,const Prepare& prompt){
+PreparedChunk ChunkPlanner::prepare(const ChunkRequest& request,std::uint32_t capacity,const Prepare& prompt,
+                                   const std::function<bool()>& cancelled){
+    const auto checkpoint=[&]{if(cancelled&&cancelled())throw PreparationCancelled();};
+    checkpoint();
     if(!request.source)throw std::invalid_argument("Missing page source");
     const auto& source=*request.source;
     PreparedChunk prepared;
@@ -24,15 +27,25 @@ PreparedChunk ChunkPlanner::prepare(const ChunkRequest& request,std::uint32_t ca
     prepared.block_id=request.block_id;
     prepared.chunk_id=new_uuid();
     prepared.source_end=source.size();
-    prepared.source_digest=sha256(source);
-    if(!has_usable_text(source)){
+    const bool usable=has_usable_text(source,checkpoint);
+    Sha256 digest;
+    for(std::size_t offset=0;offset<source.size();){
+        checkpoint();
+        const auto count=std::min<std::size_t>(64*1024,source.size()-offset);
+        digest.update(std::string_view(source).substr(offset,count));offset+=count;
+    }
+    prepared.source_digest=digest.finish();
+    checkpoint();
+    if(!usable){
         prepared.source_only=true;
     }else{
         try{
             prepared.input=prompt(source,request.form);
+            checkpoint();
             const auto prompt_size=prepared.input.tokens.size();
             if(prompt_size>=capacity||prepared.input.output_limit==0){
                 prepared.failure=FinishReason::ContextLimit;
+                prepared.input={};
             }else{
                 const auto remaining=capacity-static_cast<std::uint32_t>(prompt_size);
                 prepared.input.output_limit=std::min(prepared.input.output_limit,remaining);
@@ -40,8 +53,11 @@ PreparedChunk ChunkPlanner::prepare(const ChunkRequest& request,std::uint32_t ca
             }
         }catch(const ModelInputUnsupported&){
             prepared.failure=FinishReason::ModelInputUnsupported;
+        }catch(const InputContextLimit&){
+            prepared.failure=FinishReason::ContextLimit;
         }
     }
+    checkpoint();
     prepared.plan_digest=CanonicalKey{}.text("block",prepared.block_id).number("algorithm",prepared.chunk_algorithm_version)
         .number("begin",prepared.source_begin).number("end",prepared.source_end).text("source",prepared.source_digest)
         .text("prompt",prepared.prompt_ids_digest).finish();

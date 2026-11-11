@@ -1,4 +1,5 @@
 #include "inference/engine.hpp"
+#include "inference/bounded_tokenizer.hpp"
 #include "core/utf8.hpp"
 #include "platform/file_snapshot.hpp"
 #include "llama.h"
@@ -55,6 +56,7 @@ struct Engine::Impl {
     std::vector<llama_token> stops;
     std::vector<llama_token> nonprinting_bytes;
     std::vector<llama_token> prompt_prefix, plain_suffix, easy_suffix;
+    std::size_t max_token_bytes=1;
     bool cpu = true;
     std::shared_ptr<const FileSnapshot> file;
     std::FILE* stream=nullptr;
@@ -67,6 +69,7 @@ struct Engine::Impl {
         if(stream)std::fclose(stream);stream=nullptr;file.reset();
         protocol.clear();stops.clear();nonprinting_bytes.clear();
         prompt_prefix.clear(); plain_suffix.clear(); easy_suffix.clear();
+        max_token_bytes=1;
     }
     ~Impl() { clear(); llama_backend_free(); }
 };
@@ -116,12 +119,22 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         p.bos = p.protocol[0]; p.tag = p.protocol[1];
         p.stops={p.bos,p.tag};
         for(llama_token id=0;id<llama_vocab_n_tokens(p.vocab);++id){
+            if(p.cancelled.load())throw PreparationCancelled();
             if((llama_vocab_get_attr(p.vocab,id)&LLAMA_TOKEN_ATTR_BYTE)&&
                unsupported_text_control(piece(p.vocab,id,false))!=std::string_view::npos)
                 p.nonprinting_bytes.push_back(id);
             if(llama_vocab_is_eog(p.vocab,id)&&std::find(p.stops.begin(),p.stops.end(),id)==p.stops.end())p.stops.push_back(id);
             const auto* raw=llama_vocab_get_text(p.vocab,id);if(!raw)continue;
             const std::string_view name(raw);
+            const auto attr=llama_vocab_get_attr(p.vocab,id);
+            if((attr&LLAMA_TOKEN_ATTR_USER_DEFINED)&&!(attr&(LLAMA_TOKEN_ATTR_CONTROL|LLAMA_TOKEN_ATTR_UNKNOWN))&&
+               ((attr&(LLAMA_TOKEN_ATTR_LSTRIP|LLAMA_TOKEN_ATTR_RSTRIP))||piece(p.vocab,id,true).find("\xee\xb8\x80")!=std::string::npos))
+                throw std::runtime_error("未対応のPLaMo tokenizer設定です。入力を省略する特殊tokenは使用できません。");
+            // The public length query includes embedded NULs, unlike get_text().
+            char unused=0;
+            const auto bytes=llama_token_to_piece(p.vocab,id,&unused,0,0,true);
+            if(bytes==INT32_MIN)throw std::runtime_error("Token piece overflow");
+            p.max_token_bytes=std::max(p.max_token_bytes,static_cast<std::size_t>(bytes<0?-bytes:bytes));
             if(name.starts_with("<|plamo:")&&name.ends_with("|>")&&
                std::find(p.protocol.begin(),p.protocol.end(),id)==p.protocol.end())p.protocol.push_back(id);
         }
@@ -176,16 +189,27 @@ std::vector<std::int32_t> Engine::tokenize(std::string_view text, bool add_bos, 
 
 PreparedInput Engine::prepare(std::string_view source, Form form) const {
     auto& p = *impl_;
+    const auto checkpoint=[&]{if(p.cancelled.load())throw PreparationCancelled();};
+    checkpoint();
+    if(!p.context||!p.vocab)throw std::runtime_error("Model unavailable");
     PreparedInput prepared;
     prepared.stop_ids=p.stops;
-    auto body = tokenize(source, false, false);
+    const auto& tail = form == Form::Easy ? p.easy_suffix : p.plain_suffix;
+    const auto overhead=p.prompt_prefix.size()+tail.size();
+    if(overhead>=capacity())throw InputContextLimit();
+    const auto body_limit=capacity()-overhead-1; // Keep at least one output token.
+    auto body=tokenize_plamo3_bounded(source,body_limit,p.max_token_bytes,
+        [&](std::string_view part,std::span<std::int32_t> output){
+            return llama_tokenize(p.vocab,part.data(),static_cast<int>(part.size()),output.data(),
+                                  static_cast<int>(output.size()),false,false);
+        },checkpoint);
     for (auto token : body) {
+        checkpoint();
         if ((llama_vocab_get_attr(p.vocab, token) & LLAMA_TOKEN_ATTR_CONTROL) ||
             llama_vocab_is_eog(p.vocab, token) ||
             std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end())
             throw ModelInputUnsupported("ModelInputUnsupported: 本文の予約表記を通常文字として表現できません。");
     }
-    const auto& tail = form == Form::Easy ? p.easy_suffix : p.plain_suffix;
     prepared.tokens.reserve(p.prompt_prefix.size() + body.size() + tail.size());
     prepared.tokens.insert(prepared.tokens.end(), p.prompt_prefix.begin(), p.prompt_prefix.end());
     prepared.tokens.insert(prepared.tokens.end(), body.begin(), body.end());
@@ -193,6 +217,7 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
     prepared.source_tokens = static_cast<std::uint32_t>(body.size());
     prepared.output_limit = static_cast<std::uint32_t>(std::min<std::size_t>(capacity(),
         std::max<std::size_t>(512, 2 * body.size() + 128)));
+    checkpoint();
     return prepared;
 }
 std::uint32_t Engine::capacity() const { return impl_->context ? llama_n_ctx(impl_->context) : 0; }

@@ -39,6 +39,35 @@ int main(){
         check(opt::nearest_text_position(piece_layout,{24,85})==2,"Selecting a ligature's right edge loses part of its text");
         pieces[0].bounds.left=std::numeric_limits<double>::quiet_NaN();pieces.resize(1);
         auto nonfinite=opt::LayoutEngine{}.build(0,pieces,{1,0,0,-1,0,100},300,100);check(nonfinite.reading_text_utf8.empty(),"Non-finite glyph geometry reached sorting/hit testing");
+        bool limited=false;
+        try{opt::LayoutEngine{}.check_glyph_budget(std::numeric_limits<std::size_t>::max());}
+        catch(const opt::LayoutResourceLimit&){limited=true;}
+        check(limited,"Huge raw glyph count was not rejected before reserve");
+        std::vector<opt::GlyphRecord> many;
+        for(unsigned i=0;i<4096;++i){
+            const double at=(i+1)*1000.0/4097;
+            many.push_back({i,'A',{at,10,at+0.005,10.01},{at,10},0.01,0,0,false,true,false});
+        }
+        opt::LayoutOptions tight;tight.working_bytes=2*1024*1024;tight.output_bytes=32*1024*1024;
+        limited=false;
+        try{opt::LayoutEngine(tight).build(0,many,{},1024,1024);}catch(const opt::LayoutResourceLimit&){limited=true;}
+        check(limited,"Intermediate layout allocations ignored the working budget");
+        tight.working_bytes=128*1024*1024;tight.output_bytes=1024*1024;
+        limited=false;
+        try{opt::LayoutEngine(tight).build(0,many,{},1024,1024);}catch(const opt::LayoutResourceLimit&){limited=true;}
+        check(limited,"Output mapping allocations ignored the layout budget");
+        std::size_t checkpoints=0;
+        auto fragmented=opt::LayoutEngine{}.build(0,many,{},1024,1024,[&]{++checkpoints;return false;});
+        check(fragmented.glyphs.size()==many.size()&&opt::layout_memory_bytes(fragmented)<=opt::LayoutOptions{}.output_bytes,"Fragmented page exceeded its final layout budget");
+        check(checkpoints>20,"Large layout has too few cancellation checkpoints");
+        std::size_t polls=0;bool cancelled=false;
+        try{opt::LayoutEngine{}.build(0,many,{},1024,1024,[&]{return ++polls>=checkpoints*3/4;});}
+        catch(const opt::LayoutCancelled&){cancelled=true;}
+        check(cancelled,"Cancellation during late layout construction was ignored");
+        cancelled=false;
+        try{opt::LayoutEngine{}.build(0,many,{},1024,1024,[]{return true;});}
+        catch(const opt::LayoutCancelled&){cancelled=true;}
+        check(cancelled,"Already-cancelled extraction performed layout work");
         std::cout<<"Normalization, source mapping, search, crop and availability checks passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

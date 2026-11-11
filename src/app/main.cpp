@@ -13,15 +13,14 @@ public:
         wxImage::AddHandler(new wxPNGHandler);
         SetAppName(wxString::FromUTF8(opt::product::name));
         SetAppDisplayName(wxString::FromUTF8(opt::product::name));
-        wxString pdf,data_directory;
+        wxString pdf;
         for(int i=1;i<argc;++i){
             const wxString argument=argv[i];
-            if(argument=="--data-dir"&&i+1<argc)data_directory=argv[++i];
-            else if(!argument.StartsWith("-")&&pdf.empty())pdf=argument;
-            else{wxMessageBox(wxS("起動引数: [PDF] [--data-dir 状態保存ディレクトリ]"),wxString::FromUTF8(opt::product::name),wxOK|wxICON_INFORMATION);return false;}
+            if(!argument.StartsWith("-")&&pdf.empty())pdf=argument;
+            else{wxMessageBox(wxS("起動引数: [PDF]（文書データはメモリ内だけに保持します）"),wxString::FromUTF8(opt::product::name),wxOK|wxICON_INFORMATION);return false;}
         }
         controller_=std::make_unique<opt::ApplicationController>();
-        controller_->start(pdf,data_directory);
+        controller_->start(pdf);
         return true;
     }
     int OnExit() override {controller_.reset();return 0;}

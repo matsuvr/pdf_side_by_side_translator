@@ -12,7 +12,7 @@ struct IoEvent {
     ModelEpoch model=0;
     std::uint64_t request=0;
     WorkStamp stamp;
-    bool model_fingerprint=false,persistent=false;
+    bool model_fingerprint=false,persistent=false,export_operation=false;
     std::string from_key,key,message,detail;
     std::map<std::string,std::string> settings;
     std::vector<std::string> recent_paths,warnings;
@@ -25,8 +25,12 @@ public:
     using Delivery=std::function<void(std::shared_ptr<const IoEvent>)>;
     // The optional hook is a test-only fault-injection seam, never a product
     // setting. It runs on the I/O owner immediately before an accepted job.
-    IoService(std::filesystem::path state_directory,std::filesystem::path cache_directory,Delivery delivery,std::function<void()> before_job={});
+    IoService(Delivery delivery,std::function<void()> before_job={});
     ~IoService();
+    // Path registration is synchronous and does not access the filesystem. It
+    // protects selected inputs while PDF/model workers are still opening them.
+    void protect_document(std::filesystem::path path);
+    void protect_model(std::filesystem::path path);
     bool open_document(DocumentEpoch document,std::string provisional_cache_key,std::filesystem::path path,std::shared_ptr<const FileSnapshot> file);
     bool close_document();
     bool read_page(DocumentEpoch document,std::string document_key,std::string native_provisional,PageIndex page);
@@ -42,6 +46,10 @@ public:
     bool clear_cache();
     bool export_state(std::filesystem::path destination);
     bool diagnostic(DiagnosticRecord record);
+    // Accepted queued and executing exports. Zero is published only after
+    // their success/error events have been delivered; the Store stays usable
+    // until stop(), so a failed export can be retried without losing the session.
+    std::size_t exports_pending()const noexcept;
     void stop()noexcept;
     bool done()const noexcept;
     void join();

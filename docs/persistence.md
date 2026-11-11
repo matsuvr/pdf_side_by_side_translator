@@ -1,4 +1,4 @@
-> Historical validation through v0.1.0. Current behavior and release checks: [implementation status](implementation-status.md).
+> Historical validation through v0.1.0. The disk persistence, pinning and recovery behavior below has been replaced by [memory-only session data](session-data.md). Current validation: [implementation status](implementation-status.md).
 
 # Persistence and batch evidence
 
