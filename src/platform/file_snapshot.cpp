@@ -83,9 +83,13 @@ std::size_t FileSnapshot::read_at(std::uint64_t offset,std::span<std::byte> outp
     OVERLAPPED operation{};operation.Offset=static_cast<DWORD>(offset);operation.OffsetHigh=static_cast<DWORD>(offset>>32);
     DWORD received=0;
     if(!ReadFile(impl_->file,output.data(),static_cast<DWORD>(count),&received,&operation)){
-        auto error=GetLastError();if(error==ERROR_HANDLE_EOF)return 0;
-        if(error!=ERROR_IO_PENDING)throw std::system_error(error,std::system_category(),"Read file snapshot");
-        if(!GetOverlappedResult(impl_->file,&operation,&received,TRUE))throw std::system_error(GetLastError(),std::system_category(),"Read file snapshot");
+        auto error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            if (GetOverlappedResult(impl_->file, &operation, &received, TRUE)) return received;
+            error = GetLastError();
+        }
+        if (error == ERROR_HANDLE_EOF) return 0;
+        throw std::system_error(error, std::system_category(), "Read file snapshot");
     }
     return received;
 #else
