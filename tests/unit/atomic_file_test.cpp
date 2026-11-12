@@ -58,11 +58,17 @@ bool private_staging_access(const fs::path& path){
     return true;
 }
 std::wstring access(const fs::path& path){
-    PSECURITY_DESCRIPTOR raw=nullptr;PACL acl=nullptr;
+    PSECURITY_DESCRIPTOR raw=nullptr;
     constexpr auto information=OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION;
-    require(GetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()),SE_FILE_OBJECT,information,nullptr,nullptr,&acl,nullptr,&raw)==ERROR_SUCCESS,"read access controls");
-    LPWSTR text=nullptr;const bool ok=ConvertSecurityDescriptorToStringSecurityDescriptorW(raw,SDDL_REVISION_1,information,&text,nullptr);
-    LocalFree(raw);require(ok,"format DACL");std::wstring result(text);LocalFree(text);return result;
+    require(GetNamedSecurityInfoW(path.c_str(),SE_FILE_OBJECT,information,nullptr,nullptr,nullptr,nullptr,&raw)==ERROR_SUCCESS,"read access controls");
+    LocalAllocation descriptor{raw};
+    // SetSecurityInfo can mark a DACL as auto-inherited even when the ACL is
+    // protected and its entries are unchanged. Ignore only that bookkeeping bit.
+    require(SetSecurityDescriptorControl(raw,SE_DACL_AUTO_INHERITED,0),"normalize DACL inheritance metadata");
+    LPWSTR text=nullptr;
+    require(ConvertSecurityDescriptorToStringSecurityDescriptorW(raw,SDDL_REVISION_1,information,&text,nullptr),"format access controls");
+    LocalAllocation formatted{text};
+    return std::wstring(text);
 }
 void distinct_access(const fs::path& path){
     PSECURITY_DESCRIPTOR descriptor=nullptr;
@@ -115,7 +121,12 @@ int main(){
 #endif
 #ifdef _WIN32
         std::wstring original_access;
-        if(acl_supported){distinct_access(target);original_access=access(target);}
+        if(acl_supported){
+            const auto initial_access=access(target);
+            distinct_access(target);
+            original_access=access(target);
+            require(original_access!=initial_access,"comparison detects changed access entries");
+        }
 #elif defined(__APPLE__)
         distinct_access(target);const auto original_access=access(target);
 #endif
