@@ -25,6 +25,7 @@ struct MappedFile::Impl {
     FileSignature signature() const {
         BY_HANDLE_FILE_INFORMATION s{};
         if(!GetFileInformationByHandle(file,&s))throw std::system_error(GetLastError(),std::system_category(),"File identity");
+        if(s.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)throw std::runtime_error("通常のファイルを指定してください。");
         const auto timestamp=(static_cast<std::uint64_t>(s.ftLastWriteTime.dwHighDateTime)<<32)|s.ftLastWriteTime.dwLowDateTime;
         return {std::to_string(s.dwVolumeSerialNumber)+":"+std::to_string(s.nFileIndexHigh)+":"+std::to_string(s.nFileIndexLow),
             (static_cast<std::uint64_t>(s.nFileSizeHigh)<<32)|s.nFileSizeLow,
@@ -36,6 +37,7 @@ struct MappedFile::Impl {
     FileSignature signature() const {
         struct stat s{};
         if(fstat(file,&s)<0)throw std::system_error(errno,std::generic_category(),"File identity");
+        if(!S_ISREG(s.st_mode))throw std::runtime_error("通常のファイルを指定してください。");
         return {std::to_string(s.st_dev)+":"+std::to_string(s.st_ino),static_cast<std::uint64_t>(s.st_size),
             static_cast<std::int64_t>(s.st_mtimespec.tv_sec)*1000000000+s.st_mtimespec.tv_nsec};
     }
@@ -47,8 +49,11 @@ MappedFile::MappedFile(const std::filesystem::path& path):impl_(std::make_unique
 #ifdef _WIN32
     p.file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(p.file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open file");
+    if(GetFileType(p.file)!=FILE_TYPE_DISK)throw std::runtime_error("通常のファイルを指定してください。");
 #else
-    p.file=open(path.c_str(),O_RDONLY|O_CLOEXEC);
+    // Reject FIFOs/devices before attempting a mapping, without waiting for a
+    // writer to connect to an input merely named like a regular resource.
+    p.file=open(path.c_str(),O_RDONLY|O_CLOEXEC|O_NONBLOCK);
     if(p.file<0)throw std::system_error(errno,std::generic_category(),"Open file");
 #endif
     p.original=p.signature();

@@ -66,7 +66,7 @@ struct TextExtraction {
         auto& page=*owner;const auto deadline=Clock::now()+std::chrono::milliseconds(10);
         const auto slice_end=cursor+std::min(2048,count-cursor);
         for(;cursor<slice_end;++cursor){
-        if(cursor%64==0){if(stopping.load()||wanted.load()!=epoch)throw std::runtime_error("ページの抽出を中断しました。");if(Clock::now()>=deadline)return false;}
+        if(cursor%64==0){if(stopping.load()||wanted.load()!=epoch)throw LayoutCancelled();if(Clock::now()>=deadline)return false;}
         const auto i=cursor;
         GlyphRecord g;g.index=static_cast<PdfCharIndex>(i);
         g.unicode=static_cast<char32_t>(FPDFText_GetUnicode(page.text,i));
@@ -345,7 +345,8 @@ struct PdfService::Impl {
                         else {
                             PdfEvent e;e.kind=PdfEvent::Kind::SearchResult;e.document=epoch;e.page=operation_page;
                             e.query_generation=search_request->generation;e.layout=layout;
-                            e.hit=search_request->backward?find_text_backward(*layout,search_request->query,search_request->start,search_request->match_case):find_text(*layout,search_request->query,search_request->start,search_request->match_case);
+                            const auto cancelled=[&]{return stopping.load()||requested_document.load()!=epoch||desired_query.load()!=operation_query;};
+                            e.hit=search_request->backward?find_text_backward(*layout,search_request->query,search_request->start,search_request->match_case,cancelled):find_text(*layout,search_request->query,search_request->start,search_request->match_case,cancelled);
                             emit(std::move(e));continue;
                         }
                     }
@@ -357,9 +358,10 @@ struct PdfService::Impl {
                         ++text_slices;const bool complete=text_work->step(stopping,requested_document,epoch);if(!complete)++text_yields;
                         if(complete){
                             const auto query=operation_query;
-                            auto extracted=text_work->finish([&]{return stopping.load()||requested_document.load()!=epoch||(query&&desired_query.load()!=query);});file->check();PdfEvent e;e.document=epoch;e.page=operation_page;e.info=extracted.info;e.layout=std::move(extracted.layout);
+                            const auto cancelled=[&]{return stopping.load()||requested_document.load()!=epoch||(query&&desired_query.load()!=query);};
+                            auto extracted=text_work->finish(cancelled);file->check();PdfEvent e;e.document=epoch;e.page=operation_page;e.info=extracted.info;e.layout=std::move(extracted.layout);
                             if(text_work->search){const auto& s=*text_work->search;e.kind=PdfEvent::Kind::SearchResult;e.query_generation=s.generation;
-                                e.hit=s.backward?find_text_backward(*e.layout,s.query,s.start,s.match_case):find_text(*e.layout,s.query,s.start,s.match_case);}
+                                e.hit=s.backward?find_text_backward(*e.layout,s.query,s.start,s.match_case,cancelled):find_text(*e.layout,s.query,s.start,s.match_case,cancelled);}
                             else e.kind=PdfEvent::Kind::Extracted;
                             if(!text_work->search){std::lock_guard lock(mutex);extracting.reset();}
                             text_work.reset();emit(std::move(e));
@@ -390,6 +392,11 @@ struct PdfService::Impl {
                         }else if(active->status!=FPDF_RENDER_TOBECONTINUED)throw std::runtime_error("このタイルを描画できません。");
                         continue;
                     }
+                }catch(const LayoutCancelled&){
+                    // Superseded searches/extractions are ordinary control
+                    // flow, not a failed page in the current document.
+                    text_work.reset();{std::lock_guard lock(mutex);extracting.reset();}
+                    continue;
                 }catch(const LayoutResourceLimit& error){
                     if(text_work&&text_work->owner->text){FPDFText_ClosePage(text_work->owner->text);text_work->owner->text=nullptr;}
                     text_work.reset();{std::lock_guard lock(mutex);extracting.reset();}
@@ -445,6 +452,10 @@ bool PdfService::extract(DocumentEpoch epoch,PageIndex page){
 }
 void PdfService::search(PdfSearchRequest request){
     std::lock_guard lock(impl_->mutex);if(request.document!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->desired_query=request.generation;impl_->searching=std::move(request);impl_->cv.notify_one();
+}
+void PdfService::cancel_search(DocumentEpoch epoch,std::uint64_t generation){
+    std::lock_guard lock(impl_->mutex);if(epoch!=impl_->requested_document.load()||impl_->stopping.load())return;
+    impl_->desired_query=generation;impl_->searching.reset();impl_->cv.notify_one();
 }
 void PdfService::stop() noexcept{impl_->stop();}
 bool PdfService::done() const noexcept{return impl_->finished.load();}

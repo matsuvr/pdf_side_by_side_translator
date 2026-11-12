@@ -80,6 +80,11 @@ int main(){const auto directory=std::filesystem::temp_directory_path()/std::file
             store.save_override(native,doc,"fixture.pdf",{0,20,std::string("session edit")});
             store.clear_cache();require(*store.document(doc,native).overrides[0].source=="session edit","cache clear does not discard user edits");
             store.export_state(directory/"explicit.sqlite3");
+#ifndef _WIN32
+            std::filesystem::permissions(directory/"explicit.sqlite3",std::filesystem::perms::owner_read|std::filesystem::perms::owner_write);
+            store.export_state(directory/"explicit.sqlite3");
+            require((std::filesystem::status(directory/"explicit.sqlite3").permissions()&std::filesystem::perms::all)==(std::filesystem::perms::owner_read|std::filesystem::perms::owner_write),"SQLite state replacement does not broaden private export permissions");
+#endif
             int checks=0;bool replacement_rejected=false;
             try{store.export_state(directory/"explicit.sqlite3",[&]{if(++checks==2)throw std::runtime_error("destination became an input");});}catch(const std::runtime_error&){replacement_rejected=true;}
             require(checks==2&&replacement_rejected,"state export rechecks destination immediately before publication");

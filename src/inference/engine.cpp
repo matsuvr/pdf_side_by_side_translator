@@ -95,7 +95,11 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         }
     }
     p.cpu=devices[0]==nullptr;mp.devices=devices.data();mp.n_gpu_layers=p.cpu?0:-1;
-    mp.load_mode = llama_supports_mmap() ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
+    // Keep tensors in owned buffers. A mapped GGUF can fault in the middle of
+    // CPU/Metal work if another process truncates it; signature checks cannot
+    // protect an individual tensor access. This creates no on-disk snapshot.
+    mp.load_mode = LLAMA_LOAD_MODE_NONE;
+    mp.lazy_mode = LLAMA_LAZY_MODE_OFF;
     mp.progress_callback = load_progress;
     mp.progress_callback_user_data = &p.cancelled;
     try {
@@ -307,7 +311,14 @@ GenerationResult Engine::generate(const PreparedInput& input,
         catch (const std::exception&) {result.reason=FinishReason::DecodeError;break;}
         ++result.output_tokens;
         const auto now = std::chrono::steady_clock::now();
-        if (now - last >= std::chrono::milliseconds(50)) { flush(); last = now; }
+        if (now - last >= std::chrono::milliseconds(50)) {
+            flush(); last = now;
+            // Check at the existing delivery cadence rather than doing file
+            // I/O for every token. Resident tensors remain valid meanwhile.
+            if(p.file->signature()!=p.file->initial_signature()){
+                result.reason=FinishReason::ModelUnavailable;break;
+            }
+        }
         const auto position = input.tokens.size() + i;
         if (position >= capacity()) { result.reason = FinishReason::ContextLimit; break; }
         if (i + 1 < input.output_limit && decode(&token, 1, static_cast<int>(position), true) != 0) {
@@ -318,7 +329,7 @@ GenerationResult Engine::generate(const PreparedInput& input,
     flush();
     if (!decoder.complete() && (result.reason == FinishReason::Completed||result.reason==FinishReason::EmptyOutput))
         result.reason = FinishReason::InvalidEncoding;
-    if(result.reason==FinishReason::Completed&&p.file->signature()!=p.file->initial_signature())result.reason=FinishReason::ModelUnavailable;
+    if(p.file->signature()!=p.file->initial_signature())result.reason=FinishReason::ModelUnavailable;
     return result;
 }
 }

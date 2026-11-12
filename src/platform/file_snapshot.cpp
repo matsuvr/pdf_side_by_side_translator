@@ -25,6 +25,7 @@ struct FileSnapshot::Impl {
     FileSignature signature() const {
         BY_HANDLE_FILE_INFORMATION info{};
         if(!GetFileInformationByHandle(file,&info))throw std::system_error(GetLastError(),std::system_category(),"File identity");
+        if(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)throw std::runtime_error("通常のファイルを指定してください。");
         const auto timestamp=(static_cast<std::uint64_t>(info.ftLastWriteTime.dwHighDateTime)<<32)|info.ftLastWriteTime.dwLowDateTime;
         return {std::to_string(info.dwVolumeSerialNumber)+":"+std::to_string(info.nFileIndexHigh)+":"+std::to_string(info.nFileIndexLow),
             (static_cast<std::uint64_t>(info.nFileSizeHigh)<<32)|info.nFileSizeLow,
@@ -36,6 +37,7 @@ struct FileSnapshot::Impl {
     FileSignature signature() const {
         struct stat info{};
         if(fstat(file,&info)<0)throw std::system_error(errno,std::generic_category(),"File identity");
+        if(!S_ISREG(info.st_mode))throw std::runtime_error("通常のファイルを指定してください。");
         return {std::to_string(info.st_dev)+":"+std::to_string(info.st_ino),static_cast<std::uint64_t>(info.st_size),
             static_cast<std::int64_t>(info.st_mtimespec.tv_sec)*1000000000+info.st_mtimespec.tv_nsec};
     }
@@ -49,8 +51,11 @@ std::shared_ptr<const FileSnapshot> FileSnapshot::open(const std::filesystem::pa
     impl->file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OVERLAPPED|FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
     if(impl->file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open file");
+    if(GetFileType(impl->file)!=FILE_TYPE_DISK)throw std::runtime_error("通常のファイルを指定してください。");
 #else
-    impl->file=::open(path.c_str(),O_RDONLY|O_CLOEXEC);
+    // A PDF/model needs seekable bytes and a stable length. Opening a FIFO
+    // without O_NONBLOCK can wait forever before fstat can reject it.
+    impl->file=::open(path.c_str(),O_RDONLY|O_CLOEXEC|O_NONBLOCK);
     if(impl->file<0)throw std::system_error(errno,std::generic_category(),"Open file");
 #endif
     impl->original=impl->signature();

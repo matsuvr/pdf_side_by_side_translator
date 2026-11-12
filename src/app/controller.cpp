@@ -717,6 +717,7 @@ struct ApplicationController::Impl {
     }
     void cancel_search(bool clear_hit=true){
         ++search.generation;search.active=false;search_timer.Stop();
+        if(pdf)pdf->cancel_search(epoch,search.generation);
         if(clear_hit){search.hit.reset();canvas->show_search_hit({});}
     }
     void search_step(){

@@ -1,17 +1,12 @@
 #include "storage/io_service.hpp"
 #include "storage/legacy_data.hpp"
 #include "platform/access_path.hpp"
+#include "platform/atomic_file.hpp"
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
-#include <fstream>
 #include <mutex>
 #include <thread>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 namespace opt {
 namespace {
@@ -23,16 +18,7 @@ void export_header(std::ostream& out,Form form){out<<"Offline PDF Translator\n�
     <<"\n利用条件: https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF/blob/1cf96ae02133958a20074bfdfab76517bb737d00/LICENSE/ja\n\n";}
 void atomic_export(const std::filesystem::path& destination,const std::function<void(std::ostream&)>& writer,const std::function<void()>& guard){
     guard();
-    auto temporary=destination;temporary+=std::filesystem::path(".tmp-"+new_uuid());
-    try{
-        {std::ofstream file(access_path(temporary),std::ios::binary|std::ios::trunc);if(!file)throw std::runtime_error("Export destination cannot be opened");writer(file);file.flush();if(!file)throw std::runtime_error("Export write failed");file.close();if(!file)throw std::runtime_error("Export close failed");}
-        guard();
-#ifdef _WIN32
-        if(!MoveFileExW(access_path(temporary).c_str(),access_path(destination).c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::system_error(GetLastError(),std::system_category(),"Replace export");
-#else
-        std::filesystem::rename(temporary,destination);
-#endif
-    }catch(...){std::error_code ignored;std::filesystem::remove(access_path(temporary),ignored);throw;}
+    AtomicFile file(destination);file.write(writer);file.publish(guard);
 }
 }
 struct IoService::Impl {

@@ -65,11 +65,28 @@ fixtureはこのプロジェクトのために新規作成したPDFです。フ�
 文書データの自動永続化は行いません。[現在の仕様](session-data.md)を参照してください。
 `store_test` はSQLiteの割当失敗を注入し、構築途中の例外後に割当量が元に戻ることも確認します。
 `io_service_test` は通常キューが満杯の間の手編集、入力の別名への書き出し拒否、置き換え直前の再検査、遅い書き出しと終了を確認します。
+`atomic_file_test` は作成直後の一時ファイル権限、既存の保存先のmode／ACL保持、書き込み失敗時の旧ファイルと一時ファイルの扱いを確認します。
+WindowsではEFSが利用できる場合に暗号化属性の保持も確認し、利用できない場合は理由付きでその項目のSKIPを表示します。
 `session_sources_test` はページ移動・遅延した読込・自動抽出へのリセットの組合せで、GUIが保持する編集内容を検証します。
+`file_snapshot_test` はFIFO・ディレクトリ・デバイスの拒否と通常ファイルの別名を確認します。FIFO試験自体にもwatchdogを設けています。
+`layout_test` は両方向の検索結果を従来の意味と照合し、反復文字列と前処理・探索中のキャンセルも確認します。
+`pdf_async_test` はキャンセルした検索の後に新しい検索と描画を続けられることを確認します。
 
 layoutと安全なファイルreadの単体試験はPDFiumなしでも構築できます。
 PDFiumを使う統合試験は、固定版の依存を用意した通常のpresetで実行してください。
 実モデル試験は `inference_probe` にlockと一致するGGUFを渡して行い（準備処理のみは末尾に `--prepare-only` を追加）、長大入力の容量判定・キャンセルとPFML3の参照token列も確認します。
 
+生成中のGGUF変更は、次の専用試験で確認します。
+
+```sh
+build/macos-arm64-release/model_input_change_test /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
+# Windows: build/windows-x64-release/model_input_change_test.exe <GGUFの絶対パス>
+```
+
+この試験は専用の一時ディレクトリへGGUFをコピーし、最初の差分配信時にそのコピーだけを切り詰めます。
+指定した元のGGUFは変更しません。異常終了せず部分訳を保持し、変更済みモデルの再利用を拒否することを検査します。
+製品アプリにモデルのコピー処理を追加するものではありません。
+
 ASan/UBSanを利用できるホストでは、関連するC++試験を両sanitizer付きで実行します。
+Releaseでも試験を実行します。検証条件を `assert()` だけに置かず、`NDEBUG` が有効でも失敗が報告される形を維持します。
 メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。

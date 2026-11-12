@@ -1,5 +1,6 @@
 #include "storage/store.hpp"
 #include "platform/access_path.hpp"
+#include "platform/atomic_file.hpp"
 #include "core/utf8.hpp"
 #include <sqlite3.h>
 #include <algorithm>
@@ -7,11 +8,6 @@
 #include <chrono>
 #include <limits>
 #include <thread>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 namespace opt {
 namespace {
@@ -297,24 +293,17 @@ void Store::clear_cache(){
 }
 void Store::export_state(const std::filesystem::path& destination,const std::function<void()>& before_replace){
     impl_->owns();if(before_replace)before_replace();
-    auto temporary=destination;temporary+=".tmp-"+new_uuid();
-    try{
-        sqlite3* raw=nullptr;
-        const auto opened=sqlite3_open_v2(utf8(access_path(temporary)).c_str(),&raw,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_NOMUTEX,nullptr);
-        Database copy(raw);check(opened,copy.get());
-        // The only disk database is this explicitly requested destination.
-        sql(copy.get(),"PRAGMA temp_store=MEMORY; PRAGMA journal_mode=MEMORY");
-        auto* backup=sqlite3_backup_init(copy.get(),"main",impl_->state.get(),"main");if(!backup)throw StorageError(sqlite3_errcode(copy.get()),sqlite3_errmsg(copy.get()));
-        int result=SQLITE_OK;do{result=sqlite3_backup_step(backup,128);}while(result==SQLITE_OK);
-        const auto finished=sqlite3_backup_finish(backup);check(result==SQLITE_DONE?SQLITE_OK:result,copy.get());check(finished,copy.get());
-        copy.reset();
-        if(before_replace)before_replace();
-#ifdef _WIN32
-        if(!MoveFileExW(access_path(temporary).c_str(),access_path(destination).c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::system_error(GetLastError(),std::system_category(),"Replace state export");
-#else
-        std::filesystem::rename(temporary,destination);
-#endif
-    }catch(...){std::error_code ignored;std::filesystem::remove(access_path(temporary),ignored);throw;}
+    AtomicFile file(destination);
+    sqlite3* raw=nullptr;
+    const auto opened=sqlite3_open_v2(utf8(access_path(file.temporary_path())).c_str(),&raw,SQLITE_OPEN_READWRITE|SQLITE_OPEN_NOMUTEX,nullptr);
+    Database copy(raw);check(opened,copy.get());
+    // The only disk database is this explicitly requested destination.
+    sql(copy.get(),"PRAGMA temp_store=MEMORY; PRAGMA journal_mode=MEMORY");
+    auto* backup=sqlite3_backup_init(copy.get(),"main",impl_->state.get(),"main");if(!backup)throw StorageError(sqlite3_errcode(copy.get()),sqlite3_errmsg(copy.get()));
+    int result=SQLITE_OK;do{result=sqlite3_backup_step(backup,128);}while(result==SQLITE_OK);
+    const auto finished=sqlite3_backup_finish(backup);check(result==SQLITE_DONE?SQLITE_OK:result,copy.get());check(finished,copy.get());
+    copy.reset();
+    file.publish(before_replace);
 }
 CacheUsage Store::cache_usage()const{
     impl_->owns();return {impl_->cache_bytes(),scalar(impl_->cache.get(),"SELECT count(*) FROM page_attempts"),scalar(impl_->cache.get(),"SELECT count(*) FROM completed_chunks")};

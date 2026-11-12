@@ -84,6 +84,7 @@ public:
     void viewport(ViewRequest request);
     bool extract(DocumentEpoch epoch,PageIndex page);
     void search(PdfSearchRequest request);
+    void cancel_search(DocumentEpoch epoch,std::uint64_t generation);
     void stop() noexcept;
     bool done() const noexcept;
     void join();
