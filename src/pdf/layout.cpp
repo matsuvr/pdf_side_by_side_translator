@@ -293,7 +293,47 @@ std::string block_id(const TextBlock& block,LayoutWork& work){
     for(unsigned char c:block.reading_text_utf8){work.poll();hash^=c;hash*=1099511628211ULL;}
     std::ostringstream out;out<<"layout1-p"<<block.page<<"-o"<<block.reading_order<<'-'<<std::hex<<hash;return out.str();
 }
-std::string folded(std::string_view text){std::string out(text);for(char& c:out)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');return out;}
+// KMP searches bytes in either direction without copying the page or the
+// query. ASCII folding preserves the existing UTF-8 byte-offset semantics.
+std::optional<TextHit> search_text(const PageLayout& layout,std::string_view query,std::size_t start,
+                                  bool match_case,bool backward,const std::function<bool()>& cancelled){
+    auto checkpoint=[&]{if(cancelled&&cancelled())throw LayoutCancelled();};
+    std::size_t operations=0;
+    auto poll=[&]{if((++operations&1023U)==0)checkpoint();};
+    checkpoint();
+    if(query.empty())return {};
+    const std::string_view text=layout.reading_text_utf8;
+    start=std::min(start,text.size());
+    const auto haystack=backward?text.substr(0,start):text.substr(start);
+    if(query.size()>haystack.size())return {};
+    auto byte=[&](std::string_view value,std::size_t index){
+        auto c=static_cast<unsigned char>(value[backward?value.size()-1-index:index]);
+        if(!match_case&&c>='A'&&c<='Z')c=static_cast<unsigned char>(c-'A'+'a');
+        return c;
+    };
+    // Scratch depends on the query, never on the whole page. Reject an
+    // impossible (longer-than-range) query above before allocating its table.
+    std::vector<std::size_t> prefix(query.size());
+    for(std::size_t i=1,matched=0;i<query.size();++i){
+        poll();const auto c=byte(query,i);
+        while(matched&&c!=byte(query,matched)){poll();matched=prefix[matched-1];}
+        if(c==byte(query,matched))++matched;
+        prefix[i]=matched;
+    }
+    checkpoint();
+    for(std::size_t i=0,matched=0;i<haystack.size();++i){
+        poll();const auto c=byte(haystack,i);
+        while(matched&&c!=byte(query,matched)){poll();matched=prefix[matched-1];}
+        if(c==byte(query,matched))++matched;
+        if(matched==query.size()){
+            checkpoint();
+            const auto at=backward?start-i-1:start+i+1-query.size();
+            TextHit hit{at,at+query.size(),source_ranges(layout,at,at+query.size())};
+            checkpoint();return hit;
+        }
+    }
+    checkpoint();return {};
+}
 }
 
 void LayoutEngine::check_glyph_budget(std::size_t count) const{
@@ -446,20 +486,11 @@ std::vector<SourceCharRange> source_ranges(const PageLayout& layout,std::size_t 
     }
     return merged;
 }
-std::optional<TextHit> find_text(const PageLayout& layout,std::string_view needle,std::size_t start,bool match_case){
-    if(needle.empty())return {};
-    const auto haystack=match_case?layout.reading_text_utf8:folded(layout.reading_text_utf8);
-    const auto query=match_case?std::string(needle):folded(needle);
-    const auto at=haystack.find(query,start);if(at==std::string::npos)return {};
-    return TextHit{at,at+query.size(),source_ranges(layout,at,at+query.size())};
+std::optional<TextHit> find_text(const PageLayout& layout,std::string_view needle,std::size_t start,bool match_case,const std::function<bool()>& cancelled){
+    return search_text(layout,needle,start,match_case,false,cancelled);
 }
-std::optional<TextHit> find_text_backward(const PageLayout& layout,std::string_view needle,std::size_t before,bool match_case){
-    if(needle.empty())return {};
-    const auto haystack=match_case?layout.reading_text_utf8:folded(layout.reading_text_utf8);
-    const auto query=match_case?std::string(needle):folded(needle);
-    before=std::min(before,haystack.size());if(before<query.size())return {};
-    const auto at=haystack.rfind(query,before-query.size());if(at==std::string::npos)return {};
-    return TextHit{at,at+query.size(),source_ranges(layout,at,at+query.size())};
+std::optional<TextHit> find_text_backward(const PageLayout& layout,std::string_view needle,std::size_t before,bool match_case,const std::function<bool()>& cancelled){
+    return search_text(layout,needle,before,match_case,true,cancelled);
 }
 std::size_t nearest_text_position(const PageLayout& layout,PdfPoint point){
     const auto p=layout.pdf_to_layout.apply(point);

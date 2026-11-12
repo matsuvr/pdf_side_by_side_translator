@@ -57,8 +57,14 @@ int main(){const auto root=std::filesystem::temp_directory_path()/std::filesyste
             require(inbox.wait(IoEvent::Kind::Exported)->export_operation,"export completion distinguishable during close");
             require(bytes(output).find("未完了・部分結果")!=std::string::npos&&bytes(output).find("日本語の訳文")!=std::string::npos,"partial export labelled and encoded UTF-8");
             require(bytes(output).find("文体: 標準文体")!=std::string::npos&&bytes(output).find("PLaMo 3 Translate 0.8B")!=std::string::npos&&bytes(output).find("学習したモデル")!=std::string::npos,"export retains model, form and output-use notice");
+#ifndef _WIN32
+            std::filesystem::permissions(output,std::filesystem::perms::owner_read|std::filesystem::perms::owner_write);
+#endif
             require(service.export_current(output,0,"やさしい日本語の訳文",PageState::Complete,Form::Easy),"ordinary existing export may be replaced");inbox.wait(IoEvent::Kind::Exported);
             require(bytes(output).find("文体: やさしい文体")!=std::string::npos,"explicit overwrite publishes new UTF-8 text");
+#ifndef _WIN32
+            require((std::filesystem::status(output).permissions()&std::filesystem::perms::all)==(std::filesystem::perms::owner_read|std::filesystem::perms::owner_write),"text replacement does not broaden a private destination's permissions");
+#endif
             for(const auto& input_path:{file,model}){
                 const auto original=bytes(input_path);require(service.export_current(input_path,0,"must not replace",PageState::Complete),"guarded export accepted for validation");
                 auto conflict=inbox.wait(IoEvent::Kind::Error);require(conflict->export_operation&&conflict->message.find("PDF")!=std::string::npos,"input conflict has actionable user-facing export error");require(bytes(input_path)==original,"current input preserved byte-for-byte");

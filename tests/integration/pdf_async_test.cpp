@@ -69,6 +69,11 @@ int main(int argc,char** argv){
         for(unsigned i=100;i<=163;++i)service.search({1,0,i,i==163?"source":"nonexistent",0,false,false,extraction->layout});
         do {search=wait(opt::PdfEvent::Kind::SearchResult,1);}while(search->query_generation!=163);
         if(!search->hit)throw std::runtime_error("Latest query was lost behind obsolete searches");
+        service.search({1,0,164,"nonexistent",0,false,false,extraction->layout});
+        service.cancel_search(1,165);
+        service.search({1,0,166,"source",0,false,false,extraction->layout});
+        do {search=wait(opt::PdfEvent::Kind::SearchResult,1);}while(search->query_generation!=166);
+        if(!search->hit)throw std::runtime_error("A cancelled PDF search prevented the next query from completing");
         // Replace in-flight work and open the same file as a new document epoch.
         for(int i=0;i<100;++i)service.viewport({1,1,2000+i,2400+i,i%4,{{0,0}}});
         service.open(2,std::filesystem::u8path(argv[1]));

@@ -2,6 +2,81 @@
 
 The current product specification is [DESIGN.md](../DESIGN.md).
 
+## Privacy and responsiveness follow-up
+
+The follow-up audit started from `a5c22177bfa8e037f1f794695d0b400d6399e8cc`
+after the session-only and bundled-model changes were merged. It retains those
+policies and the Release-test assertion fix. Four additional problems were
+reproduced and addressed:
+
+| Issue | Evidence and resulting behavior |
+| --- | --- |
+| [#14 — export access controls](https://github.com/matsuvr/pdf_side_by_side_translator/issues/14) | The old create-and-rename sequence changed a `0600` destination to `0644` under umask `022` in the Linux reproducer. Text and SQLite exports now share exclusive, private staging; replacement preserves the destination's access controls and Windows EFS encryption. Failed writes/publication keep the old destination. Volumes explicitly reporting no persistent ACL support still allow ordinary exports. |
+| [#15 — mutable GGUF mappings](https://github.com/matsuvr/pdf_side_by_side_translator/issues/15) | Truncating a test-owned model copy during generation produced an ASan BUS error in the old CPU tensor access. Resident model buffers remove that mapping dependency; the same regression now returns `ModelUnavailable` with partial text and rejects reuse. No model disk snapshot is introduced. |
+| [#16 — nonregular inputs](https://github.com/matsuvr/pdf_side_by_side_translator/issues/16) | A FIFO with no writer blocked the old POSIX open before its file-type check. Nonblocking open followed by verification of the open object now returns an ordinary error. Regular files and their symlinks remain supported. |
+| [#17 — search work and cancellation](https://github.com/matsuvr/pdf_side_by_side_translator/issues/17) | Repeated-prefix searches could take seconds and closing the search UI did not cancel worker work. Forward/reverse linear search avoids whole-page copies, checks cancellation during preprocessing and scanning, and receives cancellation from the controller. |
+
+### Validation of this follow-up
+
+Validation on 2026-11-12 used the Linux auxiliary environment, test-only
+CommonCrypto/UUID/stat adapters, pinned SQLite 3.50.4 and pinned llama.cpp
+`a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5`. It does not add a Linux product target.
+
+- **All 17 C++ headless tests passed in both Release and ASan/UBSan builds.**
+  The new export test covers private staging, retained permissions, Unicode
+  paths, failed publication, bad streams, a real OS write failure, and cleanup.
+  Store/I/O tests also cover replacement permissions. Search tests compare
+  4,000 inputs in both directions and both case modes with the old semantics,
+  including overlaps, UTF-8 byte positions and embedded NULs.
+- **The complete headless CTest run passed 19 of 20 entries in each build.**
+  The two Python regression entries passed. `pinned_third_party_notices` stops
+  at the absent bootstrap input `.work/pdfium-workspace/pdfium/LICENSE`.
+  Dependency locks and notices are unchanged; this is not recorded as an
+  all-green CTest run.
+- The actual official PLaMo Q4_K_M fixture, SHA-256
+  `70891ec70dc7ab4205745a38307867c2881b99239f20327927633abfe4bc9ec6`, passed
+  `inference_probe --prepare-only` with ASan/UBSan, including all 14 reference
+  tokenizer cases, reserved marker/U+EE00 handling, bounded preparation and
+  cancellation. The new `model_input_change_test` uses its own model copy;
+  it reproduced the old BUS error and passed with the new engine.
+- Updated `pdf_async_test` and `pdf_stress_test` passed with ASan/UBSan and
+  `NDEBUG`. The service was compiled against pinned PDFium public headers
+  `96b71fa413f9fd9231bdc3e0a09e16ffcc5766f4`; execution used the supplemental
+  `chromium/8152` runtime described below, whose archive digest was rechecked.
+  Coverage includes cancellation followed by a new search, normal rendering,
+  document replacement, rotations, constrained extraction followed by raster
+  rendering, 300 pages, large pages, password/Unicode paths, and input
+  truncation followed by recovery. The stress run reported 8 cached pages
+  and 1,048,576 tile bytes at peak.
+- Windows branches were compiled and linked with actual MinGW-w64 12 headers,
+  GCC 14.2, `advapi32` and `bcrypt`: both the atomic export test and the I/O
+  integration test with pinned SQLite produced Windows x64 executables.
+  This is cross-compilation, not execution on Windows. The macOS file-security
+  API signatures were checked against Apple's published headers; macOS SDK
+  compilation and execution were not available here.
+- LeakSanitizer was retried and cannot run under the host's ptrace constraints.
+  ASan/UBSan results therefore use `detect_leaks=0`; they are not a leak-free
+  certification. The SQLite allocation-failure regression still passes.
+
+### Responsiveness measurements
+
+The same optimized in-memory search probe, using a repeated-prefix mismatch
+over **1,000,000 bytes**, measured forward search at **5,830.68 ms before /
+14.1074 ms after**, and reverse search at **5,796.97 ms before / 3.66176 ms
+after**. These are synthetic matcher measurements, not whole-app timings or
+a claimed speedup for every PDF.
+
+A separate successful load-only ABBA comparison with the actual model and
+ASan/UBSan CPU builds measured model load times of 6.50208/6.89344 seconds
+before and 7.81659/7.47323 seconds after: approximately **0.95 seconds longer
+on average**. Peak process RSS differed by less than 1 MiB in those runs.
+This does not predict native Release/Metal performance; resident weights may
+change physical-memory use and startup behavior on those platforms.
+
+Native Windows/macOS CTest, ACL/EFS behavior, GUI close/cancel/export flows,
+Metal inference and packaged application checks remain to be run on those
+hosts. The earlier validation records below describe their own revisions.
+
 ## Bundled model startup and old-data disposal
 
 Startup now reads `plamo-3-translate-0.8b-Q4_K_M.gguf` beside the Windows

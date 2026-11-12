@@ -43,9 +43,9 @@ struct TextHit {
 };
 std::vector<SourceCharRange> source_ranges(const PageLayout& layout,std::size_t begin,std::size_t end);
 std::optional<TextHit> find_text(const PageLayout& layout,std::string_view needle,
-                               std::size_t start,bool match_case);
+                               std::size_t start,bool match_case,const std::function<bool()>& cancelled={});
 std::optional<TextHit> find_text_backward(const PageLayout& layout,std::string_view needle,
-                                        std::size_t before,bool match_case);
+                                        std::size_t before,bool match_case,const std::function<bool()>& cancelled={});
 std::size_t nearest_text_position(const PageLayout& layout,PdfPoint point);
 bool near_text(const PageLayout& layout,PdfPoint point);
 }

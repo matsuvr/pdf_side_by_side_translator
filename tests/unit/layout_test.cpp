@@ -1,11 +1,66 @@
 #include "pdf/layout.hpp"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <limits>
+#include <random>
 
 void check(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
+void check_search(){
+    opt::PageLayout page;page.reading_text_utf8="aaaaa";
+    auto at=[&](bool backward,std::size_t start){return backward?opt::find_text_backward(page,"aaa",start,true):opt::find_text(page,"aaa",start,true);};
+    const auto f0=at(false,0),f1=at(false,1),b5=at(true,5),b4=at(true,4),b3=at(true,3);
+    check(f0&&f1&&f0->begin==0&&f1->begin==1,"Forward search lost overlapping matches");
+    check(b5&&b4&&b3&&b5->begin==2&&b4->begin==1&&b3->begin==0&&!at(true,2),"Backward search lost overlapping matches or crossed its exclusive end");
+    page.reading_text_utf8="甲A😀a甲😀";
+    const auto unicode=opt::find_text(page,"a😀",0,false),last=opt::find_text_backward(page,"😀",std::numeric_limits<std::size_t>::max(),true);
+    check(unicode&&unicode->begin==3&&unicode->end==8&&last&&last->begin==12&&last->end==16,"UTF-8 search positions must remain byte offsets");
+
+    // Compare both directions against the previous byte-search semantics,
+    // including ASCII case folding, embedded NULs and out-of-range starts.
+    std::mt19937 random(91723);
+    const std::string alphabet("aAbBcC\0",7);
+    auto folded=[](std::string text){for(char& c:text)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');return text;};
+    for(unsigned sample=0;sample<4000;++sample){
+        page.reading_text_utf8.clear();std::string query;
+        for(unsigned n=random()%80;n;--n)page.reading_text_utf8+=alphabet[random()%alphabet.size()];
+        for(unsigned n=random()%20;n;--n)query+=alphabet[random()%alphabet.size()];
+        const auto start=sample%19?static_cast<std::size_t>(random()%100):std::numeric_limits<std::size_t>::max();
+        for(bool match_case:{false,true}){
+            const auto text=match_case?page.reading_text_utf8:folded(page.reading_text_utf8),needle=match_case?query:folded(query);
+            const auto expected=query.empty()?std::string::npos:text.find(needle,start);
+            const auto forward=opt::find_text(page,query,start,match_case);
+            check(bool(forward)==(expected!=std::string::npos)&&(!forward||(forward->begin==expected&&forward->end==expected+query.size())),"Forward search disagrees with reference byte offsets");
+            const auto before=std::min(start,text.size());
+            const auto previous=query.empty()||before<query.size()?std::string::npos:text.rfind(needle,before-query.size());
+            const auto backward=opt::find_text_backward(page,query,start,match_case);
+            check(bool(backward)==(previous!=std::string::npos)&&(!backward||(backward->begin==previous&&backward->end==previous+query.size())),"Backward search disagrees with reference byte offsets");
+        }
+    }
+    page.reading_text_utf8.assign(1024*1024,'a');
+    const std::string long_query=std::string(512*1024,'a')+'b';
+    check(!opt::find_text(page,long_query,0,true)&&!opt::find_text_backward(page,long_query,page.reading_text_utf8.size(),true),"Repeated-prefix no-match search failed");
+    for(bool backward:{false,true}){
+        auto find=[&](std::string_view query,const std::function<bool()>& cancelled){
+            return backward?opt::find_text_backward(page,query,page.reading_text_utf8.size(),false,cancelled):opt::find_text(page,query,0,false,cancelled);
+        };
+        std::size_t polls=0;bool cancelled=false;
+        try{find(long_query,[&]{return ++polls>=3;});}catch(const opt::LayoutCancelled&){cancelled=true;}
+        check(cancelled,"Query preprocessing ignored cancellation");
+        polls=0;cancelled=false;
+        try{find("z",[&]{return ++polls>=3;});}catch(const opt::LayoutCancelled&){cancelled=true;}
+        check(cancelled,"Page scanning ignored cancellation");
+        cancelled=false;
+        try{find("a",[]{return true;});}catch(const opt::LayoutCancelled&){cancelled=true;}
+        check(cancelled,"Already-cancelled search performed work");
+        page.reading_text_utf8="a";polls=0;
+        check(!find(long_query,[&]{return ++polls>1;})&&polls==1,"Longer-than-page query was needlessly preprocessed");
+        page.reading_text_utf8.assign(1024*1024,'a');
+    }
+}
 int main(){
     try{
+        check_search();
         std::vector<opt::GlyphRecord> glyphs;
         double x=10;
         const std::u32string text=U"aﬁne\u00ad e\u0301😀";
