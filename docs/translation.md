@@ -1,3 +1,5 @@
+> 現在は読み取り専用ビューワーです。原文編集・強制再翻訳・書き出しは削除しました。以下に含まれる旧機能の検証記録は過去のものです。現在の仕様は [session-data.md](session-data.md) を参照してください。
+
 # Translation implementation evidence
 
 ### Full-page input
@@ -44,6 +46,7 @@ Including process startup, model loading and shutdown, the abstract took
 
 To reproduce the PDF measurement with a local model, run
 `translation_probe.exe model.gguf cpu tests/fixtures/P01-simple.pdf`.
+Add `--page=N` to check a particular physical page (numbered from 1).
 The probe reports the backend, load time, token counts and time per chunk.
 Setting `OPT_CPU_KERNELS=portable` before launch exercises the fallback in
 the same binary. The optimized path packs eligible weights in memory when the

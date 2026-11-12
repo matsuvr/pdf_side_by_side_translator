@@ -100,5 +100,20 @@
     "no_text_pages": [
       0
     ]
+  },
+  "P13-text-transforms.pdf": {
+    "page_count": 20,
+    "ordered_markers": [
+      "Transformed text",
+      "The device has 3 sensors. It does not use the network.",
+      "The source document remains unchanged.",
+      "A second paragraph follows the first.",
+      "Visible hyphens, such as re-enter, must be preserved.",
+      "LEFT first line.",
+      "LEFT second line.",
+      "RIGHT first line.",
+      "RIGHT second line."
+    ],
+    "same_text_as_first_page": true
   }
 }

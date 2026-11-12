@@ -48,7 +48,7 @@ FileSnapshot::~FileSnapshot()=default;
 std::shared_ptr<const FileSnapshot> FileSnapshot::open(const std::filesystem::path& path){
     auto impl=std::make_unique<Impl>();
 #ifdef _WIN32
-    impl->file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
+    impl->file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OVERLAPPED|FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
     if(impl->file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open file");
     if(GetFileType(impl->file)!=FILE_TYPE_DISK)throw std::runtime_error("通常のファイルを指定してください。");
@@ -64,7 +64,7 @@ std::shared_ptr<const FileSnapshot> FileSnapshot::open(const std::filesystem::pa
 std::shared_ptr<const FileSnapshot> FileSnapshot::duplicate(std::intptr_t native,FileSignature original){
     auto impl=std::make_unique<Impl>();
 #ifdef _WIN32
-    impl->file=ReOpenFile(reinterpret_cast<HANDLE>(native),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,FILE_FLAG_OVERLAPPED);
+    impl->file=ReOpenFile(reinterpret_cast<HANDLE>(native),GENERIC_READ,FILE_SHARE_READ,FILE_FLAG_OVERLAPPED);
     if(impl->file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Duplicate file object");
 #else
     impl->file=fcntl(static_cast<int>(native),F_DUPFD_CLOEXEC,0);
@@ -101,7 +101,7 @@ std::size_t FileSnapshot::read_at(std::uint64_t offset,std::span<std::byte> outp
 }
 std::FILE* FileSnapshot::open_stream() const{
 #ifdef _WIN32
-    auto handle=ReOpenFile(impl_->file,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,0);
+    auto handle=ReOpenFile(impl_->file,GENERIC_READ,FILE_SHARE_READ,0);
     if(handle==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open model stream");
     const int descriptor=_open_osfhandle(reinterpret_cast<intptr_t>(handle),_O_RDONLY|_O_BINARY);
     if(descriptor<0){CloseHandle(handle);throw std::system_error(errno,std::generic_category(),"Open model stream");}

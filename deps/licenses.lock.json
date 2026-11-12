@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "dependency_lock_sha256": "5170e63e57374ccac44232322398bd0f0824be250556db22076ddbaf51114b71",
-  "notices_sha256": "12eacd6e2c6eb40ab73b68190aecf9beb51cac625b7b7486624b5c3523a82574",
+  "dependency_lock_sha256": "780961156d49a7361d15a7f4c70adbabdeb64e219b174b62ea3113db42b91254",
+  "notices_sha256": "17483263dd4682e1b31c3901c8a0dd29a2ea26f53ab6a6e33d749fedc89ce6fa",
   "inputs": [
     {
       "component": "Application original source/resources",
@@ -260,7 +260,7 @@
       "root": "project",
       "path": "licenses/SQLite-public-domain.txt",
       "encoding": "utf-8-sig",
-      "sha256": "79ae05d9ff7bcd33aa131bd86f62cf7d78b87d227fa5472a2ed9dcf03080821f"
+      "sha256": "d481ef7de8dd9e15f90813a7f8ff4d05e18b9f66720206d89f52d92f7427726f"
     },
     {
       "component": "Noto Sans CJK JP Regular font",

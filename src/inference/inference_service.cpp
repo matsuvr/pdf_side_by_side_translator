@@ -111,10 +111,18 @@ struct InferenceService::Impl {
                         if(chunk->failure)result.reason=*chunk->failure;
                         else if(chunk->source_only)result.reason=FinishReason::EmptyOutput;
                         else result=backend->generate(chunk->input,[&](std::string_view delta){
+                            if(delta.size()>max_translation_bytes)
+                                throw std::length_error("Inference delta exceeds output limit");
                             InferenceEvent e;e.kind=InferenceEvent::Kind::TextDelta;e.model=chunk->stamp.model;
                             e.stamp=chunk->stamp;e.delta=delta;emit(std::move(e));
                         });
-                    }catch(const std::exception& error){result.reason=FinishReason::DecodeError;detail=error.what();}
+                        if(result.text.size()>max_translation_bytes){
+                            std::size_t end=max_translation_bytes;
+                            while(end&&(static_cast<unsigned char>(result.text[end])&0xc0)==0x80)--end;
+                            result.text=result.text.substr(0,end);result.reason=FinishReason::OutputLimit;
+                        }
+                    }catch(const std::length_error& error){result.reason=FinishReason::OutputLimit;detail=error.what();}
+                    catch(const std::exception& error){result.reason=FinishReason::DecodeError;detail=error.what();}
                     {
                         std::lock_guard lock(mutex);if(execute->serial==serial)phase=Phase::Finished;
                     }

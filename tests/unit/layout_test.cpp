@@ -94,6 +94,12 @@ int main(){
         check(opt::nearest_text_position(piece_layout,{24,85})==2,"Selecting a ligature's right edge loses part of its text");
         pieces[0].bounds.left=std::numeric_limits<double>::quiet_NaN();pieces.resize(1);
         auto nonfinite=opt::LayoutEngine{}.build(0,pieces,{1,0,0,-1,0,100},300,100);check(nonfinite.reading_text_utf8.empty(),"Non-finite glyph geometry reached sorting/hit testing");
+        pieces[0].bounds={1,1,3,3};pieces[0].origin={std::numeric_limits<double>::max(),2};
+        check(opt::LayoutEngine{}.build(0,pieces,{2,0,0,1,0,0},300,100).reading_text_utf8.empty(),"Overflowed transformed origin entered layout");
+        bool invalid_inverse=false;
+        try{opt::Affine2D{1,0,0,2,std::numeric_limits<double>::max(),1}.inverse();}
+        catch(const std::runtime_error&){invalid_inverse=true;}
+        check(invalid_inverse,"Non-finite inverse translation was accepted");
         bool limited=false;
         try{opt::LayoutEngine{}.check_glyph_budget(std::numeric_limits<std::size_t>::max());}
         catch(const opt::LayoutResourceLimit&){limited=true;}

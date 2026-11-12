@@ -22,14 +22,15 @@ int main(){try{
     auto changed=c;changed.document_key="sha256:other-document";require(completed_cache_key(changed,chunk_semantic_key(chunk))!=key,"document contents included");
     changed=c;changed.model_key="sha256:other-model";require(completed_cache_key(changed,chunk_semantic_key(chunk))!=key,"model contents included");
     changed=c;changed.page++;require(completed_cache_key(changed,chunk_semantic_key(chunk))!=key,"physical page included");
-    changed=c;changed.source_digest="edited-page";require(completed_cache_key(changed,chunk_semantic_key(chunk))!=key,"page source override included");
+    changed=c;changed.source_digest="different-page";require(completed_cache_key(changed,chunk_semantic_key(chunk))!=key,"extracted page contents included");
     auto other=chunk;other.input.output_limit++;require(completed_cache_key(c,chunk_semantic_key(other))!=key,"actual generation bound included");
     other=chunk;other.stamp={19,8,22,4,5,"new-attempt",6,100};other.chunk_id="new-execution-uuid";
     require(completed_cache_key(c,chunk_semantic_key(other))==key,"session epochs and execution UUIDs excluded");
     FileSignature file{"native-object",123,456};const auto native=provisional_file_key(file);file.identity="replaced-object";
     require(provisional_file_key(file)!=native,"same size and mtime do not hide file replacement");
     PageLayout layout;layout.reading_text_utf8="Text";
-    const auto original=page_source_digest(layout);require(page_source_digest(layout,std::make_shared<const std::string>("Text"))!=original,"presence of explicit override included even when text matches");
+    const auto original=page_source_digest(layout);
+    layout.layout_version++;require(page_source_digest(layout)!=original,"layout extraction version included");layout.layout_version--;
     layout.reading_text_utf8+="\n\nMore text";require(page_source_digest(layout)!=original,"page digest includes later paragraphs");
     std::cout<<"semantic cache identity and provisional namespaces passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -17,7 +17,11 @@ Spanning rows divide the local column regions. The mixed fixture checks a
 full-width heading, upper columns, a shared caption, and lower columns.
 
 Thresholds live in `LayoutOptions` and are ratios of font height, rather than
-screen pixels. The original fixture exposed an important distinction: ink
+screen pixels. The PDF adapter scales PDFium's untransformed `Tf` size by the
+effective character matrix's vertical vector, including text, page and enclosing
+Form transforms. Without that conversion, a large `Tf` scaled down for painting
+merges separate lines and interleaves their characters before translation.
+The original fixture exposed another distinction: ink
 bounding boxes contain side bearings and must not be used as glyph advances.
 Word spacing now prefers explicit/generated PDF space records between nearby
 original indices. A 0.35-font-height gap is only a fallback when those records
@@ -44,6 +48,8 @@ the editable source is the recovery path.
 - P05: all intrinsic rotations, including composition with user rotation.
 - P07: equation, caption, numeric table and subsequent prose retain order.
 - P08: image-only page remains viewable and has no text layer.
+- P13: identical prose and columns under text/page/Form/nested scaling and all
+  four intrinsic rotations produce exactly the same reading text and mappings.
 - Synthetic Unicode records: ligature, soft hyphen, combining mark and emoji.
 - Search: case toggle, backwards traversal, query generations and replacement.
 - Geometry: independently authored fixture point/pixel values and inverse maps.

@@ -10,16 +10,23 @@ ROOT=Path(__file__).resolve().parents[1]
 def source_identity():
     commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     status=subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],cwd=ROOT)
-    names=subprocess.check_output(['git','ls-files','-z'],cwd=ROOT).split(b'\0')
+    entries=subprocess.check_output(['git','ls-files','--eol','-z'],cwd=ROOT).split(b'\0')
+    tracked={}
+    for entry in filter(None,entries):
+        metadata,name=entry.split(b'\t',1)
+        fields=metadata.split()
+        tracked[name]=fields[2]!=b'attr/-text' and fields[1] in {b'w/lf',b'w/crlf',b'w/mixed'}
     digest=hashlib.sha256()
-    for name in sorted(n for n in names if n):
+    for name in sorted(tracked):
         path=ROOT/name.decode('utf-8');data=path.read_bytes() if path.is_file() else b'<missing>'
+        if tracked[name]:data=data.replace(b'\r\n',b'\n')
         digest.update(len(name).to_bytes(8,'little'));digest.update(name);digest.update(len(data).to_bytes(8,'little'));digest.update(data)
     return {'commit':commit,'dirty':bool(status),'source_sha256':digest.hexdigest()}
 def build_info(target,version):
-    result={'schema':1,'product':'Offline PDF Translator','version':version,'target':target,**source_identity()}
+    result={'schema':2,'product':'Offline PDF Translator','version':version,'target':target,**source_identity()}
     for name in ['third_party.lock.json','licenses.lock.json']:
-        result[name+'_sha256']=hashlib.sha256((ROOT/'deps'/name).read_bytes()).hexdigest()
+        data=(ROOT/'deps'/name).read_bytes().replace(b'\r\n',b'\n')
+        result[name+'_sha256']=hashlib.sha256(data).hexdigest()
     result['identity_sha256']=hashlib.sha256(json.dumps(result,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     return result
 def write_changed(path,data):

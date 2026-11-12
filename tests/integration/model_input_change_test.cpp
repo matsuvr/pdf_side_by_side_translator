@@ -27,17 +27,30 @@ int main(int argc,char** argv){
             bool changed=false;
             const auto result=engine.generate(input,[&](std::string_view text){
                 if(!text.empty()&&!changed){
+#ifdef _WIN32
+                    std::error_code blocked;fs::resize_file(model,0,blocked);
+                    require(bool(blocked),"GGUF was writable during generation");
+#else
                     fs::resize_file(model,0);
+#endif
                     changed=true;
                 }
             });
             require(changed,"generation did not reach the model-mutation callback");
+#ifdef _WIN32
+            require(!result.text.empty()&&(result.reason==opt::FinishReason::OutputLimit||result.reason==opt::FinishReason::Completed),
+                    "Generation failed after denying the conflicting write");
+            engine.unload();
+            fs::resize_file(model,0);
+            std::cout<<"model write denied during generation and allowed after unload\n";
+#else
             require(result.reason==opt::FinishReason::ModelUnavailable,"changed model did not stop as a normal unavailable-model result");
             require(!result.text.empty(),"the partial result before mutation was lost");
             const auto next=engine.generate(input,[](std::string_view){});
             require(next.reason==opt::FinishReason::ModelUnavailable&&next.text.empty(),"a changed model accepted another generation");
             engine.unload();
             std::cout<<"model truncation during generation returned normally with partial text and rejected reuse\n";
+#endif
         }
         fs::remove_all(directory);
         return 0;

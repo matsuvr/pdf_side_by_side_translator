@@ -66,13 +66,18 @@ void update_readonly_text(wxTextCtrl& control, const std::string& before, const 
 
     // Editing a detached range lets Rich Edit invalidate the reflowed lines
     // without moving the reader's selection or repainting the entire pane.
-    SendMessageW(handle, EM_SETREADONLY, FALSE, 0);
-    if (!replace_range(handle, start, suffix)) {
-        CHARRANGE tail{start, -1};
-        SendMessageW(handle, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&tail));
-        SendMessageW(handle, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(suffix.wc_str()));
+    {
+        struct RestoreReadOnly {
+            HWND handle;
+            ~RestoreReadOnly() { SendMessageW(handle, EM_SETREADONLY, TRUE, 0); }
+        } guard{handle};
+        SendMessageW(handle, EM_SETREADONLY, FALSE, 0);
+        if (!replace_range(handle, start, suffix)) {
+            CHARRANGE tail{start, -1};
+            SendMessageW(handle, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&tail));
+            SendMessageW(handle, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(suffix.wc_str()));
+        }
     }
-    SendMessageW(handle, EM_SETREADONLY, TRUE, 0);
 
     const auto length = start + static_cast<LONG>(suffix.length());
     selection.cpMin = reset ? 0 : std::min(selection.cpMin, length);

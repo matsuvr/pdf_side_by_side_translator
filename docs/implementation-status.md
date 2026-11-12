@@ -2,6 +2,22 @@
 
 The current product specification is [DESIGN.md](../DESIGN.md).
 
+## Read-only viewer
+
+Source editing, source overrides, forced retranslation, translation/state exports,
+output staging files and legacy-data cleanup have been removed. The application
+only reads PDF/GGUF inputs; session state and bounded caches stay in memory.
+SQLite is compiled with `SQLITE_TEMP_STORE=3` as well as using memory databases.
+
+The 0.1.2 Windows x64 Release suite includes 29 CTest cases with GUI probes enabled. The native text
+test confirms selection/copy and rejects typing, paste, cut, clear and undo after
+streaming updates. The rebuilt application's file, selection/copy and translation
+menus were inspected: editing, retranslation and export actions are absent.
+The new behavior has not been executed on macOS in this change.
+
+The following sections record earlier audits; their removed editing/export and
+cleanup paths no longer describe the current application.
+
 ## Privacy and responsiveness follow-up
 
 The follow-up audit started from `a5c22177bfa8e037f1f794695d0b400d6399e8cc`
@@ -200,7 +216,7 @@ verification of these new changes.
   Windows native build, 24 tests and model/GUI checks. A v0.1.1 Windows binary
   requires a Windows build host; this release is built on macOS arm64.
 
-See [v0.1.1 release validation](releases/v0.1.1.md) for current checks.
+See [v0.1.1 release validation](releases/v0.1.1.md) for that release's checks.
 
 ## Historical records
 

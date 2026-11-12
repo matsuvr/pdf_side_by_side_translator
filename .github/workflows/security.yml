@@ -1,0 +1,46 @@
+name: Security checks
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: '15 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisory-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: python3 scripts/check_advisories.py
+
+  layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run layout regressions and bounded fuzzing
+        env:
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          flags=(-std=c++20 -Isrc -g -O1 -fno-omit-frame-pointer)
+          sources=(src/pdf/layout.cpp src/core/types.cpp)
+          clang++ "${flags[@]}" -fsanitize=address,undefined "${sources[@]}" tests/unit/layout_test.cpp -o "$RUNNER_TEMP/layout-test"
+          "$RUNNER_TEMP/layout-test"
+          clang++ "${flags[@]}" -fsanitize=fuzzer,address,undefined "${sources[@]}" tests/fuzz/layout_search.cpp -o "$RUNNER_TEMP/layout-fuzz"
+          "$RUNNER_TEMP/layout-fuzz" -max_len=512 -max_total_time=60
+
+  io:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run session I/O with ThreadSanitizer
+        run: |
+          clang++ -std=c++20 -Isrc -O1 -g -fsanitize=thread tests/integration/io_service_test.cpp \
+            src/storage/{io_service,store,cache_identity,diagnostic_log}.cpp \
+            src/platform/{digest,file_snapshot}.cpp src/inference/chunk_planner.cpp \
+            src/translation/page_attempt.cpp src/core/types.cpp -lsqlite3 -o "$RUNNER_TEMP/io-test"
+          "$RUNNER_TEMP/io-test"
+          clang++ -std=c++20 -Isrc -O1 -g -fsanitize=thread tests/unit/inference_delivery_test.cpp -o "$RUNNER_TEMP/inbox-test"
+          "$RUNNER_TEMP/inbox-test"

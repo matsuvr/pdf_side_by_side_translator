@@ -10,6 +10,7 @@
 #include <stdexcept>
 
 namespace opt {
+inline constexpr std::size_t max_translation_bytes=1024*1024;
 class FileSnapshot;
 enum class FinishReason {
     Completed, Cancelled, OutputLimit, ContextLimit, EmptyOutput,

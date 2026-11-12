@@ -45,11 +45,14 @@ class DependencyAuditTest(unittest.TestCase):
         '''
         self.assertEqual(audit.macho_deployment(commands),{'minimum_os':'14.0','sdk':'27.2'})
 
-    def report(self, normal, delay):
+    def report(self, normal, delay, require_hardening=False):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "app.exe"
             path.write_bytes(synthetic_pe(normal, delay))
-            return audit.audit_pe(path)
+            return audit.audit_pe(path, require_hardening)
+
+    def test_distribution_requires_hardening(self):
+        self.assertEqual(len(self.report("kernel32.dll", "user32.dll", True)["failures"]), 2)
 
     def test_delay_loaded_runtime_is_not_missed(self):
         report = self.report("kernel32.dll", "MSVCP140.dll")
@@ -61,6 +64,11 @@ class DependencyAuditTest(unittest.TestCase):
 
     def test_normal_application_dependency_is_rejected(self):
         self.assertEqual(self.report("pdfium.dll", "user32.dll")["failures"], ["Non-OS DLL: pdfium.dll"])
+
+    def test_network_imports_in_both_directories(self):
+        self.assertEqual(self.report("WS2_32.dll", "winhttp.dll")["failures"],
+                         ["Network DLL: ws2_32.dll", "Network DLL: winhttp.dll"])
+        self.assertTrue(self.report("kernel32.dll", "api-ms-win-net-isolation-l1-1-0.dll")["failures"])
 
     def test_truncation_is_not_treated_as_no_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:

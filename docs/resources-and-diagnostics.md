@@ -1,3 +1,5 @@
+> 現在は読み取り専用ビューワーです。原文編集・強制再翻訳・書き出しは削除しました。以下に含まれる旧機能の検証記録は過去のものです。現在の仕様は [session-data.md](session-data.md) を参照してください。
+
 > Historical validation before the session-only safety changes. File logging, persistence recovery and state restoration described below are removed; see [session data](session-data.md) for current behavior.
 
 # Embedded resources and diagnostics

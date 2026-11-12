@@ -41,6 +41,9 @@ function(opt_add_windows_cpu_kernels)
         string(REGEX MATCH "ggml_(compute_forward|vec|table)_[A-Za-z0-9_]+" symbol "${definition}")
         list(APPEND fast_ops "${symbol}=${symbol}_avx2")
     endforeach()
+    # The comparator types appear in externally linked MSVC STL template
+    # instantiations. Distinguish their COMDAT names across the two ISA builds.
+    list(APPEND fast_ops cmp_argsort=cmp_argsort_avx2 cmp_top_k=cmp_top_k_avx2)
     set(attention "${CMAKE_CURRENT_BINARY_DIR}/windows_attention_avx2.cpp")
     file(CONFIGURE OUTPUT "${attention}" CONTENT "#include \"ggml-cpu/vec.cpp\"\n#include \"ggml-cpu/ops.cpp\"\n")
     target_sources(ggml-cpu PRIVATE "${attention}")

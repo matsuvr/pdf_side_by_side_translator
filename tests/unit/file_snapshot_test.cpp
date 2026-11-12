@@ -77,6 +77,13 @@ int main(){
         std::array<std::byte,128> scratch{};file->read_at(1000,scratch);
         check(std::fread(second.data(),1,4,stream.get())==4,"Cannot continue model stream");
         check(std::string(first.data(),4)==original.substr(0,4)&&std::string(second.data(),4)==original.substr(4,4),"Hash reads changed the model stream seek position");
+#ifdef _WIN32
+        std::error_code blocked;
+        std::filesystem::rename(path,old,blocked);
+        check(bool(blocked),"Renamed an open input");
+        check(!std::fstream(path,std::ios::in|std::ios::out|std::ios::binary),"Opened a mapped input for in-place writes");
+        check(hash_file(*file)==opt::sha256(original)&&hash_file(*mapped_file)==opt::sha256(original),"Read sharing changed input bytes");
+#else
         std::filesystem::rename(path,old);
         {std::ofstream out(path,std::ios::binary);const std::string replacement(original.size(),'y');out.write(replacement.data(),static_cast<std::streamsize>(replacement.size()));}
         std::filesystem::last_write_time(path,timestamp);
@@ -84,6 +91,7 @@ int main(){
         check(replaced->initial_signature().identity!=file->initial_signature().identity,"Path replacement reused the old file identity");
         check(hash_file(*file)==opt::sha256(original)&&hash_file(*mapped_file)==opt::sha256(original),"Hashing was redirected to a same-named replacement file");
         check(hash_file(*replaced)!=opt::sha256(original),"Replacement content was not distinguished");
+#endif
         check(mapping.bytes().size()==original.size()&&static_cast<char>(mapping.bytes()[0])=='o',"Mapping stopped referring to its original file object");
         std::cout<<"Native Unicode paths, regular-file aliases, nonblocking special-file rejection, independent streams and path replacement passed\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

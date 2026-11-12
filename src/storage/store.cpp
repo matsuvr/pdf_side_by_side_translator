@@ -1,6 +1,4 @@
 #include "storage/store.hpp"
-#include "platform/access_path.hpp"
-#include "platform/atomic_file.hpp"
 #include "core/utf8.hpp"
 #include <sqlite3.h>
 #include <algorithm>
@@ -11,7 +9,6 @@
 
 namespace opt {
 namespace {
-std::string utf8(const std::filesystem::path& p){const auto s=p.u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
 std::int64_t now(){return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();}
 void check(int code,sqlite3* db){if(code!=SQLITE_OK&&code!=SQLITE_ROW&&code!=SQLITE_DONE)throw StorageError(code,db?sqlite3_errmsg(db):sqlite3_errstr(code));}
 struct Statement {
@@ -40,16 +37,14 @@ constexpr const char* state_schema=R"SQL(
 CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE document_state(document_hash TEXT PRIMARY KEY,last_path TEXT NOT NULL,page_index INTEGER NOT NULL,modified_at INTEGER NOT NULL);
 CREATE TABLE page_state(document_hash TEXT NOT NULL,page_index INTEGER NOT NULL,pdf_anchor_x REAL,pdf_anchor_y REAL,text_anchor INTEGER,PRIMARY KEY(document_hash,page_index));
-CREATE TABLE source_overrides(document_hash TEXT NOT NULL,page_index INTEGER NOT NULL,source_utf8 TEXT NOT NULL,source_revision INTEGER NOT NULL,modified_at INTEGER NOT NULL,PRIMARY KEY(document_hash,page_index));
 CREATE TABLE file_fingerprints(path_key TEXT PRIMARY KEY,file_identity TEXT NOT NULL,file_size INTEGER NOT NULL,mtime_ns INTEGER NOT NULL,content_hash TEXT NOT NULL);
-CREATE TABLE pending_source_overrides(provisional_key TEXT NOT NULL,page_index INTEGER NOT NULL,last_path TEXT NOT NULL,source_utf8 TEXT,use_auto_source INTEGER NOT NULL,source_revision INTEGER NOT NULL,modified_at INTEGER NOT NULL,PRIMARY KEY(provisional_key,page_index));
 PRAGMA user_version=5;
 )SQL";
 constexpr const char* cache_schema=R"SQL(
 CREATE TABLE completed_chunks(cache_key TEXT PRIMARY KEY,document_hash TEXT NOT NULL,page_index INTEGER NOT NULL,profile_key TEXT NOT NULL,block_id TEXT NOT NULL,chunk_algorithm_version INTEGER NOT NULL,chunk_index INTEGER NOT NULL,source_digest TEXT NOT NULL,prompt_ids_digest TEXT NOT NULL,text_utf8 TEXT NOT NULL,byte_size INTEGER NOT NULL,created_at INTEGER NOT NULL,last_used_at INTEGER NOT NULL,model_key TEXT NOT NULL,profile_digest TEXT NOT NULL,page_source_digest TEXT NOT NULL,semantic_key TEXT NOT NULL,session_key TEXT NOT NULL);
 CREATE INDEX completed_chunks_document ON completed_chunks(document_hash,page_index,profile_key);
 CREATE INDEX completed_chunks_lru ON completed_chunks(last_used_at);
-CREATE TABLE page_attempts(attempt_id TEXT PRIMARY KEY,document_key TEXT NOT NULL,page_index INTEGER NOT NULL,profile_key TEXT NOT NULL,source_digest TEXT NOT NULL,force_retranslate INTEGER NOT NULL,plan_complete INTEGER NOT NULL,status TEXT NOT NULL,modified_at INTEGER NOT NULL,model_key TEXT NOT NULL,profile_digest TEXT NOT NULL,condition_key TEXT NOT NULL,plan_generation INTEGER NOT NULL,override_digest TEXT NOT NULL);
+CREATE TABLE page_attempts(attempt_id TEXT PRIMARY KEY,document_key TEXT NOT NULL,page_index INTEGER NOT NULL,profile_key TEXT NOT NULL,source_digest TEXT NOT NULL,plan_complete INTEGER NOT NULL,status TEXT NOT NULL,modified_at INTEGER NOT NULL,model_key TEXT NOT NULL,profile_digest TEXT NOT NULL,condition_key TEXT NOT NULL,plan_generation INTEGER NOT NULL);
 CREATE INDEX attempts_condition ON page_attempts(condition_key,modified_at);
 CREATE INDEX attempts_page ON page_attempts(document_key,page_index,model_key,profile_digest,modified_at);
 CREATE TABLE attempt_chunks(attempt_id TEXT NOT NULL,block_id TEXT NOT NULL,chunk_id TEXT NOT NULL,source_begin INTEGER NOT NULL,source_end INTEGER NOT NULL,parent_chunk_id TEXT,status TEXT NOT NULL,cache_key TEXT,ordinal INTEGER NOT NULL,source_digest TEXT NOT NULL,prompt_digest TEXT NOT NULL,plan_digest TEXT NOT NULL,source_text TEXT NOT NULL,target_tokens INTEGER NOT NULL,source_tokens INTEGER NOT NULL,prompt_tokens INTEGER NOT NULL,output_limit INTEGER NOT NULL,output_tokens INTEGER NOT NULL,plan_generation INTEGER NOT NULL,reason INTEGER NOT NULL,split_retry INTEGER NOT NULL,block_kind INTEGER NOT NULL,PRIMARY KEY(attempt_id,block_id,chunk_id));
@@ -112,29 +107,15 @@ std::map<std::string,std::string> Store::settings(){impl_->owns();std::map<std::
 void Store::settings(const std::map<std::string,std::string>& values){impl_->owns();Transaction tx(impl_->state.get());for(const auto& [k,v]:values){Statement q(impl_->state.get(),"INSERT INTO app_settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");q.text(1,k).text(2,v).step();}tx.commit();}
 std::optional<std::string> Store::fingerprint(std::string_view path,const FileSignature& s){impl_->owns();Statement q(impl_->state.get(),"SELECT content_hash FROM file_fingerprints WHERE path_key=? AND file_identity=? AND file_size=? AND mtime_ns=?");q.text(1,path).text(2,s.identity).number(3,s.size).number(4,s.mtime_ns);if(q.step()){auto hash=q.text(0);if(valid_hash(hash))return hash;}return {};}
 void Store::fingerprint(std::string_view path,const FileSignature& s,std::string_view hash){impl_->owns();if(!valid_hash(hash))throw std::invalid_argument("Invalid content hash");Statement q(impl_->state.get(),"INSERT INTO file_fingerprints VALUES(?,?,?,?,?) ON CONFLICT(path_key) DO UPDATE SET file_identity=excluded.file_identity,file_size=excluded.file_size,mtime_ns=excluded.mtime_ns,content_hash=excluded.content_hash");q.text(1,path).text(2,s.identity).number(3,s.size).number(4,s.mtime_ns).text(5,hash).step();}
-SavedDocument Store::document(std::string key,std::string_view provisional,bool only_reading_page,std::optional<PageIndex> page){
+SavedDocument Store::document(std::string key,std::optional<PageIndex> page){
     impl_->owns();SavedDocument result;result.document_key=std::move(key);
     {Statement q(impl_->state.get(),"SELECT page_index FROM document_state WHERE document_hash=?");q.text(1,result.document_key);if(q.step())result.position.page=static_cast<PageIndex>(std::max<std::int64_t>(0,q.number(0)));}
     if(page)result.position.page=*page;
     {Statement q(impl_->state.get(),"SELECT pdf_anchor_x,pdf_anchor_y,text_anchor FROM page_state WHERE document_hash=? AND page_index=?");q.text(1,result.document_key).number(2,result.position.page);if(q.step()){if(!q.is_null(0)&&!q.is_null(1))result.position.pdf_anchor=PdfPoint{q.real(0),q.real(1)};result.position.text_anchor=std::max<std::int64_t>(0,q.number(2));}}
-    std::map<PageIndex,SavedOverride> values;
-    {Statement q(impl_->state.get(),"SELECT page_index,source_revision,source_utf8 FROM source_overrides WHERE document_hash=? AND (?=0 OR page_index=?)");q.text(1,result.document_key).number(2,only_reading_page).number(3,result.position.page);while(q.step()){SavedOverride v{static_cast<PageIndex>(q.number(0)),static_cast<SourceRevision>(q.number(1)),q.text(2)};values[v.page]=std::move(v);}}
-    {Statement q(impl_->state.get(),"SELECT page_index,source_revision,source_utf8,use_auto_source FROM pending_source_overrides WHERE provisional_key=? AND (?=0 OR page_index=?)");q.text(1,provisional).number(2,only_reading_page).number(3,result.position.page);while(q.step()){SavedOverride v{static_cast<PageIndex>(q.number(0)),static_cast<SourceRevision>(q.number(1)),q.number(3)?std::nullopt:std::optional(q.text(2))};if(!values.contains(v.page)||values[v.page].revision<=v.revision)values[v.page]=std::move(v);}}
-    for(auto& [page,v]:values)result.overrides.push_back(std::move(v));return result;
+    return result;
 }
-void Store::save_override(std::string_view provisional,std::string_view key,std::string_view path,const SavedOverride& v){
-    impl_->owns();if(v.source)validate_utf8(*v.source);Transaction tx(impl_->state.get());
-    {Statement q(impl_->state.get(),"INSERT INTO pending_source_overrides VALUES(?,?,?,?,?,?,?) ON CONFLICT(provisional_key,page_index) DO UPDATE SET last_path=excluded.last_path,source_utf8=excluded.source_utf8,use_auto_source=excluded.use_auto_source,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=pending_source_overrides.source_revision");q.text(1,provisional).number(2,v.page).text(3,path);if(v.source)q.text(4,*v.source);else q.null(4);q.number(5,!v.source).number(6,v.revision).number(7,impl_->state_time()).step();}
-    if(!key.empty()){
-        if(v.source){Statement q(impl_->state.get(),"INSERT INTO source_overrides VALUES(?,?,?,?,?) ON CONFLICT(document_hash,page_index) DO UPDATE SET source_utf8=excluded.source_utf8,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=source_overrides.source_revision");q.text(1,key).number(2,v.page).text(3,*v.source).number(4,v.revision).number(5,impl_->state_time()).step();}
-        else{Statement q(impl_->state.get(),"DELETE FROM source_overrides WHERE document_hash=? AND page_index=? AND source_revision<=?");q.text(1,key).number(2,v.page).number(3,v.revision).step();}
-    }tx.commit();
-}
-void Store::promote_overrides(std::string_view provisional,std::string_view hash){
+void Store::promote_position(std::string_view provisional,std::string_view hash){
     impl_->owns();Transaction tx(impl_->state.get());
-    {Statement q(impl_->state.get(),"INSERT INTO source_overrides SELECT ?,page_index,source_utf8,source_revision,modified_at FROM pending_source_overrides WHERE provisional_key=? AND use_auto_source=0 ON CONFLICT(document_hash,page_index) DO UPDATE SET source_utf8=excluded.source_utf8,source_revision=excluded.source_revision,modified_at=excluded.modified_at WHERE excluded.source_revision>=source_overrides.source_revision");q.text(1,hash).text(2,provisional).step();}
-    {Statement q(impl_->state.get(),"DELETE FROM source_overrides WHERE document_hash=? AND EXISTS(SELECT 1 FROM pending_source_overrides p WHERE p.provisional_key=? AND p.page_index=source_overrides.page_index AND p.use_auto_source=1 AND p.source_revision>=source_overrides.source_revision)");q.text(1,hash).text(2,provisional).step();}
-    {Statement q(impl_->state.get(),"DELETE FROM pending_source_overrides WHERE provisional_key=?");q.text(1,provisional).step();}
     // Positions written before hashing use the same stable native-file key.
     {Statement q(impl_->state.get(),"INSERT INTO document_state SELECT ?,last_path,page_index,modified_at FROM document_state WHERE document_hash=? ON CONFLICT(document_hash) DO UPDATE SET last_path=excluded.last_path,page_index=excluded.page_index,modified_at=excluded.modified_at WHERE excluded.modified_at>=document_state.modified_at");q.text(1,hash).text(2,provisional).step();}
     {Statement q(impl_->state.get(),"INSERT INTO page_state SELECT ?,page_index,pdf_anchor_x,pdf_anchor_y,text_anchor FROM page_state WHERE document_hash=? ON CONFLICT(document_hash,page_index) DO UPDATE SET pdf_anchor_x=excluded.pdf_anchor_x,pdf_anchor_y=excluded.pdf_anchor_y,text_anchor=excluded.text_anchor");q.text(1,hash).text(2,provisional).step();}
@@ -155,8 +136,8 @@ void Store::save_attempt(const CacheContext& context,const AttemptSnapshot& data
         validate_utf8(c.text);if(c.reason!=FinishReason::Completed||!valid_translation(c.text)||c.source_digest.empty()||c.prompt_digest.empty())throw std::invalid_argument("Incomplete chunk cannot be cached");
     }
     // A new attempt supersedes this page/profile even if it cannot fit in the
-    // optional cache. In particular, an oversized forced retry must never
-    // resurrect a previous completed translation during export.
+    // optional cache. An oversized update must never resurrect a previous
+    // completed translation.
     {
         Transaction tx(impl_->cache.get());
         {Statement q(impl_->cache.get(),"DELETE FROM attempt_chunks WHERE attempt_id IN(SELECT attempt_id FROM page_attempts WHERE document_key=? AND page_index=? AND model_key=? AND profile_digest=?)");q.text(1,context.document_key).number(2,context.page).text(3,context.model_key).text(4,context.profile_digest).step();}
@@ -167,14 +148,14 @@ void Store::save_attempt(const CacheContext& context,const AttemptSnapshot& data
     // cap below is authoritative for actual rows, indexes and allocation pages.
     std::uint64_t bytes=0;
     auto fits=[&](std::uint64_t extra){if(extra>impl_->limit-bytes)return false;bytes+=extra;return true;};
-    if(!fits(1024)||!fits(data.id.size())||!fits(data.condition_key.size())||!fits(context.document_key.size())||!fits(context.model_key.size())||!fits(context.profile_digest.size())||!fits(context.source_digest.size())||!fits(context.override_digest.size()))return;
+    if(!fits(1024)||!fits(data.id.size())||!fits(data.condition_key.size())||!fits(context.document_key.size())||!fits(context.model_key.size())||!fits(context.profile_digest.size())||!fits(context.source_digest.size()))return;
     for(const auto& c:data.chunks)if(!fits(1024)||!fits(c.id.size())||!fits(c.parent_id.size())||!fits(c.block_id.size())||!fits(c.source_digest.size())||!fits(c.prompt_digest.size())||!fits(c.plan_digest.size())||!fits(c.text.size()))return;
     auto write=[&]{
     Transaction tx(impl_->cache.get());
-    {Statement q(impl_->cache.get(),"INSERT INTO page_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET document_key=excluded.document_key,page_index=excluded.page_index,profile_key=excluded.profile_key,source_digest=excluded.source_digest,force_retranslate=excluded.force_retranslate,plan_complete=excluded.plan_complete,status=excluded.status,modified_at=excluded.modified_at,model_key=excluded.model_key,profile_digest=excluded.profile_digest,condition_key=excluded.condition_key,plan_generation=excluded.plan_generation,override_digest=excluded.override_digest");
+    {Statement q(impl_->cache.get(),"INSERT INTO page_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET document_key=excluded.document_key,page_index=excluded.page_index,profile_key=excluded.profile_key,source_digest=excluded.source_digest,plan_complete=excluded.plan_complete,status=excluded.status,modified_at=excluded.modified_at,model_key=excluded.model_key,profile_digest=excluded.profile_digest,condition_key=excluded.condition_key,plan_generation=excluded.plan_generation");
         q.text(1,data.id).text(2,context.document_key).number(3,context.page).text(4,profile_key(context)).text(5,context.source_digest)
-            .number(6,data.bypass_cache).number(7,data.planning_complete).text(8,page_names.at(static_cast<unsigned>(data.state))).number(9,impl_->cache_time())
-            .text(10,context.model_key).text(11,context.profile_digest).text(12,data.condition_key).number(13,data.plan).text(14,context.override_digest).step();}
+            .number(6,data.planning_complete).text(7,page_names.at(static_cast<unsigned>(data.state))).number(8,impl_->cache_time())
+            .text(9,context.model_key).text(10,context.profile_digest).text(11,data.condition_key).number(12,data.plan).step();}
     {Statement q(impl_->cache.get(),"DELETE FROM attempt_chunks WHERE attempt_id=?");q.text(1,data.id).step();}
     std::uint32_t ordinal=0;
     for(const auto& c:data.chunks){
@@ -206,15 +187,15 @@ void Store::save_attempt(const CacheContext& context,const AttemptSnapshot& data
 }
 std::optional<AttemptSnapshot> Store::attempt(const CacheContext& context){
     impl_->owns();AttemptSnapshot data;
-    {Statement q(impl_->cache.get(),"SELECT attempt_id,force_retranslate,plan_complete,status,plan_generation FROM page_attempts WHERE condition_key=? ORDER BY modified_at DESC LIMIT 1");
-        q.text(1,context.condition_key());if(!q.step())return {};data.id=q.text(0);data.bypass_cache=q.number(1);data.planning_complete=q.number(2);data.state=parse<PageState>(q.text(3),page_names);data.plan=q.number(4);data.condition_key=context.condition_key();}
+    {Statement q(impl_->cache.get(),"SELECT attempt_id,plan_complete,status,plan_generation FROM page_attempts WHERE condition_key=? ORDER BY modified_at DESC LIMIT 1");
+        q.text(1,context.condition_key());if(!q.step())return {};data.id=q.text(0);data.planning_complete=q.number(1);data.state=parse<PageState>(q.text(2),page_names);data.plan=q.number(3);data.condition_key=context.condition_key();}
     Statement q(impl_->cache.get(),"SELECT a.chunk_id,a.parent_chunk_id,a.block_id,a.source_begin,a.source_end,a.status,a.source_digest,a.prompt_digest,a.plan_digest,a.source_text,a.target_tokens,a.source_tokens,a.prompt_tokens,a.output_limit,a.output_tokens,a.plan_generation,a.reason,a.split_retry,a.block_kind,c.text_utf8 FROM attempt_chunks a LEFT JOIN completed_chunks c ON c.cache_key=a.cache_key WHERE a.attempt_id=? ORDER BY a.ordinal");
     q.text(1,data.id);
     while(q.step()){
         AttemptChunk c;c.id=q.text(0);c.parent_id=q.text(1);c.block_id=q.text(2);c.begin=q.number(3);c.end=q.number(4);c.state=parse<LeafState>(q.text(5),leaf_names);
         c.source_digest=q.text(6);c.prompt_digest=q.text(7);c.plan_digest=q.text(8);c.text=q.text(9);if(c.state==LeafState::Complete&&c.text.empty())c.text=q.text(19);
         c.target_tokens=q.number(10);c.source_tokens=q.number(11);c.prompt_tokens=q.number(12);c.output_limit=q.number(13);c.output_tokens=q.number(14);c.plan=q.number(15);
-        if(q.number(16)<0||q.number(16)>static_cast<int>(FinishReason::ModelUnavailable)||q.number(18)<0||q.number(18)>static_cast<int>(BlockKind::Edited))return {};
+        if(q.number(16)<0||q.number(16)>static_cast<int>(FinishReason::ModelUnavailable)||q.number(18)<0||q.number(18)>static_cast<int>(BlockKind::Unknown))return {};
         c.reason=static_cast<FinishReason>(q.number(16));c.split_retry=q.number(17);c.kind=static_cast<BlockKind>(q.number(18));
         if(c.state==LeafState::Complete){try{validate_utf8(c.text);if(!valid_translation(c.text))return {};}catch(...){return {};}}
         data.chunks.push_back(std::move(c));
@@ -236,8 +217,7 @@ void Store::promote_cache(bool model,std::string_view from,std::string_view to){
         {Statement q(impl_->cache.get(),"SELECT cache_key,document_hash,page_index,model_key,profile_digest,page_source_digest,semantic_key FROM completed_chunks WHERE rowid=?");q.number(1,row);if(!q.step())continue;old=q.text(0);c.document_key=q.text(1);c.page=q.number(2);c.model_key=q.text(3);c.profile_digest=q.text(4);c.source_digest=q.text(5);semantic=q.text(6);}
         if(model)c.model_key=to;else c.document_key=to;const auto key=completed_cache_key(c,semantic);
         // Identical files can first be translated under different provisional
-        // keys. A promotion collision must retain the newest result, including
-        // a forced retry, rather than silently restoring the earlier output.
+        // keys. A promotion collision must retain the newest result.
         {Statement q(impl_->cache.get(),"UPDATE completed_chunks SET (text_utf8,byte_size,created_at,last_used_at,session_key)=(SELECT text_utf8,byte_size,created_at,last_used_at,session_key FROM completed_chunks WHERE rowid=?) WHERE cache_key=? AND created_at<(SELECT created_at FROM completed_chunks WHERE rowid=?)");q.number(1,row).text(2,key).number(3,row).step();}
         {Statement q(impl_->cache.get(),"UPDATE attempt_chunks SET cache_key=? WHERE cache_key=?");q.text(1,key).text(2,old).step();}
         {Statement q(impl_->cache.get(),"UPDATE OR IGNORE completed_chunks SET cache_key=?,document_hash=?,model_key=?,profile_key=? WHERE rowid=?");q.text(1,key).text(2,c.document_key).text(3,c.model_key).text(4,profile_key(c)).number(5,row).step();}
@@ -246,7 +226,7 @@ void Store::promote_cache(bool model,std::string_view from,std::string_view to){
     rows.clear();
     {Statement q(impl_->cache.get(),model?"SELECT rowid FROM page_attempts WHERE model_key=?":"SELECT rowid FROM page_attempts WHERE document_key=?");q.text(1,from);while(q.step())rows.push_back(q.number(0));}
     for(auto row:rows){
-        CacheContext c;{Statement q(impl_->cache.get(),"SELECT document_key,page_index,model_key,profile_digest,source_digest,override_digest FROM page_attempts WHERE rowid=?");q.number(1,row);if(!q.step())continue;c.document_key=q.text(0);c.page=q.number(1);c.model_key=q.text(2);c.profile_digest=q.text(3);c.source_digest=q.text(4);c.override_digest=q.text(5);}
+        CacheContext c;{Statement q(impl_->cache.get(),"SELECT document_key,page_index,model_key,profile_digest,source_digest FROM page_attempts WHERE rowid=?");q.number(1,row);if(!q.step())continue;c.document_key=q.text(0);c.page=q.number(1);c.model_key=q.text(2);c.profile_digest=q.text(3);c.source_digest=q.text(4);}
         if(model)c.model_key=to;else c.document_key=to;
         Statement q(impl_->cache.get(),"UPDATE page_attempts SET document_key=?,model_key=?,profile_key=?,condition_key=? WHERE rowid=?");q.text(1,c.document_key).text(2,c.model_key).text(3,profile_key(c)).text(4,c.condition_key()).number(5,row).step();
     }
@@ -262,48 +242,10 @@ void Store::promote_cache(bool model,std::string_view from,std::string_view to){
     }
 }
 
-std::size_t Store::for_each_complete_page(std::string_view doc,std::string_view model,std::string_view profile,const std::function<void(PageIndex,std::string_view)>& consume,std::string_view native_source_key){
-    impl_->owns();std::size_t count=0;
-    Statement pages(impl_->cache.get(),"SELECT a.attempt_id,a.page_index,a.override_digest FROM page_attempts a WHERE a.document_key=? AND a.model_key=? AND a.profile_digest=? AND a.status='complete' AND a.plan_complete=1 AND a.modified_at=(SELECT MAX(b.modified_at) FROM page_attempts b WHERE b.document_key=a.document_key AND b.page_index=a.page_index AND b.model_key=a.model_key AND b.profile_digest=a.profile_digest) ORDER BY a.page_index");pages.text(1,doc).text(2,model).text(3,profile);
-    while(pages.step()){
-        std::string current_override;SourceRevision revision=0;
-        {Statement q(impl_->state.get(),"SELECT source_utf8,source_revision FROM source_overrides WHERE document_hash=? AND page_index=?");q.text(1,doc).number(2,pages.number(1));if(q.step()){current_override=sha256(q.text(0));revision=q.number(1);}}
-        if(!native_source_key.empty()){
-            Statement q(impl_->state.get(),"SELECT source_utf8,source_revision,use_auto_source FROM pending_source_overrides WHERE provisional_key=? AND page_index=?");q.text(1,native_source_key).number(2,pages.number(1));
-            if(q.step()&&static_cast<SourceRevision>(q.number(1))>=revision)current_override=q.number(2)?std::string{}:sha256(q.text(0));
-        }
-        if(current_override!=pages.text(2))continue;
-        std::string text,prior;bool valid=true,has_chunk=false;
-        Statement q(impl_->cache.get(),"SELECT a.block_id,a.status,a.source_text,a.block_kind,c.text_utf8 FROM attempt_chunks a LEFT JOIN completed_chunks c ON c.cache_key=a.cache_key WHERE a.attempt_id=? AND a.status!='replaced' ORDER BY a.ordinal");q.text(1,pages.text(0));
-        while(q.step()){
-            has_chunk=true;const auto block=q.text(0),status=q.text(1);auto body=q.text(2);if(status=="complete"&&body.empty())body=q.text(4);
-            if(status!="complete"&&status!="source-only"){valid=false;break;}
-            try{validate_utf8(body);if(status=="complete"&&!valid_translation(body))valid=false;}catch(...){valid=false;break;}
-            if(block!=prior){if(!text.empty())text+="\n\n";prior=block;
-                if(status=="source-only"&&q.number(3)==static_cast<int>(BlockKind::Table))text+="［表・原文］\n";
-                if(status=="source-only"&&q.number(3)==static_cast<int>(BlockKind::Equation))text+="［数式・原文］\n";}
-            text+=body;
-        }if(valid&&has_chunk){consume(static_cast<PageIndex>(pages.number(1)),text);++count;}
-    }return count;
-}
 void Store::clear_cache(){
     impl_->owns();Transaction tx(impl_->cache.get());
     sql(impl_->cache.get(),"DELETE FROM attempt_chunks;DELETE FROM page_attempts;DELETE FROM completed_chunks");
     tx.commit();sqlite3_db_release_memory(impl_->cache.get());
-}
-void Store::export_state(const std::filesystem::path& destination,const std::function<void()>& before_replace){
-    impl_->owns();if(before_replace)before_replace();
-    AtomicFile file(destination);
-    sqlite3* raw=nullptr;
-    const auto opened=sqlite3_open_v2(utf8(access_path(file.temporary_path())).c_str(),&raw,SQLITE_OPEN_READWRITE|SQLITE_OPEN_NOMUTEX,nullptr);
-    Database copy(raw);check(opened,copy.get());
-    // The only disk database is this explicitly requested destination.
-    sql(copy.get(),"PRAGMA temp_store=MEMORY; PRAGMA journal_mode=MEMORY");
-    auto* backup=sqlite3_backup_init(copy.get(),"main",impl_->state.get(),"main");if(!backup)throw StorageError(sqlite3_errcode(copy.get()),sqlite3_errmsg(copy.get()));
-    int result=SQLITE_OK;do{result=sqlite3_backup_step(backup,128);}while(result==SQLITE_OK);
-    const auto finished=sqlite3_backup_finish(backup);check(result==SQLITE_DONE?SQLITE_OK:result,copy.get());check(finished,copy.get());
-    copy.reset();
-    file.publish(before_replace);
 }
 CacheUsage Store::cache_usage()const{
     impl_->owns();return {impl_->cache_bytes(),scalar(impl_->cache.get(),"SELECT count(*) FROM page_attempts"),scalar(impl_->cache.get(),"SELECT count(*) FROM completed_chunks")};

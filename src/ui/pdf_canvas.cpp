@@ -148,7 +148,7 @@ void PdfCanvas::calculate(std::optional<wxPoint> pointer){
         multiplier=std::max(1,client.x-margin*2)*scale_/pw;
         if(zoom_mode_==ZoomMode::FitPage)multiplier=std::min(multiplier,std::max(1,client.y-margin*2)*scale_/ph);
     }
-    const long double max_size=INT_MAX-std::max(1024,margin*4);
+    const long double max_size=max_page_pixels;
     multiplier=std::min(multiplier,std::min(max_size/pw,max_size/ph));
     width_=std::max(1,static_cast<int>(std::round(pw*multiplier)));
     height_=std::max(1,static_cast<int>(std::round(ph*multiplier)));
@@ -188,7 +188,8 @@ void PdfCanvas::accept(const PdfEvent& e){
             const auto p=e.transform.pdf_to_page_px.apply(pending_anchor_->pdf);
             const auto screen=pending_anchor_->screen;
             const double x=origin_.x+p.x/scale_-screen.x,y=origin_.y+p.y/scale_-screen.y;
-            Scroll(static_cast<int>(std::clamp(x,0.0,static_cast<double>(std::max(0,GetVirtualSize().x-GetClientSize().x)))),
+            if(std::isfinite(x)&&std::isfinite(y))
+                Scroll(static_cast<int>(std::clamp(x,0.0,static_cast<double>(std::max(0,GetVirtualSize().x-GetClientSize().x)))),
                    static_cast<int>(std::clamp(y,0.0,static_cast<double>(std::max(0,GetVirtualSize().y-GetClientSize().y)))));
             pending_anchor_.reset();schedule();
         }
@@ -244,6 +245,7 @@ void PdfCanvas::paint(wxPaintEvent&){
                         previous_box=g.bounds;
                         const auto p=transform_->pdf_to_page_px.apply({g.bounds.left,g.bounds.bottom});
                         const auto q=transform_->pdf_to_page_px.apply({g.bounds.right,g.bounds.top});
+                        if(!p.finite()||!q.finite()||!std::isfinite(p.x-q.x)||!std::isfinite(p.y-q.y))continue;
                         gc->DrawRectangle(origin_.x+std::min(p.x,q.x)/scale_,origin_.y+std::min(p.y,q.y)/scale_,
                             std::max(1.0,std::abs(p.x-q.x)/scale_),std::max(1.0,std::abs(p.y-q.y)/scale_));
                     }

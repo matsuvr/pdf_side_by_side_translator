@@ -6,7 +6,11 @@ namespace opt {
 Affine2D Affine2D::inverse() const {
     const double det=a*d-b*c;
     if(!std::isfinite(det)||det==0)throw std::runtime_error("Singular coordinate transform");
-    return {d/det,-b/det,-c/det,a/det,(c*ty-d*tx)/det,(b*tx-a*ty)/det};
+    Affine2D result{d/det,-b/det,-c/det,a/det,(c*ty-d*tx)/det,(b*tx-a*ty)/det};
+    if(!std::isfinite(result.a)||!std::isfinite(result.b)||!std::isfinite(result.c)||
+       !std::isfinite(result.d)||!std::isfinite(result.tx)||!std::isfinite(result.ty))
+        throw std::runtime_error("Non-finite inverse coordinate transform");
+    return result;
 }
 std::string encode_utf8(char32_t c) {
     if(c>0x10ffff||(c>=0xd800&&c<=0xdfff))c=0xfffd;

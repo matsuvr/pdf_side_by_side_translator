@@ -7,4 +7,5 @@ inline constexpr auto preset="@OPT_TARGET@";
 inline constexpr auto pdfium_revision="@OPT_REV_PDFium@";
 inline constexpr auto wx_revision="@OPT_REV_wxWidgets@";
 inline constexpr auto llama_revision="@OPT_REV_llama_cpp@";
+inline constexpr auto sqlite_version="@OPT_SQLITE_VERSION@";
 }

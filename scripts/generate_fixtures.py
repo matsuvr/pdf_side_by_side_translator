@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from common import ROOT
+from pdf_fixture_writer import objects_pdf, stream
 
 
 def write_pdf(path, pages, attributes=None, image=False, page_size=(612, 792)):
@@ -41,6 +42,51 @@ def write_pdf(path, pages, attributes=None, image=False, page_size=(612, 792)):
     data.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
+
+
+def write_transformed_text_pdf(path):
+    # Identical painted text with different font sizes and effective matrices.
+    # Large Tf values scaled down by Tm/cm/Form are common in exported PDFs.
+    lines = [(48, 736, 20, "Transformed text"),
+             (48, 696, 12, "The device has 3 sensors. It does not use the network."),
+             (48, 680, 12, "The source document remains unchanged."),
+             (48, 640, 12, "A second paragraph follows the first."),
+             (48, 624, 12, "Visible hyphens, such as re-enter, must be preserved."),
+             (48, 570, 11, "LEFT first line."), (330, 570, 11, "RIGHT first line."),
+             (48, 554, 11, "LEFT second line."), (330, 554, 11, "RIGHT second line.")]
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"",
+               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for mode in ("plain", "text", "page", "form", "nested"):
+        for rotation in (0, 90, 180, 270):
+            page_id = len(objects) + 1
+            kids.append(f"{page_id} 0 R")
+            objects.extend([b"", b""])
+            commands = []
+            for x, y, size, text in lines:
+                escaped = text.replace("(", "\\(").replace(")", "\\)")
+                font_size = size if mode == "plain" else size * 20
+                scale = 0.05 if mode == "text" else 0.1 if mode == "nested" else 1
+                position_scale = 20 if mode in ("page", "form") else 2 if mode == "nested" else 1
+                commands.append(f"BT /F1 {font_size} Tf {scale} 0 0 {scale} "
+                                f"{x * position_scale} {y * position_scale} Tm ({escaped}) Tj ET")
+            content = "\n".join(commands).encode("ascii")
+            resources = "/Font << /F1 3 0 R >>"
+            if mode == "page":
+                content = b"q 0.05 0 0 0.05 0 0 cm\n" + content + b"\nQ"
+            if mode in ("form", "nested"):
+                scale = 0.05 if mode == "form" else 0.5
+                form_id = len(objects) + 1
+                objects.append(stream(content, f"/Type /XObject /Subtype /Form /BBox [0 0 12240 15840] "
+                    f"/Matrix [{scale} 0 0 {scale} 0 0] /Resources << {resources} >> ".encode()))
+                resources += f" /XObject << /TextForm {form_id} 0 R >>"
+                content = b"/TextForm Do"
+            objects[page_id - 1] = (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                f"/Rotate {rotation} /Resources << {resources} >> /Contents {page_id + 1} 0 R >>").encode()
+            objects[page_id] = stream(content)
+    objects[1] = f"<< /Type /Pages /Count {len(kids)} /Kids [{' '.join(kids)}] >>".encode()
+    objects_pdf(path, objects)
+    return [line[3] for line in lines[:5]] + [lines[i][3] for i in (5, 7, 6, 8)]
 
 
 def main():
@@ -105,6 +151,9 @@ def main():
     expected["P07-structured.pdf"] = {"ordered_markers": ["Structured scientific", "following equation", "E = mc2", "Figure 1.", "Condition", "Control", "Trial", "The caption"], "block_kinds": {"E = mc2": 3, "Figure 1.": 2, "Condition": 4}}
     write_pdf(root / "P08-image.pdf", [[]], image=True)
     expected["P08-image.pdf"] = {"page_count": 1, "no_text_pages": [0]}
+    transformed = write_transformed_text_pdf(root / "P13-text-transforms.pdf")
+    expected["P13-text-transforms.pdf"] = {"page_count": 20, "ordered_markers": transformed,
+                                         "same_text_as_first_page": True}
     (root / "pdf-ground-truth.json").write_text(json.dumps(expected, indent=2) + "\n")
 
 

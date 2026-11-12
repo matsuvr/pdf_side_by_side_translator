@@ -5089,7 +5089,7 @@ SQLite public-domain declaration
 
 --- licenses/SQLite-public-domain.txt ---
 
-SQLite 3.50.4 — declaration from the pinned sqlite3.c amalgamation
+SQLite 3.54.1 — declaration from the pinned sqlite3.c amalgamation
 
 ** 2001 September 15
 **

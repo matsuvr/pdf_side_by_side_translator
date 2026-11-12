@@ -50,7 +50,7 @@ int main(int argc,char** argv){
         require(full->layout->reading_text_utf8.find("Incremental row 1000")!=std::string::npos,"interrupted large extraction resumes without source loss");
         full.reset();last.reset();
         for(PageIndex page=1;page<=12;++page){service.page_info(1,page);inbox.wait(1,PdfEvent::Kind::PageInfo,page);service.viewport({1,page,60000,60000,0,{{0,0}}});inbox.wait(1,PdfEvent::Kind::TileReady,page);}
-        auto before=service.stats();require(before.page_cache_peak<=8&&before.page_cache_peak>=8,"page/text handle LRU bounded to eight");require(before.tile_bytes_peak<=1024*1024,"large pages never allocate whole-page bitmap");require(before.text_yields>0,"dense source extraction uses cooperative slices");
+        auto before=service.stats();require(before.page_cache_peak==2,"page/text handle LRU bounded to two");require(before.tile_bytes_peak<=1024*1024,"large pages never allocate whole-page bitmap");require(before.text_yields>0,"dense source extraction uses cooperative slices");
         service.open(2,fixtures/"P10-complex.pdf");inbox.wait(2,PdfEvent::Kind::Opened);
         service.viewport({2,0,4096,5301,0,{{0,0},{512,0},{0,512},{512,512}}});inbox.wait(2,PdfEvent::Kind::ViewReady);
         service.viewport({2,0,800,1035,1,{{0,0}}});
@@ -71,10 +71,18 @@ int main(int argc,char** argv){
         const auto changed=temporary/"externally-changed.pdf";
         std::filesystem::copy_file(fixtures/"P01-simple.pdf",changed);
         service.open(7,changed);inbox.wait(7,PdfEvent::Kind::Opened);
+        service.viewport({7,0,max_page_pixels+1,612,0,{{0,0}}});
+        require(inbox.wait([](const auto& e){return e.document==7&&e.kind==PdfEvent::Kind::Failed;},true)->code=="PdfPage","Oversize viewport reached renderer");
+#ifdef _WIN32
+        std::error_code blocked;std::filesystem::resize_file(changed,0,blocked);
+        require(bool(blocked),"PDF worker allowed external truncation");
+        service.viewport({7,0,612,792,0,{{0,0}}});inbox.wait(7,PdfEvent::Kind::TileReady);
+#else
         std::filesystem::resize_file(changed,0);
         service.viewport({7,0,612,792,0,{{0,0}}});
         auto failure=inbox.wait([](const auto& e){return e.document==7&&e.kind==PdfEvent::Kind::Failed;},true);
         require(failure->code=="PdfPage","External truncation should fail only the changed document operation");
+#endif
         service.open(8,fixtures/"P01-simple.pdf");inbox.wait(8,PdfEvent::Kind::Opened);service.extract(8,0);
         require(inbox.wait(8,PdfEvent::Kind::Extracted)->layout->reading_text_utf8.find("3 sensors")!=std::string::npos,"PDF worker did not recover after input truncation");
         service.stop();service.join();

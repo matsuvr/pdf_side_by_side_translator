@@ -20,21 +20,23 @@ extern "C" int opt_windows_has_avx2_kernels();
 
 namespace opt {
 namespace {
+constexpr int max_piece_bytes=4096;
 std::string piece(const llama_vocab* vocab, llama_token token, bool special) {
     std::string result(64, '\0');
     int n = llama_token_to_piece(vocab, token, result.data(), static_cast<int>(result.size()), 0, special);
-    if (n == INT32_MIN) throw std::runtime_error("Token piece overflow");
+    if (n < -max_piece_bytes) throw std::runtime_error("Token piece exceeds byte limit");
     if (n < 0) {
         result.resize(static_cast<std::size_t>(-n));
         n = llama_token_to_piece(vocab, token, result.data(), static_cast<int>(result.size()), 0, special);
     }
-    if (n < 0) throw std::runtime_error("Token piece conversion failed");
+    if (n < 0 || static_cast<std::size_t>(n)>result.size()) throw std::runtime_error("Token piece conversion failed");
     result.resize(static_cast<std::size_t>(n));
     return result;
 }
 std::string metadata(const llama_model* model, const char* key) {
     const int n = llama_model_meta_val_str(model, key, nullptr, 0);
     if (n < 0) return {};
+    if (n > 4096) throw std::runtime_error("Model profile metadata exceeds byte limit");
     std::string value(static_cast<std::size_t>(n) + 1, '\0');
     if (llama_model_meta_val_str(model, key, value.data(), value.size()) < 0) return {};
     value.resize(static_cast<std::size_t>(n));
@@ -137,7 +139,8 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
             // The public length query includes embedded NULs, unlike get_text().
             char unused=0;
             const auto bytes=llama_token_to_piece(p.vocab,id,&unused,0,0,true);
-            if(bytes==INT32_MIN)throw std::runtime_error("Token piece overflow");
+            if(bytes < -max_piece_bytes || bytes > max_piece_bytes)
+                throw std::runtime_error("Token piece exceeds byte limit");
             p.max_token_bytes=std::max(p.max_token_bytes,static_cast<std::size_t>(bytes<0?-bytes:bytes));
             if(name.starts_with("<|plamo:")&&name.ends_with("|>")&&
                std::find(p.protocol.begin(),p.protocol.end(),id)==p.protocol.end())p.protocol.push_back(id);
@@ -301,6 +304,9 @@ GenerationResult Engine::generate(const PreparedInput& input,
         }
         try {
             auto complete = decoder.push(piece(p.vocab, token, false));
+            if(complete.size()>max_translation_bytes-result.text.size()){
+                result.reason=FinishReason::OutputLimit;break;
+            }
             const auto control=unsupported_text_control(complete);
             if(control!=std::string::npos){
                 result.text.append(complete,0,control);pending_delta.append(complete,0,control);

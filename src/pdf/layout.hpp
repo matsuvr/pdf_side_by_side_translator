@@ -21,7 +21,7 @@ struct LayoutOptions {
 };
 class LayoutResourceLimit : public std::runtime_error {
 public:
-    LayoutResourceLimit():std::runtime_error("このページの文字情報がメモリ予算を超えました。PDF表示は続けられます。必要な原文を手入力して翻訳できます。"){}
+    LayoutResourceLimit():std::runtime_error("このページの文字情報がメモリ予算を超えました。PDF表示は続けられます。"){}
 };
 class LayoutCancelled : public std::runtime_error {
 public:

@@ -17,8 +17,7 @@ int main(){try{
         TextBlock block;block.kind=kind;layout.blocks.push_back(std::move(block));
     }
     const auto source=PageAttempt::source(layout);
-    PageAttempt a(stamp,"conditions",source,Form::Plain,true);
-    require(!a.may_read_cache(),"forced attempt must bypass prior cache");
+    PageAttempt a(stamp,"conditions",source,Form::Plain);
     auto r=a.next_request();
     require(r&&*r->source==layout.reading_text_utf8,"one request must cover all paragraphs and structured text in reading order");
     auto p=prepare(*r);
@@ -28,8 +27,8 @@ int main(){try{
     require(a.finished(old_stamp,{FinishReason::OutputLimit,"途中",512}),"limit accepted");
     require(a.state()==PageState::Partial&&!a.next_request(),"output limit silently split the page");
     require(a.display_text().find("途中")!=std::string::npos&&!a.delta(old_stamp,"stale"),"partial output or stale delta handling changed");
-    PageAttempt resumed(stamp,"conditions",source,Form::Plain,false,a.snapshot());
-    require(resumed.snapshot().id==a.snapshot().id&&!resumed.may_read_cache(),"resume preserves forced cache bypass");
+    PageAttempt resumed(stamp,"conditions",source,Form::Plain,a.snapshot());
+    require(resumed.snapshot().id==a.snapshot().id,"resume preserves the interrupted attempt");
     r=resumed.next_request();require(r&&*r->source==*source,"resume must retry the whole page");
     require(!resumed.delta(old_stamp,"stale"),"restored attempt accepted a callback from the prior generation");
     p=prepare(*r);resumed.prepared(p);
@@ -37,18 +36,25 @@ int main(){try{
     resumed.finished(p->stamp,{FinishReason::Completed,"完訳",2});
     require(resumed.state()==PageState::Complete&&resumed.display_text()=="完訳"&&!resumed.next_request(),"page translation must replace partial exactly once");
     auto corrupt=resumed.snapshot();corrupt.chunks.front().end--;
-    PageAttempt rejected(stamp,"conditions",source,Form::Plain,false,corrupt);
+    PageAttempt rejected(stamp,"conditions",source,Form::Plain,corrupt);
     require(rejected.snapshot().id!=corrupt.id&&rejected.state()!=PageState::Complete,"manifest missing coverage rejected");
-    const auto edit=std::make_shared<const std::string>("Edited first line.\nIt continues here.");
-    PageAttempt edited(stamp,"new-style",PageAttempt::source(layout,edit),Form::Easy,false,resumed.snapshot());
-    r=edited.next_request();require(r&&*r->source==*edit&&r->form==Form::Easy,"edited page and form must replace the extracted input");
-    PageAttempt empty(stamp,"none",PageAttempt::source(layout,std::make_shared<const std::string>(" \n")),Form::Plain);
-    require(empty.state()==PageState::NoText&&!empty.next_request(),"blank edit must not fall back to original");
+    PageAttempt easy(stamp,"new-style",PageAttempt::source(layout),Form::Easy,resumed.snapshot());
+    r=easy.next_request();require(r&&*r->source==layout.reading_text_utf8&&r->form==Form::Easy,"style changes preserve the extracted page input");
+    PageLayout blank;blank.reading_text_utf8=" \n";
+    PageAttempt empty(stamp,"none",PageAttempt::source(blank),Form::Plain);
+    require(empty.state()==PageState::NoText&&!empty.next_request(),"blank PDF text is not sent to inference");
+    PageAttempt completed(stamp,"conditions",source,Form::Plain,resumed.snapshot());
+    require(completed.state()==PageState::Complete&&!completed.next_request()&&completed.display_text()=="完訳","revisiting a completed page reuses its translation");
     PageAttempt control(stamp,"control",source,Form::Plain);
     r=control.next_request();p=prepare(*r);control.prepared(p);
     const std::string unsafe("prefix\0hidden",13);
     require(!control.delta(p->stamp,unsafe),"control bytes cannot enter native stream");
+    require(!control.delta(p->stamp,"\xff"),"invalid UTF-8 reached the GUI");
     control.finished(p->stamp,{FinishReason::Completed,unsafe,3});
     require(control.state()==PageState::Partial&&control.snapshot().chunks.front().text=="prefix"&&control.snapshot().chunks.front().reason==FinishReason::InvalidModelOutput,"NUL output cannot become a completed chunk");
-    std::cout<<"whole-page coverage, forced resume and stale events passed\n";
+    PageAttempt invalid(stamp,"invalid",source,Form::Plain);
+    r=invalid.next_request();p=prepare(*r);invalid.prepared(p);invalid.delta(p->stamp,"prefix");
+    invalid.finished(p->stamp,{FinishReason::Cancelled,"\xff",3});
+    require(invalid.snapshot().chunks.front().reason==FinishReason::InvalidEncoding&&invalid.snapshot().chunks.front().text=="prefix","invalid partial result replaced a valid prefix");
+    std::cout<<"extracted page input, completion reuse and stale events passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

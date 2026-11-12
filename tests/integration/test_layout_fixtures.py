@@ -14,6 +14,8 @@ for name, expected in manifest.items():
         assert len(pages) == expected["page_count"], name
     for index, page in enumerate(pages):
         text = page["text"]
+        if expected.get("same_text_as_first_page"):
+            assert text == pages[0]["text"], (name, index, text, pages[0]["text"])
         ordered = expected.get("ordered_markers", expected.get("reading_order", [[]] * len(pages))[index])
         previous = -1
         for marker in ordered:

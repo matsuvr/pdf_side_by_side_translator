@@ -11,8 +11,8 @@ contains no real private data; the application does not implement that encryptio
 The PDF worker now extracts at most 2,048 character records or roughly 10 ms per
 step, retaining its cursor between steps. Pending views and visible-page source
 requests can take priority. Searches use the latest query generation. There is
-only one partial glyph buffer, and page/text handles remain under the eight-page
-LRU. PDF parsing and individual image operations are cooperative upstream work;
+only one partial glyph buffer. The current LRU retains two page handles. In-flight
+jobs retain their page until completion. PDF parsing and individual image operations are cooperative upstream work;
 there is no promise that every API call finishes within 10 ms.
 
 Raw GUI delivery has independent limits: 24 MiB for pixels and 32 MiB for pending

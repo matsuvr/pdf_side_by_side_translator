@@ -376,15 +376,19 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
         if(!std::isfinite(g.bounds.left)||!std::isfinite(g.bounds.right)||!std::isfinite(g.bounds.top)||!std::isfinite(g.bounds.bottom)||
            !std::isfinite(g.origin.x)||!std::isfinite(g.origin.y)||!std::isfinite(g.font_size)||!std::isfinite(g.angle_radians))continue;
         const auto p0=matrix.apply({g.bounds.left,g.bounds.bottom}),p1=matrix.apply({g.bounds.right,g.bounds.top});
+        if(!p0.finite()||!p1.finite())continue;
         Rect visible{std::min(p0.x,p1.x),std::min(p0.y,p1.y),std::max(p0.x,p1.x),std::max(p0.y,p1.y)};
         if(visible.right<=0||visible.left>=width||visible.bottom<=0||visible.top>=height)continue;
+        const auto origin=matrix.apply(g.origin);
+        const double dx=std::cos(g.angle_radians),dy=std::sin(g.angle_radians);
+        const PdfPoint along{matrix.a*dx+matrix.c*dy,matrix.b*dx+matrix.d*dy};
+        if(!origin.finite()||!along.finite()||!std::isfinite(g.font_size*unit)||
+           !std::isfinite(visible.right-visible.left)||!std::isfinite(visible.bottom-visible.top))continue;
         visible_character=true;
         if(g.unicode&&g.unicode!=0xfffd&&!g.unicode_map_error)unicode_available=true;
         if(space(g.unicode))continue;
         if(g.unicode&&g.unicode!=0xfffd&&g.unicode!=0xad&&!g.unicode_map_error)usable_visible_text=true;
-        auto origin=matrix.apply(g.origin);
-        const auto along=matrix.apply({g.origin.x+std::cos(g.angle_radians),g.origin.y+std::sin(g.angle_radians)});
-        int direction=(static_cast<int>(std::round(std::atan2(along.y-origin.y,along.x-origin.x)/(std::acos(-1)/2)))+4)%4;
+        int direction=(static_cast<int>(std::round(std::atan2(along.y,along.x)/(std::acos(-1)/2)))+4)%4;
         auto oriented=[&](PdfPoint p){switch(direction){case 1:return PdfPoint{p.y,-p.x};case 2:return PdfPoint{-p.x,-p.y};case 3:return PdfPoint{-p.y,p.x};default:return p;}};
         const auto a=oriented({visible.left,visible.top}),b=oriented({visible.right,visible.bottom});
         Rect box{std::min(a.x,b.x),std::min(a.y,b.y),std::max(a.x,b.x),std::max(a.y,b.y)};
@@ -395,7 +399,7 @@ PageLayout LayoutEngine::build(PageIndex page,std::vector<GlyphRecord> glyphs,Af
             if(previous.valid_bounds&&!space(previous.unicode)){
                 const auto pa=oriented(matrix.apply({previous.bounds.left,previous.bounds.bottom}));
                 const auto pb=oriented(matrix.apply({previous.bounds.right,previous.bounds.top}));
-                sort_x=std::min(pa.x,pb.x);
+                if(pa.finite()&&pb.finite())sort_x=std::min(pa.x,pb.x);
             }
         }
         work.grow<Item>();work.grow<double>();

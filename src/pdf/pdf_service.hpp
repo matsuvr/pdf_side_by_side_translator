@@ -15,6 +15,7 @@ class FileSnapshot;
 // FPDF_ANNOT | FPDF_RENDER_LIMITEDIMAGECACHE. Kept here so UI tile identities
 // use exactly the worker's render flags without importing PDFium into the UI.
 inline constexpr int pdf_render_flags=0x001|0x200;
+inline constexpr int max_page_pixels=262144; // Per axis, including zoom and device scale.
 struct TileKey {
     DocumentEpoch document=0;
     PageIndex page=0;
@@ -78,7 +79,7 @@ public:
     ~PdfService();
     PdfService(const PdfService&)=delete;
     PdfService& operator=(const PdfService&)=delete;
-    void open(DocumentEpoch epoch,const std::filesystem::path& path,std::string password={});
+    void open(DocumentEpoch epoch,const std::filesystem::path& path,std::string_view password={});
     void close(DocumentEpoch epoch);
     void page_info(DocumentEpoch epoch,PageIndex page);
     void viewport(ViewRequest request);

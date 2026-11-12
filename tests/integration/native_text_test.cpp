@@ -3,6 +3,7 @@
 #include "platform/text_view.hpp"
 #include <wx/wx.h>
 #include <wx/stdpaths.h>
+#include <wx/clipbrd.h>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
@@ -23,6 +24,33 @@ double scroll_y(wxTextCtrl& control){
 #endif
 }
 void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+void check_readonly_copy(wxTextCtrl& control){
+    const auto original=control.GetValue();
+    require(!control.IsEditable(),"viewer text is read-only after streaming");
+    control.SetSelection(0,12);
+    require(control.CanCopy()&&!control.CanCut()&&!control.CanPaste(),"read-only text supports selection and copy only");
+    control.Copy();
+    {
+        wxClipboardLocker lock;
+        require(!!lock,"clipboard opens for copy verification");
+        wxTextDataObject copied;
+        require(wxTheClipboard->GetData(copied)&&copied.GetText()==control.GetStringSelection(),"selected viewer text copies to clipboard");
+    }
+#ifdef _WIN32
+    const auto handle=static_cast<HWND>(control.GetHandle());
+    for(const auto message:{WM_CUT,WM_PASTE,WM_CLEAR,WM_UNDO}){
+        SendMessageW(handle,message,0,0);
+        require(control.GetValue()==original,"cut, paste, delete and undo cannot change viewer text");
+    }
+    SendMessageW(handle,WM_CHAR,L'x',1);
+    SendMessageW(handle,WM_CHAR,VK_BACK,1);
+    SendMessageW(handle,WM_KEYDOWN,VK_DELETE,1);
+    SendMessageW(handle,WM_KEYUP,VK_DELETE,1);
+    require(control.GetValue()==original,"typing, backspace and delete cannot change viewer text");
+#endif
+    control.SelectAll();
+    require(control.GetStringSelection()==original,"whole viewer text remains selectable");
+}
 #ifdef _WIN32
 void check_streamed_wrap(wxTextCtrl& control){
     const auto handle=static_cast<HWND>(control.GetHandle());
@@ -91,6 +119,7 @@ class TextTest final:public wxApp {
             const auto replacement=value.substr(0,value.rfind("追記"))+"置換した末尾。";
             opt::update_readonly_text(*text_,value,replacement,false);
             require(text_->GetValue().Contains(wxS("置換した末尾。")),"partial-result replacement reaches native widget");
+            check_readonly_copy(*text_);
             std::cout<<"native stream: selection, focus, pixel viewport, font/resize logical anchors and suffix replacement passed\n";result_=0;
         }catch(const std::exception& e){std::cerr<<e.what()<<'\n';}
         frame_->Destroy();

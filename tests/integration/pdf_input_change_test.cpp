@@ -18,7 +18,14 @@ struct Input {
     static int read(void* object,unsigned long offset,unsigned char* bytes,unsigned long count) noexcept{
         auto& input=*static_cast<Input*>(object);
         try{
-            if(input.armed&&++input.calls==input.fail_on){std::filesystem::resize_file(input.path,0);input.changed=true;}
+            if(input.armed&&++input.calls==input.fail_on){
+                std::error_code ec;std::filesystem::resize_file(input.path,0,ec);
+#ifdef _WIN32
+                input.changed=bool(ec); // File sharing denied the attempted change.
+#else
+                input.changed=!ec;
+#endif
+            }
             return input.reader.read(offset,{reinterpret_cast<std::byte*>(bytes),count})?1:0;
         }catch(...){return 0;}
     }
@@ -39,12 +46,20 @@ int main(int argc,char** argv){
             auto document=FPDF_LoadCustomDocument(&access,nullptr);
             if(!document)throw std::runtime_error("Cannot load input mutation fixture");
             struct Document {FPDF_DOCUMENT value;~Document(){FPDF_CloseDocument(value);}} owner{document};
-            input.armed=true;auto page=FPDF_LoadPage(document,0);if(page)FPDF_ClosePage(page);
+            input.armed=true;auto page=FPDF_LoadPage(document,0);
+#ifdef _WIN32
+            if(!page)throw std::runtime_error("Read-shared PDF failed during a conflicting write");
+#endif
+            if(page)FPDF_ClosePage(page);
             if(!fail_on){input.reader.check();if(!input.calls)throw std::runtime_error("Fixture did not read through its block callback during page load");}
             else{
                 if(!input.changed)throw std::runtime_error("Mutation injection point was not reached");
+#ifdef _WIN32
+                input.reader.check();
+#else
                 bool failed=false;try{input.reader.check();}catch(const std::exception&){failed=true;}
                 if(!failed)throw std::runtime_error("Mid-parser file mutation was not reported");
+#endif
             }
             return input.calls;
         };

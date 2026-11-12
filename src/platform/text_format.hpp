@@ -4,7 +4,7 @@
 
 namespace opt {
 // Rich Edit's native paragraph delimiter is one CR. Canonicalize only the
-// display representation; generated/cache/export bytes retain their newlines.
+// display representation; generated and memory-cached bytes retain their newlines.
 inline std::string rich_edit_text(std::string_view source){
     std::string value;value.reserve(source.size());
     for(std::size_t i=0;i<source.size();++i){

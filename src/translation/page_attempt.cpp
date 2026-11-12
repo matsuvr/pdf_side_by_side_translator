@@ -27,20 +27,20 @@ std::string_view finish_reason_label(FinishReason r){
     case FinishReason::DecodeError:return "推論処理の失敗";case FinishReason::ModelUnavailable:return "モデルを利用できません";
     }return "不明な終了理由";
 }
-std::shared_ptr<const std::string> PageAttempt::source(const PageLayout& layout,std::shared_ptr<const std::string> edited){
-    return edited?edited:std::make_shared<const std::string>(layout.reading_text_utf8);
+std::shared_ptr<const std::string> PageAttempt::source(const PageLayout& layout){
+    return std::make_shared<const std::string>(layout.reading_text_utf8);
 }
-PageAttempt::PageAttempt(WorkStamp base,std::string key,std::shared_ptr<const std::string> source,Form form,bool force,
+PageAttempt::PageAttempt(WorkStamp base,std::string key,std::shared_ptr<const std::string> source,Form form,
                          std::optional<AttemptSnapshot> saved,bool resume_unfinished)
     :base_(std::move(base)),source_(std::move(source)),form_(form){
     if(!source_)throw std::invalid_argument("Attempt has no page source");
-    data_.id=new_uuid();data_.condition_key=std::move(key);data_.bypass_cache=force;
+    data_.id=new_uuid();data_.condition_key=std::move(key);
     if(has_usable_text(*source_)){
         AttemptChunk page;
         page.id=new_uuid();page.block_id="page";page.end=source_->size();
         data_.chunks.push_back(std::move(page));
     }
-    if(saved&&!force&&matches_page(*saved,data_,*source_)){
+    if(saved&&matches_page(*saved,data_,*source_)){
         data_=std::move(*saved);
         if(resume_unfinished)resume();
     }
@@ -72,18 +72,24 @@ bool PageAttempt::delta(const WorkStamp& stamp,std::string_view text){
     if(!accepts(stamp))return false;
     // Service delivers valid complete UTF-8 prefixes. Keep the boundary honest
     // for injected backends and future adapters too.
-    validate_utf8(text);if(unsupported_text_control(text)!=std::string_view::npos)return false;
+    if(text.size()>max_translation_bytes-data_.chunks.front().text.size())return false;
+    try{validate_utf8(text);}catch(const Utf8Error&){return false;}
+    if(unsupported_text_control(text)!=std::string_view::npos)return false;
     data_.chunks.front().text.append(text);return true;
 }
 bool PageAttempt::finished(const WorkStamp& stamp,const GenerationResult& result){
     if(!accepts(stamp))return false;
-    auto& c=data_.chunks.front();c.text=result.text;c.reason=result.reason;c.output_tokens=result.output_tokens;
+    auto& c=data_.chunks.front();c.reason=result.reason;c.output_tokens=result.output_tokens;
+    if(result.text.size()>max_translation_bytes)c.reason=FinishReason::OutputLimit;
+    else{
+        try{validate_utf8(result.text);c.text=result.text;}
+        catch(const Utf8Error&){c.reason=FinishReason::InvalidEncoding;} // Keep the last valid streamed prefix.
+    }
     const auto control=unsupported_text_control(c.text);
     if(control!=std::string::npos){c.text.resize(control);c.reason=FinishReason::InvalidModelOutput;c.state=c.text.empty()?LeafState::Failed:LeafState::Partial;}
-    else if(result.reason==FinishReason::Completed){
-        try{c.state=has_usable_text(result.text)?LeafState::Complete:LeafState::Failed;}
-        catch(const Utf8Error&){c.state=LeafState::Failed;c.reason=FinishReason::InvalidEncoding;c.text.clear();}
-        if(c.state==LeafState::Failed&&c.reason==FinishReason::Completed)c.reason=FinishReason::EmptyOutput;
+    else if(c.reason==FinishReason::Completed){
+        c.state=has_usable_text(c.text)?LeafState::Complete:LeafState::Failed;
+        if(c.state==LeafState::Failed)c.reason=FinishReason::EmptyOutput;
     }else c.state=c.text.empty()?LeafState::Failed:LeafState::Partial;
     active_=false;prepared_.reset();settle();return true;
 }

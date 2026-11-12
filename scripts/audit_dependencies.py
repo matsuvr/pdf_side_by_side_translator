@@ -15,14 +15,18 @@ import subprocess
 WINDOWS_OS_DLLS = set("""
 advapi32.dll avrt.dll bcrypt.dll bcryptprimitives.dll cabinet.dll cfgmgr32.dll
 comctl32.dll comdlg32.dll credui.dll crypt32.dll cryptbase.dll cryptsp.dll
-d2d1.dll d3d11.dll d3d12.dll dbghelp.dll dnsapi.dll dwmapi.dll dwrite.dll dxgi.dll
-gdi32.dll gdi32full.dll gdiplus.dll hid.dll imm32.dll iphlpapi.dll kernel32.dll
-kernelbase.dll mpr.dll msacm32.dll msimg32.dll msvcp_win.dll msvcrt.dll ncrypt.dll
-netapi32.dll normaliz.dll ntdll.dll ole32.dll oleacc.dll oleaut32.dll powrprof.dll
+d2d1.dll d3d11.dll d3d12.dll dbghelp.dll dwmapi.dll dwrite.dll dxgi.dll
+gdi32.dll gdi32full.dll gdiplus.dll hid.dll imm32.dll kernel32.dll
+kernelbase.dll msacm32.dll msimg32.dll msvcp_win.dll msvcrt.dll ncrypt.dll
+normaliz.dll ntdll.dll ole32.dll oleacc.dll oleaut32.dll powrprof.dll
 propsys.dll psapi.dll rpcrt4.dll secur32.dll setupapi.dll shell32.dll shlwapi.dll
 ucrtbase.dll user32.dll userenv.dll usp10.dll uxtheme.dll version.dll
-windowscodecs.dll winhttp.dll wininet.dll winmm.dll winspool.drv wintrust.dll
-wldap32.dll ws2_32.dll wtsapi32.dll
+windowscodecs.dll winmm.dll winspool.drv wintrust.dll wtsapi32.dll
+""".split())
+
+NETWORK_DLLS = set("""
+dnsapi.dll iphlpapi.dll mpr.dll netapi32.dll urlmon.dll webservices.dll
+winhttp.dll wininet.dll wldap32.dll ws2_32.dll wsock32.dll mswsock.dll
 """.split())
 
 
@@ -60,6 +64,21 @@ def pe_imports(path):
         if 112 + (index + 1) * 8 > optional_size: raise ValueError("Invalid PE optional header")
         return unpack("II", optional + 112 + index * 8)
     result = {"machine": hex(machine), "normal": [], "delay": []}
+    characteristics, = unpack("H", optional + 70)
+    result["control_flow_guard"] = False
+    rva, size = directory(10)  # IMAGE_LOAD_CONFIG_DIRECTORY64
+    if rva and size >= 148 and characteristics & 0x4000:
+        start = offset_of(rva)
+        table, count, flags = unpack("QQI", start + 128)
+        result["control_flow_guard"] = bool(table and count and (flags & 0x500) == 0x500)
+    result["cet_compatible"] = False
+    rva, size = directory(6)
+    if rva:
+        start = offset_of(rva)
+        for i in range(size // 28):
+            entry_type, length, _, raw = unpack("IIII", start + i * 28 + 12)
+            if entry_type == 20 and length >= 2:  # IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS
+                result["cet_compatible"] |= bool(unpack("H", raw)[0] & 1)
     for index, field, size in [(1, "normal", 20), (13, "delay", 32)]:
         rva, length = directory(index)
         if not rva: continue
@@ -74,12 +93,17 @@ def pe_imports(path):
     return result
 
 
-def audit_pe(path):
+def audit_pe(path, require_hardening=True):
     info = pe_imports(path)
     failures = []
     if info["machine"] != "0x8664": failures.append("Expected native Windows x64")
+    if require_hardening:
+        if not info["control_flow_guard"]: failures.append("Missing Control Flow Guard instrumentation/table")
+        if not info["cet_compatible"]: failures.append("Missing CET compatibility flag")
     for dll in info["normal"] + info["delay"]:
-        if dll not in WINDOWS_OS_DLLS and not re.fullmatch(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll", dll):
+        if dll in NETWORK_DLLS or re.match(r"(?:api|ext)-ms-win-(?:net|http|inet|winsock|winhttp|wininet)-", dll):
+            failures.append("Network DLL: " + dll)
+        elif dll not in WINDOWS_OS_DLLS and not re.fullmatch(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll", dll):
             failures.append("Non-OS DLL: " + dll)
     return {"file": str(path), "format": "PE", **info, "failures": failures}
 

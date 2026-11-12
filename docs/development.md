@@ -47,7 +47,7 @@ build/macos-arm64-release/native_text_test.app/Contents/MacOS/native_text_test
 ```
 
 このネイティブ試験は、フォーカスを持てるデスクトップsessionで実行します。
-ヘッドレスCTestと、別途ローカルGGUFを指定する実モデル試験を分けています。
+`OPT_BUILD_GUI_PROBE=ON` のときはネイティブ試験をCTestにも登録します。実モデル試験には別途ローカルGGUFを指定します。
 fixtureはこのプロジェクトのために新規作成したPDFです。フォント内蔵のUnicode fixtureの再生成だけは
 `deps/fixture-test-tools.txt` の開発用依存を使います。
 公式tokenizer比較fixtureの生成手順と固定版は[翻訳の記録](docs/translation.md)を参照してください。
@@ -55,7 +55,7 @@ fixtureはこのプロジェクトのために新規作成したPDFです。フ�
 - `src/pdf/`: PDFium専用worker、段階的tile描画、layoutと原文mapping
 - `src/inference/`: llama専用worker、PFML3、実token長に基づく分割
 - `src/translation/`: page attempt、再開・ページ単位の翻訳
-- `src/storage/`: I/O専用worker、メモリ内state/cache、同一open objectのhash、明示的な書き出し
+- `src/storage/`: I/O専用worker、メモリ内state/cache、同一open objectのhash。ディスクへの書込は行わない
 - `src/platform/`: native path・font・IME・text viewportの小さなOS差分
 - `tests/`: 所有権・競合・cache・Unicode・大判PDF・実モデルの試験
 
@@ -64,10 +64,8 @@ fixtureはこのプロジェクトのために新規作成したPDFです。フ�
 
 文書データの自動永続化は行いません。[現在の仕様](session-data.md)を参照してください。
 `store_test` はSQLiteの割当失敗を注入し、構築途中の例外後に割当量が元に戻ることも確認します。
-`io_service_test` は通常キューが満杯の間の手編集、入力の別名への書き出し拒否、置き換え直前の再検査、遅い書き出しと終了を確認します。
-`atomic_file_test` は作成直後の一時ファイル権限、既存の保存先のmode／ACL保持、書き込み失敗時の旧ファイルと一時ファイルの扱いを確認します。
-WindowsではEFSが利用できる場合に暗号化属性の保持も確認し、利用できない場合は理由付きでその項目のSKIPを表示します。
-`session_sources_test` はページ移動・遅延した読込・自動抽出へのリセットの組合せで、GUIが保持する編集内容を検証します。
+`io_service_test` はメモリ内の状態、ファイルを変更しないfingerprint計算、読書位置の復元、キューの上限、作業ファイルを作らないことを確認します。
+`native_text_test` は実際の読み取り専用コントロールで選択とコピーができ、入力・貼り付け・切り取り・削除・Undoで本文を変更できないことを確認します。Windowsではネイティブメッセージによる変更操作も検査します。
 `file_snapshot_test` はFIFO・ディレクトリ・デバイスの拒否と通常ファイルの別名を確認します。FIFO試験自体にもwatchdogを設けています。
 `layout_test` は両方向の検索結果を従来の意味と照合し、反復文字列と前処理・探索中のキャンセルも確認します。
 `pdf_async_test` はキャンセルした検索の後に新しい検索と描画を続けられることを確認します。
@@ -83,10 +81,12 @@ build/macos-arm64-release/model_input_change_test /absolute/path/to/plamo-3-tran
 # Windows: build/windows-x64-release/model_input_change_test.exe <GGUFの絶対パス>
 ```
 
-この試験は専用の一時ディレクトリへGGUFをコピーし、最初の差分配信時にそのコピーだけを切り詰めます。
-指定した元のGGUFは変更しません。異常終了せず部分訳を保持し、変更済みモデルの再利用を拒否することを検査します。
+この試験は専用の一時ディレクトリへGGUFをコピーし、最初の差分配信時にそのコピーだけを切り詰めようとします。
+Windowsでは書き込みが拒否されて翻訳が続き、モデルを閉じた後に書き込めることを確認します。macOSでは変更を検出して部分訳を保持し、変更済みモデルの再利用を拒否することを検査します。
 製品アプリにモデルのコピー処理を追加するものではありません。
 
 ASan/UBSanを利用できるホストでは、関連するC++試験を両sanitizer付きで実行します。
 Releaseでも試験を実行します。検証条件を `assert()` だけに置かず、`NDEBUG` が有効でも失敗が報告される形を維持します。
 メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。
+
+`.github/workflows/security.yml` はレイアウト・検索のASan/UBSan試験とlibFuzzer、セッションI/O・推論配信キューのTSan試験を実行します。固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で個別にも実行できます。

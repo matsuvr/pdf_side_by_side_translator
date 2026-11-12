@@ -1,4 +1,5 @@
 #include "pdf/file_reader.hpp"
+#include "platform/mapped_file.hpp"
 #include "platform/digest.hpp"
 #include <array>
 #include <fstream>
@@ -7,7 +8,18 @@
 #include <stdexcept>
 
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
-int main(){try{
+int main(int argc,char** argv){try{
+    if(argc==2){
+        const auto path=std::filesystem::u8path(argv[1]);
+        opt::MappedFile mapped(path);
+        for(auto snapshot:{opt::FileSnapshot::open(path),mapped.snapshot()}){
+            opt::PdfFileReader reader(snapshot);std::array<std::byte,4> bytes{};
+            check(reader.read((std::uint64_t{1}<<32)+4096,bytes)&&
+                  std::string(reinterpret_cast<const char*>(bytes.data()),bytes.size())=="xref",
+                  "Large file read truncated a 64-bit offset");
+        }
+        return 0;
+    }
     const auto root=std::filesystem::temp_directory_path()/("opt-pdf-reader-"+opt::new_uuid());
     std::filesystem::create_directory(root);
     struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ignored;std::filesystem::remove_all(path,ignored);}} cleanup{root};
@@ -18,6 +30,12 @@ int main(){try{
     opt::PdfFileReader reader(opt::FileSnapshot::open(path));
     std::array<std::byte,16> bytes{};
     check(reader.read(100,bytes)&&static_cast<char>(bytes[0])=='a',"Initial callback read failed");
+#ifdef _WIN32
+    std::error_code blocked;
+    std::filesystem::resize_file(path,8,blocked);
+    check(bool(blocked)&&reader.read(4096,bytes),"Open PDF must remain readable and deny truncation");
+    check(!std::fstream(path,std::ios::in|std::ios::out),"Opened active PDF for in-place writes");
+#else
     std::filesystem::rename(path,old);{std::ofstream out(path);out<<"replacement";}
     check(reader.read(100,bytes)&&static_cast<char>(bytes[0])=='a',"Path replacement redirected the callback");
     // The same underlying file is truncated after it has already been read.
@@ -31,6 +49,7 @@ int main(){try{
     std::vector<std::byte> large(content.size());
     check(!racing.read(0,large)&&racing.failure()==opt::PdfFileReader::Failure::Changed,"Truncation between block reads bypassed the identity precheck");
     write();
+#endif
     opt::PdfFileReader cancelled(opt::FileSnapshot::open(path),[]{return true;});
     check(!cancelled.read(0,bytes)&&cancelled.failure()==opt::PdfFileReader::Failure::Cancelled,"Read cancellation was ignored");
     opt::PdfFileReader throwing(opt::FileSnapshot::open(path),[]{throw std::runtime_error("failure");return false;});

@@ -47,7 +47,7 @@ struct MappedFile::Impl {
 MappedFile::MappedFile(const std::filesystem::path& path):impl_(std::make_unique<Impl>()) {
     auto& p=*impl_;
 #ifdef _WIN32
-    p.file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    p.file=CreateFileW(access_path(path).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(p.file==INVALID_HANDLE_VALUE)throw std::system_error(GetLastError(),std::system_category(),"Open file");
     if(GetFileType(p.file)!=FILE_TYPE_DISK)throw std::runtime_error("通常のファイルを指定してください。");
 #else

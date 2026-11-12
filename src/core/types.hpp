@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -12,7 +13,11 @@ using JobId = std::uint64_t;
 using PlanGeneration = std::uint64_t;
 using PageIndex = std::uint32_t;
 using PdfCharIndex = std::uint32_t;
-struct PdfPoint { double x=0, y=0;bool operator==(const PdfPoint&)const=default; };
+struct PdfPoint {
+    double x=0,y=0;
+    bool finite() const noexcept{return std::isfinite(x)&&std::isfinite(y);}
+    bool operator==(const PdfPoint&)const=default;
+};
 struct PdfRect { double left=0, bottom=0, right=0, top=0; };
 struct Affine2D {
     double a=1,b=0,c=0,d=1,tx=0,ty=0;
@@ -49,7 +54,7 @@ struct GlyphRecord {
     std::uint32_t source_count=1;
     bool unicode_continuation=false;
 };
-enum class BlockKind { Heading, Paragraph, Caption, Equation, Table, Margin, Unknown, Edited };
+enum class BlockKind { Heading, Paragraph, Caption, Equation, Table, Margin, Unknown };
 struct TextLine {
     std::size_t utf8_begin=0,utf8_end=0;
     PdfRect source_bounds;
@@ -68,7 +73,7 @@ struct TextBlock {
 struct PageLayout {
     enum class Availability { TextAvailable, NoTextLayer, UnicodeUnavailable, NoTranslatableText, ResourceLimited };
     PageIndex page=0;
-    static constexpr std::uint32_t current_version=2;
+    static constexpr std::uint32_t current_version=3;
     std::uint32_t layout_version=current_version;
     std::vector<GlyphRecord> glyphs;
     std::vector<TextBlock> blocks;

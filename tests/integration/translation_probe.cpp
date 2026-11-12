@@ -2,6 +2,7 @@
 #include "inference/inference_service.hpp"
 #include "pdf/pdf_service.hpp"
 #include <chrono>
+#include <charconv>
 #include <condition_variable>
 #include <deque>
 #include <iostream>
@@ -33,11 +34,22 @@ public:
     std::shared_ptr<const FileSnapshot> file_snapshot()const override{return engine_.file_snapshot();}
 };
 int main(int argc,char** argv){
-    if(argc!=4&&argc!=5){std::cerr<<"usage: translation_probe model.gguf cpu|auto fixture.pdf [fail-after-metal]\n";return 2;}
+    if(argc<4||argc>6){std::cerr<<"usage: translation_probe model.gguf cpu|auto fixture.pdf [fail-after-metal] [--page=N]\n";return 2;}
     try{
+        PageIndex page=0;bool fail_metal=false;
+        for(int i=4;i<argc;++i){
+            const std::string_view option(argv[i]);
+            if(option=="fail-after-metal")fail_metal=true;
+            else if(option.starts_with("--page=")){
+                const auto value=option.substr(7);std::uint32_t number=0;
+                const auto parsed=std::from_chars(value.data(),value.data()+value.size(),number);
+                if(parsed.ec!=std::errc{}||parsed.ptr!=value.data()+value.size()||!number)
+                    throw std::runtime_error("Page number must be a positive integer");
+                page=number-1;
+            }else throw std::runtime_error("Unknown probe option");
+        }
         Inbox<PdfEvent> pdf_events;Inbox<InferenceEvent> inference_events;
         PdfService pdf([&](auto e){pdf_events.push(std::move(e));});
-        const bool fail_metal=argc==5&&std::string(argv[4])=="fail-after-metal";
         auto injected=std::make_shared<std::atomic_bool>(false);InferenceService::Factory factory;
         if(fail_metal)factory=[injected](auto& cancelled){return std::make_unique<FailAfterMetal>(cancelled,injected);};
         InferenceService inference([&](auto e){inference_events.push(std::move(e));},std::move(factory));
@@ -46,7 +58,10 @@ int main(int argc,char** argv){
         std::shared_ptr<const PageLayout> layout;
         while(!layout){
             auto e=pdf_events.take();
-            if(e->kind==PdfEvent::Kind::Opened)pdf.extract(1,0);
+            if(e->kind==PdfEvent::Kind::Opened){
+                if(page>=e->page_count)throw std::runtime_error("Page number exceeds document length");
+                pdf.extract(1,page);
+            }
             if(e->kind==PdfEvent::Kind::Extracted)layout=e->layout;
             if(e->kind==PdfEvent::Kind::Failed)throw std::runtime_error(e->message);
         }
@@ -54,7 +69,7 @@ int main(int argc,char** argv){
                 if(fail_metal){if(!injected->load()||e->backend!="CPU")throw std::runtime_error("Real Metal failure / CPU rebuild was not exercised");std::cout<<"real_metal_context_then_cpu_fallback=passed\n";}break;}
             if(e->kind==InferenceEvent::Kind::ModelFailed)throw std::runtime_error(e->detail);}
         std::cout<<"source:\n"<<layout->reading_text_utf8<<"\ntranslation:\n";
-        PageAttempt attempt({1,0,1,1,1},"probe-condition",PageAttempt::source(*layout),Form::Plain);
+        PageAttempt attempt({1,page,1,1,1},"probe-condition",PageAttempt::source(*layout),Form::Plain);
         auto pump=[&]{if(auto request=attempt.next_request())if(!inference.plan(*request))throw std::runtime_error("Plan rejected");};
         pump();
         while(attempt.state()==PageState::Running||attempt.state()==PageState::Queued){
