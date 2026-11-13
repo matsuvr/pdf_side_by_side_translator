@@ -172,16 +172,18 @@ def main():
         print('Verified existing package',artifact);return
     with tempfile.TemporaryDirectory(prefix='.package-',dir=dist) as temporary:
         stage=Path(temporary);payload=stage/'payload';payload.mkdir()
+        # Publisher-only evidence must not become runtime sidecars in the ZIP.
+        evidence=stage/'evidence';evidence.mkdir()
         for filename,path in companions.items():shutil.copyfile(path,payload/filename)
         sbom=source_sbom(info,pdf)
-        write_json(payload/'SBOM.cdx.json',sbom)
+        write_json(evidence/'SBOM.cdx.json',sbom)
         if mac:
             bundle=payload/(name+'.app');shutil.copytree(build/(name+'.app'),bundle)
             resources=bundle/'Contents/Resources'
             shutil.copyfile(ROOT/'resources/help-ja.txt',resources/'HELP-ja.txt')
             shutil.copyfile(ROOT/'THIRD_PARTY_NOTICES.txt',resources/'LICENSES.txt')
-            write_json(resources/'BUILD-INFO.json',{**info,'signature':signature})
-            write_json(resources/'DEPENDENCIES.json',sanitized(pdf))
+            write_json(evidence/'BUILD-INFO.json',{**info,'signature':signature})
+            write_json(evidence/'DEPENDENCIES.json',sanitized(pdf))
             with (bundle/'Contents/Info.plist').open('rb') as source:plist=plistlib.load(source)
             if plist.get('CFBundleIdentifier')!=values['OPT_BUNDLE_ID'] or plist.get('CFBundleShortVersionString')!=version:raise RuntimeError('Bundle identity/version mismatch')
             if sha256(resources/'NotoSansCJKjp-Regular.otf')!=lock()['dependencies']['NotoSansCJKjp-Regular']['sha256']:raise RuntimeError('Bundled font mismatch')
@@ -205,7 +207,7 @@ def main():
             reports=[audit_pe(staged_binary)]
             if reports[0]['failures']:raise RuntimeError(json.dumps(reports,indent=2))
             reports[0]['file']=staged_binary.name
-            write_json(payload/'BUILD-INFO.json',info);write_json(payload/'DEPENDENCIES.json',sanitized(pdf))
+            write_json(evidence/'BUILD-INFO.json',info);write_json(evidence/'DEPENDENCIES.json',sanitized(pdf))
         verify_companions(payload,companion_hashes)
         archive_name=f'{exe}-{version}-{target}.zip';archive=stage/archive_name
         extracted=stage/'extracted'
@@ -223,8 +225,6 @@ def main():
             if audit_pe(restored_binary)['failures']:raise RuntimeError('Extracted executable dependency audit failed')
             if args.windows_cert:run(['signtool','verify','/pa',restored_binary])
         verify_companions(extracted,companion_hashes)
-        if json.loads((extracted/'SBOM.cdx.json').read_text(encoding='utf-8'))!=sbom:
-            raise RuntimeError('ZIP round-trip changed dependency inventory')
         packaged_binary=bundle/'Contents/MacOS'/name if mac else staged_binary
         if sha256(restored_binary)!=sha256(packaged_binary):raise RuntimeError('ZIP round-trip changed executable')
         shutil.move(str(archive),str(payload/archive_name));artifact=payload/archive_name
@@ -232,6 +232,8 @@ def main():
           'files':{name:{'sha256':companion_hashes[name],'size':path.stat().st_size} for name,path in companions.items()},
           'runtime_audit':reports,'model_included':target.endswith('-release'),'clean_machine_execution':'not implied by packaging',
           'signature':signature,'signing_identity':args.windows_cert or args.mac_identity,'notarized':bool(args.notary_profile)}
+        # Only after archiving: keep build/audit evidence alongside the ZIP.
+        for path in evidence.iterdir():shutil.move(str(path),str(payload/path.name))
         write_json(payload/'package-manifest.json',manifest)
         (payload/(artifact.name+'.sha256')).write_text(manifest['sha256']+'  '+artifact.name+'\n')
         shutil.move(str(payload),str(unique))
