@@ -10,6 +10,13 @@ permissions:
   contents: read
 
 jobs:
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Check release payload and dependency audit regressions
+        run: python3 -m unittest discover -s tests/unit -p 'test_*.py'
+
   advisory-check:
     runs-on: ubuntu-latest
     steps:
