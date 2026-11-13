@@ -49,7 +49,13 @@ void check_readonly_copy(wxTextCtrl& control){
     require(control.GetValue()==original,"typing, backspace and delete cannot change viewer text");
 #endif
     control.SelectAll();
-    require(control.GetStringSelection()==original,"whole viewer text remains selectable");
+    // wxTextCtrl mixes UTF-16 selection offsets with the character count of
+    // wxString, which is 32-bit on macOS: GetStringSelection() returns nothing
+    // once the text contains characters outside the BMP. Check the native
+    // selection range, which uses the same units on every platform.
+    long selection_begin=0,selection_end=0;
+    control.GetSelection(&selection_begin,&selection_end);
+    require(selection_begin==0&&selection_end==control.GetLastPosition(),"whole viewer text remains selectable");
 }
 #ifdef _WIN32
 void check_streamed_wrap(wxTextCtrl& control){
