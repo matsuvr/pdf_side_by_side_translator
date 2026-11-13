@@ -6,6 +6,10 @@
 
 対象 OS でビルドと CTest を実行し、`scripts/package.py` で ZIP を生成します。コマンドは [開発手順](development.md) にあります。パッケージ処理はコミット済みの作業ツリー、バイナリ内のビルド識別情報、固定した PDFium リビジョン、ライセンス通知、同梱 GGUF の SHA-256 を照合します。
 
+ZIP の最上位にはアプリ、公式 GGUF、`README.md`、モデルの `PLaMo-Community-ja.txt`、アプリの `LICENSE`、依存ライブラリ・フォントの `THIRD_PARTY_NOTICES.txt` を配置します。ライセンス文書もパッケージのハッシュ照合の対象です。
+
+GitHub のリリースページには、閲覧専用ビューアーとしての使い方、対象 OS、同梱ファイル、利用条件を記載します。ビルド・検証の詳細は開発資料で管理します。
+
 `dist/<target>/<identity>/package-manifest.json` には、版・コミット・ZIP 名・SHA-256・署名状態・依存監査の結果が入ります。配布する ZIP は、この manifest の版とコミットを確認して選びます。同じ階層の `SBOM.cdx.json` はビルド時の依存一覧で、ZIP にも含まれます。ZIP 再展開後に実行ファイルと同梱物を再検証します。
 
 Windows では PE の通常・遅延インポート、CFG の関数表、CET 互換フラグ、静的 CRT のコンパイル設定を検査します。`--windows-cert` に署名証明書の拇印を指定すると、パッケージ内の実行ファイルに Authenticode 署名し、再展開後に検証します。証明書を指定しない開発ビルドは未署名です。

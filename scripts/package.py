@@ -23,7 +23,8 @@ from audit_dependencies import audit_macho,audit_pe
 MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
 
 def companion_files(target,model_file):
-    files={MODEL_LICENSE.name:MODEL_LICENSE,'README.md':ROOT/'README.md'}
+    files={MODEL_LICENSE.name:MODEL_LICENSE,'README.md':ROOT/'README.md',
+           'LICENSE':ROOT/'LICENSE','THIRD_PARTY_NOTICES.txt':ROOT/'THIRD_PARTY_NOTICES.txt'}
     if target.endswith('-release'):
         model=lock()['model_fixture']
         path=model_file or ROOT/model['filename']

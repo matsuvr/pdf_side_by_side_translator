@@ -5,8 +5,8 @@
 
 The set follows the PDFium GN closure and the wx core/base + llama static link
 closure, rather than every downloaded build tool. Some platform-conditional
-components are included for both distribution targets. Model terms are included
-for reference and output use; the model itself is never packaged.
+components are included for both distribution targets. Model terms accompany
+the official GGUF bundled in Release packages.
 """
 import argparse
 import hashlib
