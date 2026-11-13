@@ -13,6 +13,8 @@
 #include "storage/io_service.hpp"
 #include "storage/diagnostic_log.hpp"
 #include "ui/pdf_canvas.hpp"
+#include "ui/activity.hpp"
+#include "platform/cpu_usage.hpp"
 #include "ui/wx_path.hpp"
 #include "ui/shortcut_policy.hpp"
 #include "product.hpp"
@@ -147,7 +149,10 @@ struct ApplicationController::Impl {
     wxButton* open_button=nullptr;
     wxTimer search_timer;
     wxTimer translate_timer,stream_timer;
-    wxTimer position_timer;
+    wxTimer position_timer,activity_timer;
+    ActivityDots translation_dots;
+    CpuUsage cpu_usage;
+    std::optional<unsigned> cpu_percent;
     wxWindow *search_bar=nullptr,*left_container=nullptr;
     wxTextCtrl* search_input=nullptr;
     wxCheckBox* search_case=nullptr;
@@ -217,7 +222,7 @@ struct ApplicationController::Impl {
     std::atomic_bool closing{false};
     bool exit_deadline_armed=false;
 
-    explicit Impl(ApplicationController& receiver):owner(receiver),search_timer(&receiver),translate_timer(&receiver),stream_timer(&receiver),position_timer(&receiver){
+    explicit Impl(ApplicationController& receiver):owner(receiver),search_timer(&receiver),translate_timer(&receiver),stream_timer(&receiver),position_timer(&receiver),activity_timer(&receiver){
         owner.Bind(PDF_WAKE,[this](wxThreadEvent&){
             auto delivered=inbox.take();for(auto& e:delivered.events)if(!closing)receive(*e);
             if(closing)return;
@@ -234,7 +239,16 @@ struct ApplicationController::Impl {
             for(const auto& event:inference_inbox.take())receive(*event);
             if(translation_dirty)refresh_translation();
         },stream_timer.GetId());
-        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){if(!closing){save_reading_position();update_window_title();}},position_timer.GetId());
+        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){if(!closing){save_reading_position();update_window_title();
+            cpu_percent=cpu_usage.sample(system_cpu_times());update_backend_status();
+        }},position_timer.GetId());
+        owner.Bind(wxEVT_TIMER,[this](wxTimerEvent&){
+            if(closing)return;
+            if(const auto* shown=current_attempt();shown&&translating(shown->state())){
+                translation_dots.advance();update_translation_activity();
+            }else translation_dots.reset();
+            canvas->advance_loading();
+        },activity_timer.GetId());
         pdf=std::make_unique<PdfService>([this](auto event){
             if(closing||event->document!=wanted_epoch.load())return;
             if(inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(PDF_WAKE));
@@ -256,7 +270,7 @@ struct ApplicationController::Impl {
         if(closing)return;
         closing=true;
         inference_inbox.stop();
-        translate_timer.Stop();stream_timer.Stop();position_timer.Stop();cancel_search(false);
+        translate_timer.Stop();stream_timer.Stop();position_timer.Stop();activity_timer.Stop();cancel_search(false);
         native_shortcuts.reset();pdf->stop();inference->stop();if(io)io->stop();
         arm_exit_deadline();exit_deadline_armed=true;
         frame->Hide();frame->Destroy();wxTheApp->ExitMainLoop();
@@ -371,7 +385,7 @@ struct ApplicationController::Impl {
         frame->SetStatusText(status,2);
     }
     void invalidate_translation(){
-        translate_timer.Stop();inference->cancel_job();
+        translate_timer.Stop();translation_dots.reset();inference->cancel_job();
         pending_attempt.reset();scheduled_page.reset();
         if(attempt){attempt->interrupt();save_attempt();attempt.reset();}
         translation_dirty=false;
@@ -428,6 +442,15 @@ struct ApplicationController::Impl {
             if(frame&&!closing&&anchor&&anchor->document==epoch&&anchor->page==page)restore_text_logical_anchor(*translation,anchor->offset);
         });
     }
+    void update_backend_status(){
+        if(model_state!=ModelState::Ready)return; // Preserve model loading/errors.
+        wxString status=wxS("CPU ")+ (cpu_percent?wxString::Format("%u%%",*cpu_percent):wxString("--%"));
+        if(backend=="Metal")status=wxS("Metal / ")+status;
+        frame->SetStatusText(status,1);
+    }
+    void update_translation_activity(){
+        frame->SetStatusText(wxS("翻訳中")+wxString::FromUTF8(translation_dots.text()),2);
+    }
     void refresh_translation(){
         translation_dirty=false;const auto* shown=current_attempt();if(!shown)return;
         auto text=shown->display_text();wxString status;
@@ -451,7 +474,8 @@ struct ApplicationController::Impl {
             right_heading->SetLabel(heading);
             right_heading->GetParent()->Layout();
         }
-        frame->SetStatusText(status,2);
+        if(translating(shown->state()))update_translation_activity();
+        else{translation_dots.reset();frame->SetStatusText(status,2);}
     }
     void schedule_translation(){
         if(closing||!auto_translate||document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
@@ -544,7 +568,7 @@ struct ApplicationController::Impl {
             if(!current_attempt())show_waiting_translation();
             if(event.file)model_key="provisional:model:"+provisional_file_key(event.file->initial_signature());
             if(io&&event.file)storage_result(io->track_model(model_epoch,model_key,model_path,event.file));
-            frame->SetStatusText(wxS("モデル準備完了・")+wxString::FromUTF8(backend),1);
+            update_backend_status();
             schedule_translation();break;
         case InferenceEvent::Kind::ModelFailed:
             model_state=ModelState::Failed;model_error=event.detail;
@@ -812,8 +836,9 @@ struct ApplicationController::Impl {
                 wxS("検索できた範囲にはありません。文字情報が多く検索を省略したページがあります。"):wxS("見つかりませんでした。"));}
             left_container->Layout();break;
         case PdfEvent::Kind::PasswordRequired:{
+            canvas->loading_message(wxS("パスワードを入力してください。"));
             PdfPasswordDialog dialog(frame,wxS("PDFのパスワードを入力してください。"),wxS("パスワード付きPDF"));
-            if(show_modal(dialog)==wxID_OK)dialog.submit(*pdf,epoch,path);
+            if(show_modal(dialog)==wxID_OK){canvas->begin_loading();dialog.submit(*pdf,epoch,path);}
             else execute(Command::Close);
             break;
         }
@@ -827,6 +852,9 @@ struct ApplicationController::Impl {
             if(event.code=="PdfPage"&&scheduled_page&&*scheduled_page==event.page){
                 scheduled_page.reset();
             }
+            if(event.code=="PdfOpen"||event.code=="PdfService"||
+               (event.page==page&&event.code=="PdfPage"))
+                canvas->loading_message(wxString::FromUTF8(event.message));
             if(event.code=="PdfOpen"||event.page==page)frame->SetStatusText(wxString::FromUTF8(event.message),0);
             break;
         default:break;
@@ -1102,7 +1130,10 @@ struct ApplicationController::Impl {
         split->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED,[this](wxSplitterEvent& e){restore_after_resize();e.Skip();});
         native_shortcuts=std::make_unique<NativeShortcutMonitor>(*frame,[this](ShortcutKey key,ShortcutContext state){return handle_shortcut(key,state);});
         stream_timer.Start(50);
+        cpu_usage.sample(system_cpu_times());
+        frame->GetStatusBar()->SetToolTip(wxS("CPU: コンピューター全体の使用率（約1秒ごとの概算）"));
         position_timer.Start(1000);
+        activity_timer.Start(500);
         io=std::make_unique<IoService>([this](auto event){if(io_inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(IO_WAKE));});
         owner.CallAfter([this,initial]{
             if(closing)return;
