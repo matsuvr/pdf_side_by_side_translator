@@ -75,12 +75,15 @@ PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxI
     Bind(wxEVT_KILL_FOCUS,[this](wxFocusEvent& e){space_=false;e.Skip();});
     Bind(wxEVT_DPI_CHANGED,[this](wxDPIChangedEvent& e){calculate();e.Skip();});
 }
-void PdfCanvas::clear_document(){timer_.Stop();document_=0;info_.reset();transform_.reset();pending_anchor_.reset();layout_.reset();selection_.reset();search_range_.reset();cache_.clear();cache_bytes_=0;width_=height_=0;last_request_.reset();SetVirtualSize(1,1);Refresh();}
+void PdfCanvas::begin_loading(){loading_=true;loading_dots_.reset();loading_message_.clear();Refresh();}
+void PdfCanvas::advance_loading(){if(loading_){loading_dots_.advance();Refresh();}}
+void PdfCanvas::loading_message(const wxString& message){if(!loading_)return;loading_=false;loading_message_=message;Refresh();}
+void PdfCanvas::clear_document(){loading_=false;loading_message_.clear();timer_.Stop();document_=0;info_.reset();transform_.reset();pending_anchor_.reset();layout_.reset();selection_.reset();search_range_.reset();cache_.clear();cache_bytes_=0;width_=height_=0;last_request_.reset();SetVirtualSize(1,1);Refresh();}
 void PdfCanvas::set_page(DocumentEpoch document,PageIndex page,std::optional<PdfPageInfo> info){
     if(document_!=document){cache_.clear();cache_bytes_=0;}
     document_=document;page_=page;info_=info;transform_.reset();pending_anchor_.reset();last_request_.reset();
     layout_.reset();selection_.reset();search_range_.reset();
-    Scroll(0,0);width_=height_=0;calculate();Refresh();
+    begin_loading();Scroll(0,0);width_=height_=0;calculate();Refresh();
 }
 void PdfCanvas::set_info(const PdfPageInfo& info){info_=info;calculate();}
 void PdfCanvas::set_layout(std::shared_ptr<const PageLayout> layout){
@@ -157,6 +160,7 @@ void PdfCanvas::calculate(std::optional<wxPoint> pointer){
     const int local_height=static_cast<int>(std::ceil(height_/scale_));
     origin_={std::max(margin,(client.x-local_width)/2),margin};
     SetVirtualSize(std::max(client.x,local_width+2*margin),std::max(client.y,local_height+2*margin));
+    for(const auto& [key,tile]:cache_)if(matches(key)){loading_=false;break;}
     transform_.reset();last_request_.reset();schedule();Refresh();
 }
 bool PdfCanvas::matches(const TileKey& k) const{return k.document==document_&&k.page==page_&&k.full_width==width_&&k.full_height==height_&&k.rotation==rotation_;}
@@ -213,14 +217,17 @@ void PdfCanvas::accept(const PdfEvent& e){
         auto victim=std::min_element(cache_.begin(),cache_.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;});
         cache_bytes_-=victim->second.bytes;cache_.erase(victim);
     }
-    if(matches(e.key)){Refresh();schedule();}
+    if(matches(e.key)){loading_=false;loading_message_.clear();Refresh();schedule();}
 }
 void PdfCanvas::paint(wxPaintEvent&){
     wxAutoBufferedPaintDC dc(this);PrepareDC(dc);
     dc.SetBackground(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE)));dc.Clear();
-    if(!info_){
+    if(loading_||!loading_message_.empty()||!info_){
+        dc.SetDeviceOrigin(0,0);
         dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-        dc.DrawText(document_?wxS("ページを読み込んでいます…"):wxS("PDFを開くか、ここへドロップしてください。"),FromDIP(16),FromDIP(16));return;
+        const auto message=loading_?wxS("PDF読込み中")+wxString::FromUTF8(loading_dots_.text()):
+            (!loading_message_.empty()?loading_message_:wxS("PDFを開くか、ここへドロップしてください。"));
+        dc.DrawText(message,FromDIP(16),FromDIP(16));return;
     }
     dc.SetPen(*wxTRANSPARENT_PEN);dc.SetBrush(*wxWHITE_BRUSH);
     dc.DrawRectangle(origin_.x,origin_.y,static_cast<int>(std::ceil(width_/scale_)),static_cast<int>(std::ceil(height_/scale_)));

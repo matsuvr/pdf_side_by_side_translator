@@ -51,3 +51,16 @@ jobs:
           "$RUNNER_TEMP/io-test"
           clang++ -std=c++20 -Isrc -O1 -g -fsanitize=thread tests/unit/inference_delivery_test.cpp -o "$RUNNER_TEMP/inbox-test"
           "$RUNNER_TEMP/inbox-test"
+
+  activity-status:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Test activity dots and native CPU sampling
+        shell: bash
+        run: |
+          clang++ -std=c++20 -Isrc -Wall -Wextra -Werror tests/unit/activity_status_test.cpp src/platform/cpu_usage.cpp -o activity-test
+          ./activity-test

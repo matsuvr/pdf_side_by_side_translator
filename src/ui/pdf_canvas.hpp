@@ -1,5 +1,6 @@
 #pragma once
 #include <wx/bitmap.h>
+#include "ui/activity.hpp"
 #include "pdf/pdf_service.hpp"
 #include "pdf/layout.hpp"
 #include <wx/scrolwin.h>
@@ -20,6 +21,9 @@ public:
     void accept(const PdfEvent& event);
     void retry_missing_tiles(){last_request_.reset();schedule();}
     void clear_document();
+    void begin_loading();
+    void advance_loading();
+    void loading_message(const wxString& message);
     void set_layout(std::shared_ptr<const PageLayout> layout);
     bool copy_selection() const;
     void select_all();
@@ -46,6 +50,9 @@ private:
     int rotation_=0,width_=0,height_=0;
     wxPoint origin_,drag_start_,scroll_start_;
     wxSize client_;
+    bool loading_=false;
+    ActivityDots loading_dots_;
+    wxString loading_message_;
     bool panning_=false,space_=false;
     bool selecting_=false;
     std::shared_ptr<const PageLayout> layout_;
