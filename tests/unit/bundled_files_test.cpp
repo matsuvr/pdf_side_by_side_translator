@@ -1,5 +1,6 @@
 #include "app/bundled_files.hpp"
 #include "platform/digest.hpp"
+#include "platform/executable_path.hpp"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -20,6 +21,9 @@ int main(){
     const auto standalone=distribution/"offline-pdf-translator.exe";
     const auto mac=distribution/"Offline PDF Translator.app"/"Contents"/"MacOS"/"Offline PDF Translator";
     fs::create_directories(mac.parent_path());
+    std::ofstream(mac)<<"non-translocated executable fixture";
+    require(opt::original_executable_path(mac)==mac,"original executable lookup preserves a normal Unicode path");
+    require(opt::original_executable_path(other/"missing")==other/"missing","failed original path lookup preserves the supplied path");
     require(opt::distribution_directory(standalone,opt::ExecutableLayout::Standalone)==distribution,"standalone layout uses the executable folder");
     require(opt::distribution_directory(mac,opt::ExecutableLayout::MacAppBundle)==distribution,"macOS layout uses the folder beside the app bundle");
     require(!opt::bundled_model(distribution),"missing bundled model reports absence");

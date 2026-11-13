@@ -15,6 +15,7 @@
 #include "ui/pdf_canvas.hpp"
 #include "ui/activity.hpp"
 #include "platform/cpu_usage.hpp"
+#include "platform/executable_path.hpp"
 #include "ui/wx_path.hpp"
 #include "ui/shortcut_policy.hpp"
 #include "product.hpp"
@@ -68,7 +69,7 @@ std::filesystem::path application_directory(){
 #else
     constexpr auto layout=ExecutableLayout::Standalone;
 #endif
-    return distribution_directory(native_path(wxStandardPaths::Get().GetExecutablePath()),layout);
+    return distribution_directory(original_executable_path(native_path(wxStandardPaths::Get().GetExecutablePath())),layout);
 }
 wxString model_license_path(){
     return display_path(application_directory()/"PLaMo-Community-ja.txt");
