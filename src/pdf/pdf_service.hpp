@@ -61,6 +61,9 @@ struct PdfEvent {
     std::shared_ptr<const FileSnapshot> file_snapshot;
     FileSignature file_signature;
     PdfPageInfo info;
+    // Opened is still emitted when only the first page cannot be described, so
+    // the remaining pages of a damaged document stay viewable.
+    bool has_page_info=true;
     TileKey key;
     RenderTransform transform;
     std::shared_ptr<const RasterBuffer> pixels;

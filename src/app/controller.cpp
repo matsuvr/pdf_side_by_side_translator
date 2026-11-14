@@ -63,6 +63,10 @@ wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(IO_WAKE,wxThreadEvent);
 enum class Command { Open, Close, Previous, Next, GoPage, FocusPage, FitWidth, FitPage, Zoom, Left, Right, Equal, TextSize, Copy, SelectAll, CopySource, Find, FindNext, FindPrevious, CloseSearch, Automatic, Plain, Easy, ModelSettings, Help, Diagnostics, Licenses, About, Quit };
 enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,FitPage,Zoom,Left,Right,Equal,TextSize,Help,Diagnostics,Licenses,About,CopySource,Find,FindNext,FindPrevious,CloseSearch,Automatic,Plain,Easy,ModelSettings };
+// The viewer used to clamp this to 6..72. Keep a broad range so low-vision
+// readers can enlarge the text and dense layouts can shrink it; the number
+// entry dialog still rejects non-numeric or nonsensical values.
+constexpr int min_translation_text_size=4,max_translation_text_size=200;
 std::filesystem::path application_directory(){
 #ifdef __WXMAC__
     constexpr auto layout=ExecutableLayout::MacAppBundle;
@@ -81,8 +85,9 @@ wxString model_license_path(){
     std::_Exit(EXIT_FAILURE);
 }
 void arm_exit_deadline() {
-    // Bound stalled worker and GUI teardown.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    // Bound stalled worker and GUI teardown. Large documents and model buffers
+    // can legitimately need more than a couple of seconds to cancel and release.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     try {
         std::thread([deadline] {
             std::this_thread::sleep_until(deadline);
@@ -179,7 +184,7 @@ struct ApplicationController::Impl {
     std::unique_ptr<IoService> io;
     std::unique_ptr<NativeShortcutMonitor> native_shortcuts;
     std::string document_key,native_document_key,model_key;
-    std::uint32_t model_capacity=8192;
+    std::uint32_t model_capacity=0;
     ModelProfile model_profile;
     InferenceRuntime inference_runtime;
     double model_load_seconds=0,last_chunk_seconds=0;
@@ -307,7 +312,7 @@ struct ApplicationController::Impl {
             <<"\nSource: "<<build::revision<<(build::dirty?" (modified)":"")<<"\nBuild identity: "<<build::identity
             <<"\nOS: "<<wxGetOsDescription().ToStdString(wxConvUTF8)<<"\nPDFium: "<<product::pdfium_revision
             <<"\nwxWidgets: "<<product::wx_revision<<"\nllama.cpp: "<<product::llama_revision
-            <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nSupported metadata: plamo3 / tokenizer plamo3 / translate-0.8b"
+            <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nSupported metadata: plamo3 / tokenizer plamo3 / PFML3 profile"
             <<"\nBackend: "<<(backend.empty()?"unloaded":backend)<<"\nContext: "<<inference_runtime.context<<"\nThreads: "<<inference_runtime.threads
             <<" / batch threads: "<<inference_runtime.batch_threads<<"\nBatch: "<<inference_runtime.batch<<" / micro batch: "<<inference_runtime.micro_batch
             <<"\nModel load seconds: "<<model_load_seconds<<"\nLast chunk seconds: "<<last_chunk_seconds
@@ -398,12 +403,17 @@ struct ApplicationController::Impl {
         if(storage_warning)title+=wxS(" [処理エラーあり]");
         if(frame->GetTitle()!=title)frame->SetTitle(title);
     }
-    void storage_result(bool accepted){if(!accepted){storage_warning=true;update_window_title();frame->SetStatusText(wxS("処理を受け付けられませんでした。少し待ってから再試行できます。現在の表示は保持しています。"),0);}}
+    void clear_storage_warning(){if(!storage_warning)return;storage_warning=false;update_window_title();}
+    void storage_result(bool accepted){
+        if(accepted){clear_storage_warning();return;}
+        storage_warning=true;update_window_title();
+        frame->SetStatusText(wxS("処理を受け付けられませんでした。少し待ってから再試行できます。現在の表示は保持しています。"),0);
+    }
     void save_attempt(){if(io&&attempt)storage_result(io->save_attempt(attempt_context,attempt->snapshot()));}
     void request_position(PageIndex target){
         if(loaded_positions.contains(target)||requested_positions.contains(target))return;
         if(!io||native_document_key.empty()){loaded_positions.insert(target);return;}
-        if(io->done()){loaded_positions.insert(target);storage_warning=true;return;}
+        if(io->done()){loaded_positions.insert(target);storage_warning=true;update_window_title();return;}
         if(io->read_page(epoch,document_key,native_document_key,target))requested_positions.insert(target);else{storage_result(false);if(scheduled_page&&*scheduled_page==target)translate_timer.StartOnce(150);}
     }
     void save_reading_position(){
@@ -430,6 +440,7 @@ struct ApplicationController::Impl {
         storage_result(io->settings(std::move(values)));
     }
     void set_text_size(int size){
+        size=std::clamp(size,min_translation_text_size,max_translation_text_size);
         const auto anchor=text_logical_anchor(*translation);
         long begin=0,end=0;translation->GetSelection(&begin,&end);
         text_size=size;auto font=translation->GetFont();font.SetPointSize(size);translation->SetFont(font);
@@ -495,7 +506,10 @@ struct ApplicationController::Impl {
         const auto target=page;
         auto found=layouts.find(target);auto layout=found==layouts.end()?nullptr:found->second.layout;
         if(!layout){request_layout(target);return;}
-        if(!loaded_positions.contains(target)){request_position(target);return;}
+        // Restoring the optional reading position must never gate translation:
+        // it is display state, and a missing/late answer leaves a readable page
+        // untranslated. Ask for it and continue.
+        request_position(target);
         if(layout->availability==PageLayout::Availability::ResourceLimited){
             scheduled_page.reset();show_waiting_translation();return;
         }
@@ -640,7 +654,9 @@ struct ApplicationController::Impl {
                 schedule_translation();
             }
             if(scheduled_page&&*scheduled_page==target)translate_timer.StartOnce(1);
-            if(!event.detail.empty()){storage_warning=true;frame->SetStatusText(wxS("この起動中の読書位置を読み込めませんでした。"),0);}break;
+            if(!event.detail.empty()){storage_warning=true;update_window_title();frame->SetStatusText(wxS("この起動中の読書位置を読み込めませんでした。"),0);}
+            else clear_storage_warning();
+            break;
         }
         case IoEvent::Kind::Fingerprint:
             if(event.model_fingerprint){
@@ -660,7 +676,8 @@ struct ApplicationController::Impl {
             else if(auto prepared=attempt->active_prepared()){
                 if(!inference->execute(prepared)){attempt->preparation_failed(event.stamp,FinishReason::ModelUnavailable);save_attempt();pump_translation();}
             }break;
-        case IoEvent::Kind::Error:storage_warning=true;record(DiagnosticCode::StorageWarning);frame->SetStatusText(wxString::FromUTF8(event.message),0);break;
+        case IoEvent::Kind::AttemptSaved:clear_storage_warning();break;
+        case IoEvent::Kind::Error:storage_warning=true;update_window_title();record(DiagnosticCode::StorageWarning);frame->SetStatusText(wxString::FromUTF8(event.message),0);break;
         default:break;
         }
     }
@@ -789,9 +806,18 @@ struct ApplicationController::Impl {
             native_document_key=provisional_file_key(event.file_signature);
             document_key="provisional:document:"+native_document_key;
             if(io&&event.file_snapshot)storage_result(io->open_document(epoch,document_key,path,event.file_snapshot));
-            canvas->set_page(epoch,0,event.info);headings();
+            canvas->set_page(epoch,0,event.has_page_info?std::optional<PdfPageInfo>(event.info):std::nullopt);
+            headings();
+            if(!event.has_page_info){
+                const auto message=event.message.empty()?wxString(wxS("1ページ目を読み込めませんでした。別のページへ移動できます。")):wxString::FromUTF8(event.message);
+                canvas->loading_message(message);
+                const auto bytes=message.ToUTF8();
+                show_translation(std::string(bytes.data(),bytes.length()));
+                frame->SetStatusText(message,0);
+            }
             if(!wxWindow::FindFocus()||wxWindow::FindFocus()==frame||wxWindow::FindFocus()==open_button)canvas->SetFocus();
-            show_waiting_translation();schedule_translation();
+            if(event.has_page_info)show_waiting_translation();
+            schedule_translation();
             break;
         case PdfEvent::Kind::PageInfo:
             if(event.page==page){
@@ -898,7 +924,7 @@ struct ApplicationController::Impl {
         case Command::Left:canvas->rotate(-1);break;case Command::Right:canvas->rotate(1);break;
         case Command::Equal:split->SetSashPosition(split->GetClientSize().x/2);break;
         case Command::TextSize:{
-            wxNumberEntryDialog dialog(frame,wxS("訳文の文字サイズをポイントで指定してください。"),wxS("文字サイズ (6〜72)"),wxS("訳文の文字サイズ"),text_size,6,72);
+            wxNumberEntryDialog dialog(frame,wxS("訳文の文字サイズをポイントで指定してください。"),wxString::Format(wxS("文字サイズ (%d〜%d)"),min_translation_text_size,max_translation_text_size),wxS("訳文の文字サイズ"),text_size,min_translation_text_size,max_translation_text_size);
             if(show_modal(dialog)==wxID_OK){set_text_size(static_cast<int>(dialog.GetValue()));save_preferences();}
             break;
         }
@@ -944,9 +970,14 @@ struct ApplicationController::Impl {
         const auto icon_data=resources::icon_png();wxMemoryInputStream icon_stream(icon_data.data(),icon_data.size());
         wxImage icon_image(icon_stream,wxBITMAP_TYPE_PNG);if(icon_image.IsOk()){wxIcon icon;icon.CopyFromBitmap(wxBitmap(icon_image));frame->SetIcon(icon);}
         if(font_ok){auto font=frame->GetFont();font.SetFaceName("Noto Sans CJK JP");frame->SetFont(font);}
-        auto area=wxDisplay(0U).GetClientArea();auto size=frame->FromDIP(wxSize(1280,860));
-        frame->SetSize(wxSize(std::min(size.x,area.width),std::min(size.y,area.height)));frame->Centre();
-        frame->SetMinSize(frame->FromDIP(wxSize(640,400)));
+        auto display_index=wxDisplay::GetFromPoint(wxGetMousePosition());
+        if(display_index<0||static_cast<unsigned>(display_index)>=wxDisplay::GetCount())display_index=0;
+        const auto area=wxDisplay(static_cast<unsigned>(display_index)).GetClientArea();
+        auto size=frame->FromDIP(wxSize(1280,860));
+        size=wxSize(std::min(size.x,area.width),std::min(size.y,area.height));
+        frame->SetSize(size);
+        frame->Move(wxPoint(area.x+std::max(0,(area.width-size.x)/2),area.y+std::max(0,(area.height-size.y)/2)));
+        frame->SetMinSize(frame->FromDIP(wxSize(480,320)));
         auto file_menu=new wxMenu;file_menu->Append(Open,wxS("PDFを開く…\tCtrl+O"));recent_menu=new wxMenu;file_menu->AppendSubMenu(recent_menu,wxS("この起動中に開いたPDF"));file_menu->Append(Close,wxS("文書を閉じる\tCtrl+W"));
         file_menu->AppendSeparator();file_menu->Append(wxID_EXIT,wxS("終了\tCtrl+Q"));
         frame->Bind(wxEVT_MENU,[this](wxCommandEvent& event){
@@ -1104,7 +1135,7 @@ struct ApplicationController::Impl {
         welcome_sizer->AddStretchSpacer();
         welcome->SetSizer(welcome_sizer);
         rs->Add(welcome,1,wxEXPAND);
-        left->SetSizer(ls);right->SetSizer(rs);split->SplitVertically(left,right,frame->GetClientSize().x/2);split->SetSashGravity(0.5);split->SetMinimumPaneSize(frame->FromDIP(200));root->Add(split,1,wxEXPAND);frame->SetSizer(root);
+        left->SetSizer(ls);right->SetSizer(rs);split->SplitVertically(left,right,frame->GetClientSize().x/2);split->SetSashGravity(0.5);split->SetMinimumPaneSize(frame->FromDIP(120));root->Add(split,1,wxEXPAND);frame->SetSizer(root);
         frame->CreateStatusBar(3);int widths[]{-2,-1,-1};frame->SetStatusWidths(3,widths);frame->SetStatusText(wxS("モデル未設定"),1);
         if(!font_ok)frame->SetStatusText(wxS("同梱フォントを登録できませんでした。"),2);
         frame->SetDropTarget(new PdfDropTarget([this](const wxString& name){open_path(name);}));

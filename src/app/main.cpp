@@ -11,13 +11,13 @@ class ReaderApp final : public wxApp {
 public:
     bool OnInit() override {
 #ifdef _WIN32
-        // PDFium has no V8 and the CPU kernels are ahead-of-time compiled.
+        // ProhibitDynamicCode is defense in depth, not a functional requirement:
+        // PDFium has no V8 and the CPU kernels are ahead-of-time compiled. Keep
+        // the other process mitigations and start even when this policy cannot
+        // be applied on the host.
         PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy{};
         policy.ProhibitDynamicCode=1;
-        if(!SetProcessMitigationPolicy(ProcessDynamicCodePolicy,&policy,sizeof(policy))){
-            wxMessageBox(wxS("Windowsの動的コード保護を有効にできません。"),wxString::FromUTF8(opt::product::name),wxOK|wxICON_ERROR);
-            return false;
-        }
+        (void)SetProcessMitigationPolicy(ProcessDynamicCodePolicy,&policy,sizeof(policy));
 #endif
         // Only the embedded PNG icon is decoded through wx. Registering every
         // image codec would pull a second, unprefixed JPEG implementation into
@@ -28,8 +28,15 @@ public:
         wxString pdf;
         for(int i=1;i<argc;++i){
             const wxString argument=argv[i];
-            if(!argument.StartsWith("-")&&pdf.empty())pdf=argument;
-            else{wxMessageBox(wxS("起動引数: [PDF]（文書データはメモリ内だけに保持します）"),wxString::FromUTF8(opt::product::name),wxOK|wxICON_INFORMATION);return false;}
+            if(argument==wxS("--help")||argument==wxS("-h")){
+                wxMessageBox(wxS("起動引数: [PDF]\n\nPDFを指定せずに起動した場合は、アプリの「PDFを開く」から選べます。"),
+                    wxString::FromUTF8(opt::product::name),wxOK|wxICON_INFORMATION);
+                return false;
+            }
+            // Unknown switches (including Finder's -psn_* argument on macOS) are
+            // ignored. A second path is ignored; the first argument wins.
+            if(argument.StartsWith("-"))continue;
+            if(pdf.empty())pdf=argument;
         }
         controller_=std::make_unique<opt::ApplicationController>();
         controller_->start(pdf);

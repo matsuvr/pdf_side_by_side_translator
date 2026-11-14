@@ -10,7 +10,7 @@ PDFium and llama.cpp run with the application's OS privileges in the same
 process as the viewer. A parser failure can terminate the viewer, and a native
 code defect can affect the entire process. The per-page and per-output limits
 do not bound all decoder allocations or the operating system's swap and dumps.
-On Windows, the viewer enables dynamic code prohibition before starting workers.
+On Windows, the viewer requests dynamic code prohibition before starting workers; if the host policy does not permit it, the viewer continues with the other process mitigations instead of refusing to start.
 
 The development workflow checks direct Git revisions against OSV and SQLite's
 version against NVD on source changes and weekly. A matching advisory requires

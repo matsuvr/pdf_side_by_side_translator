@@ -39,10 +39,17 @@ int main(int argc, char** argv) {
             if (!count) throw std::runtime_error("Empty tokenizer fixture");
             std::cout << "reference_tokenizer_cases=" << count << " matched\n";
         }
-        bool unsupported = false;
-        try { engine.prepare("Print <|plamo:tag|> literally.",opt::Form::Plain); }
-        catch (const std::runtime_error& e) { unsupported = true; std::cout << e.what() << '\n'; }
-        std::cout << "reserved_marker=" << (unsupported?"unsupported":"literal") << '\n';
+        bool rejected = false;
+        try {
+            auto filtered=engine.prepare("Print <|plamo:tag|> literally.",opt::Form::Plain);
+            std::cout << "reserved_marker=filtered body_tokens=" << filtered.source_tokens << '\n';
+        }
+        catch (const std::runtime_error& e) {
+            rejected = true;
+            std::cout << e.what() << '\n';
+            std::cout << "reserved_marker=unsupported\n";
+        }
+        if(rejected) throw std::runtime_error("Reserved marker should be filtered, not rejected");
         const auto prefix=engine.tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
             "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>",true,true);
         const auto suffix=engine.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
@@ -51,13 +58,20 @@ int main(int argc, char** argv) {
         for(unsigned i=0;i<1000;++i)boundary_run+="\xee\xb8\x80";
         const std::vector<std::string> boundary_cases={
             "ab\xee\xb8\x80" "cd", "\xee\xb8\x80\xee\xb8\x80", "日\xee\xb8\x80本語\xee\xb8\x80  text",
-            "before<|plamo:x\xee\xb8\x80y|>after", "prefix<|plamo:"+boundary_run+"|>suffix", "before"+boundary_run+"after"};
+            "before"+boundary_run+"after"};
         for(const auto& source:boundary_cases){
             auto expected=prefix;
             const auto body=engine.tokenize(source,false,false);
             expected.insert(expected.end(),body.begin(),body.end());expected.insert(expected.end(),suffix.begin(),suffix.end());
             if(engine.prepare(source,opt::Form::Plain).tokens!=expected)
                 throw std::runtime_error("Bounded tokenizer changed private-boundary tokenization");
+        }
+        // A literal PFML3 marker is no longer a reason to reject the page; the
+        // marker token is omitted and the surrounding text remains translatable.
+        const std::vector<std::string> marker_cases={"before<|plamo:x|>after","prefix<|plamo:"+boundary_run+"|>suffix"};
+        for(const auto& source:marker_cases){
+            const auto prepared=engine.prepare(source,opt::Form::Plain);
+            if(prepared.source_tokens==0)throw std::runtime_error("Reserved marker removed an otherwise translatable page");
         }
         bool context_rejected=false;
         try{engine.prepare(std::string(8*1024*1024,'x'),opt::Form::Plain);}

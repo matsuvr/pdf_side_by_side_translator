@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <climits>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -41,6 +43,19 @@ std::string metadata(const llama_model* model, const char* key) {
     if (llama_model_meta_val_str(model, key, value.data(), value.size()) < 0) return {};
     value.resize(static_cast<std::size_t>(n));
     return value;
+}
+// The 8-thread default keeps the GUI responsive on typical laptops. An
+// explicit OPT_INFERENCE_THREADS value lets a capable host use the remaining
+// cores without introducing a persisted setting.
+unsigned inference_threads(unsigned hardware) {
+    const auto fallback = hardware <= 1 ? 1U : std::min(8U, hardware - 1);
+    const char* configured = std::getenv("OPT_INFERENCE_THREADS");
+    if (!configured || !*configured) return fallback;
+    char* end = nullptr;
+    errno = 0;
+    const auto value = std::strtoul(configured, &end, 10);
+    if (errno != 0 || end == configured || *end != '\0' || value == 0) return fallback;
+    return static_cast<unsigned>(std::min<unsigned long>(value, std::max(1U, hardware)));
 }
 bool abort_decode(void* data) noexcept { return static_cast<std::atomic_bool*>(data)->load(); }
 bool load_progress(float, void* data) noexcept { return !abort_decode(data); }
@@ -110,10 +125,12 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         if(!p.model)throw std::runtime_error("GGUFを読み込めません。モデルファイルを確認して選び直してください。");
         if(p.file->signature()!=p.file->initial_signature())throw std::runtime_error("GGUFが読込中に変更されました。再度選択してください。");
         p.vocab = llama_model_get_vocab(p.model);
+        // Quantization tools may rewrite general.name, so compatibility is
+        // defined by the PLaMo 3 architecture/tokenizer and the PFML3 protocol
+        // checks below instead of the product name in the GGUF metadata.
         if (metadata(p.model, "general.architecture") != "plamo3" ||
             metadata(p.model, "tokenizer.ggml.model") != "plamo3" ||
-            llama_vocab_type(p.vocab) != LLAMA_VOCAB_TYPE_PLAMO3 ||
-            metadata(p.model, "general.name").find("translate-0.8b") == std::string::npos)
+            llama_vocab_type(p.vocab) != LLAMA_VOCAB_TYPE_PLAMO3)
             throw std::runtime_error("未対応のモデルです。PLaMo 3 Translate 0.8Bのplamo3 GGUFを選んでください。");
         for (const auto* marker : {"<|plamo:bos|>", "<|plamo:tag|>", "<|plamo:msg|>",
                                     "<|plamo:key|>", "<|plamo:val|>"}) {
@@ -157,13 +174,23 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         const int training_context = llama_model_n_ctx_train(p.model);
         if (training_context <= 0) throw std::runtime_error("モデルのcontext容量を取得できません。");
         auto cp = llama_context_default_params();
-        cp.n_ctx = std::min(8192, training_context);
         cp.n_batch = 512; cp.n_ubatch = 128; cp.n_seq_max = 1;
         const unsigned hw = std::thread::hardware_concurrency();
-        cp.n_threads = cp.n_threads_batch = static_cast<int>(hw <= 1 ? 1 : std::min(8U, hw - 1));
+        cp.n_threads = cp.n_threads_batch = static_cast<int>(inference_threads(hw));
         cp.abort_callback = abort_decode; cp.abort_callback_data = &p.cancelled;
         cp.offload_kqv = !p.cpu; cp.op_offload = !p.cpu;
-        p.context = llama_init_from_model(p.model, cp);
+        // Use the model's full context so a page is never truncated merely
+        // because of an application-side cap. If the KV/compute allocation for
+        // that size fails, halve it until it fits: the reported capacity is
+        // always llama_n_ctx(), so the user sees the context actually in use.
+        std::uint32_t context_size = static_cast<std::uint32_t>(training_context);
+        for (;;) {
+            if(p.cancelled.load())throw PreparationCancelled();
+            cp.n_ctx = context_size;
+            p.context = llama_init_from_model(p.model, cp);
+            if (p.context || context_size <= 2048) break;
+            context_size /= 2;
+        }
         if (!p.context) throw std::runtime_error("推論contextを確保できません。モデルを読み直してください。");
         if (p.cpu) {
             auto params = ggml_threadpool_params_default(std::max(cp.n_threads, cp.n_threads_batch));
@@ -205,18 +232,26 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
     const auto overhead=p.prompt_prefix.size()+tail.size();
     if(overhead>=capacity())throw InputContextLimit();
     const auto body_limit=capacity()-overhead-1; // Keep at least one output token.
-    auto body=tokenize_plamo3_bounded(source,body_limit,p.max_token_bytes,
+    auto raw_body=tokenize_plamo3_bounded(source,body_limit,p.max_token_bytes,
         [&](std::string_view part,std::span<std::int32_t> output){
             return llama_tokenize(p.vocab,part.data(),static_cast<int>(part.size()),output.data(),
                                   static_cast<int>(output.size()),false,false);
         },checkpoint);
-    for (auto token : body) {
+    // A PDF can contain literal PFML3 markers or binary control characters.
+    // They cannot be represented as ordinary text in this profile; omit only
+    // those tokens and translate the rest of the page instead of rejecting it.
+    std::vector<std::int32_t> body;
+    body.reserve(raw_body.size());
+    for (auto token : raw_body) {
         checkpoint();
         if ((llama_vocab_get_attr(p.vocab, token) & LLAMA_TOKEN_ATTR_CONTROL) ||
             llama_vocab_is_eog(p.vocab, token) ||
             std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end())
-            throw ModelInputUnsupported("ModelInputUnsupported: 本文の予約表記を通常文字として表現できません。");
+            continue;
+        body.push_back(token);
     }
+    if (body.empty() && !raw_body.empty())
+        throw ModelInputUnsupported("ModelInputUnsupported: 本文をモデル入力として表現できません。");
     prepared.tokens.reserve(p.prompt_prefix.size() + body.size() + tail.size());
     prepared.tokens.insert(prepared.tokens.end(), p.prompt_prefix.begin(), p.prompt_prefix.end());
     prepared.tokens.insert(prepared.tokens.end(), body.begin(), body.end());

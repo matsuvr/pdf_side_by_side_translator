@@ -255,7 +255,16 @@ struct PdfService::Impl {
                         PdfEvent e;e.kind=PdfEvent::Kind::Opened;e.document=epoch;e.page_count=page_count;
                         e.file_signature=file->initial_signature();
                         e.file_snapshot=file->snapshot();
-                        e.info=describe(get_page(0)->page);emit(std::move(e));continue;
+                        try{ e.info=describe(get_page(0)->page); }
+                        catch(const std::exception& error){
+                            // One unreadable page must not discard the rest of
+                            // the document. The controller shows a page message
+                            // and the reader can move to another page.
+                            e.has_page_info=false;
+                            e.message="1ページ目を読み込めませんでした。別のページへ移動できます。";
+                            e.detail=error.what();
+                        }
+                        emit(std::move(e));continue;
                     }
                     if(page_request){
                         if(page_request->first==epoch){

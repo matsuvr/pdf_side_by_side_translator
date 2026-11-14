@@ -4,12 +4,16 @@
 #include <wx/graphics.h>
 #include <wx/clipbrd.h>
 #include <wx/menu.h>
+#include <wx/log.h>
 #include <algorithm>
 #include <cmath>
 #include <climits>
 
 namespace opt {
-namespace {constexpr std::size_t gui_cache_budget=96*1024*1024;}
+namespace {constexpr std::size_t gui_cache_budget=96*1024*1024;
+// Bound the wheel/dialog zoom so repeated zoom-out cannot reach a 1-pixel page
+// and leave the view with a useless 0.0% display.
+constexpr double min_zoom_percent=5.0,max_zoom_percent=1.0e6;}
 PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxID_ANY),sink_(std::move(sink)){
     SetName(wxS("PDF原文"));SetBackgroundStyle(wxBG_STYLE_PAINT);SetScrollRate(1,1);
     Bind(wxEVT_PAINT,&PdfCanvas::paint,this);
@@ -21,7 +25,8 @@ PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxI
     Bind(wxEVT_TIMER,[this](wxTimerEvent&){request_visible();},timer_.GetId());
     Bind(wxEVT_MOUSEWHEEL,[this](wxMouseEvent& e){
         if((e.ControlDown()||e.CmdDown())&&info_){
-            zoom_mode_=ZoomMode::Percent;percent_*=e.GetWheelRotation()>0?1.15:1/1.15;
+            zoom_mode_=ZoomMode::Percent;
+            percent_=std::clamp(percent_*(e.GetWheelRotation()>0?1.15:1/1.15),min_zoom_percent,max_zoom_percent);
             calculate(e.GetPosition());
         }else if(e.ShiftDown()){
             int x,y;GetViewStart(&x,&y);Scroll(std::max(0,x-e.GetWheelRotation()/e.GetWheelDelta()*FromDIP(60)),y);schedule();
@@ -126,7 +131,7 @@ std::optional<PdfPoint> PdfCanvas::reading_anchor() const{
 void PdfCanvas::restore_anchor(PdfPoint point){pending_anchor_=Anchor{point,{0,0}};schedule();}
 void PdfCanvas::set_zoom(ZoomMode mode,double percent){
     if(!std::isfinite(percent)||percent<=0)return;
-    zoom_mode_=mode;percent_=percent;calculate();
+    zoom_mode_=mode;percent_=std::clamp(percent,min_zoom_percent,max_zoom_percent);calculate();
 }
 void PdfCanvas::rotate(int delta){
     if(transform_)pending_anchor_=Anchor{transform_->page_px_to_pdf.apply(page_pixel({client_.x/2,client_.y/2})),{GetClientSize().x/2,GetClientSize().y/2}};
@@ -152,7 +157,12 @@ void PdfCanvas::calculate(std::optional<wxPoint> pointer){
         if(zoom_mode_==ZoomMode::FitPage)multiplier=std::min(multiplier,std::max(1,client.y-margin*2)*scale_/ph);
     }
     const long double max_size=max_page_pixels;
-    multiplier=std::min(multiplier,std::min(max_size/pw,max_size/ph));
+    const auto requested=multiplier;
+    const auto limit=std::min(max_size/pw,max_size/ph);
+    multiplier=std::min(multiplier,limit);
+    if(zoom_mode_==ZoomMode::Percent&&requested>limit){
+        if(!zoom_limited_){zoom_limited_=true;wxLogStatus(wxS("これ以上は拡大できません。"));}
+    }else zoom_limited_=false;
     width_=std::max(1,static_cast<int>(std::round(pw*multiplier)));
     height_=std::max(1,static_cast<int>(std::round(ph*multiplier)));
     percent_=static_cast<double>(multiplier/base*100);

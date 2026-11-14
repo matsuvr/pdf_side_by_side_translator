@@ -80,7 +80,11 @@ template<class Checkpoint>
 inline bool has_usable_text(std::string_view text,Checkpoint&& checkpoint){
     bool usable=false;
     visit_utf8(text,[&](const Utf8Scalar& scalar){
-        usable|=!unicode_space(scalar.value)&&scalar.value!=0xfffd;
+        // U+EE00 is PLaMo's invisible segment boundary. C0/C1 controls and DEL
+        // cannot be displayed or represented as ordinary model input.
+        const bool printable=scalar.value>=0x20&&scalar.value!=0x7f&&
+            !(scalar.value>=0x80&&scalar.value<=0x9f);
+        usable|=printable&&!unicode_space(scalar.value)&&scalar.value!=0xfffd&&scalar.value!=0xee00;
     },std::forward<Checkpoint>(checkpoint));
     // Do not return early: an invalid suffix must still be rejected.
     return usable;

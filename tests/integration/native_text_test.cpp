@@ -49,13 +49,25 @@ void check_readonly_copy(wxTextCtrl& control){
     require(control.GetValue()==original,"typing, backspace and delete cannot change viewer text");
 #endif
     control.SelectAll();
-    // wxTextCtrl mixes UTF-16 selection offsets with the character count of
-    // wxString, which is 32-bit on macOS: GetStringSelection() returns nothing
-    // once the text contains characters outside the BMP. Check the native
-    // selection range, which uses the same units on every platform.
     long selection_begin=0,selection_end=0;
     control.GetSelection(&selection_begin,&selection_end);
+#ifdef _WIN32
+    // Rich Edit can include its final paragraph marker in the selection,
+    // making its end one past GetLastPosition(). Verify the selected text.
+    require(selection_begin==0&&control.GetStringSelection()==original,"whole viewer text remains selectable");
+#else
+    // On macOS selection offsets use UTF-16, while wxString counts Unicode
+    // characters. GetStringSelection() fails for text outside the BMP, so
+    // compare the native range instead.
     require(selection_begin==0&&selection_end==control.GetLastPosition(),"whole viewer text remains selectable");
+#endif
+    control.Copy();
+    {
+        wxClipboardLocker lock;
+        require(!!lock,"clipboard opens for whole-text copy verification");
+        wxTextDataObject copied;
+        require(wxTheClipboard->GetData(copied)&&copied.GetText()==original,"whole viewer text copies to clipboard without loss");
+    }
 }
 #ifdef _WIN32
 void check_streamed_wrap(wxTextCtrl& control){

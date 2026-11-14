@@ -1,4 +1,5 @@
 > 現在は読み取り専用ビューワーです。原文編集・強制再翻訳・書き出しは削除しました。以下に含まれる旧機能の検証記録は過去のものです。現在の仕様は [session-data.md](session-data.md) を参照してください。
+> 予約表記・制御文字を含む入力は、現行版では該当トークンだけを除外して残りを翻訳します（CHANGELOG参照）。
 
 # Translation implementation evidence
 

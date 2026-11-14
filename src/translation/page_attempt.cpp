@@ -23,7 +23,7 @@ std::string_view finish_reason_label(FinishReason r){
     case FinishReason::Completed:return "完了";case FinishReason::Cancelled:return "停止";
     case FinishReason::OutputLimit:return "生成上限";case FinishReason::ContextLimit:return "ページ全文がモデルの入力容量を超えています";
     case FinishReason::EmptyOutput:return "空の出力";case FinishReason::InvalidEncoding:return "不正なUTF-8出力";
-    case FinishReason::InvalidModelOutput:return "予期しないモデル出力";case FinishReason::ModelInputUnsupported:return "モデルの予約文字列を含む原文";
+    case FinishReason::InvalidModelOutput:return "予期しないモデル出力";case FinishReason::ModelInputUnsupported:return "原文をモデル入力に変換できません";
     case FinishReason::DecodeError:return "推論処理の失敗";case FinishReason::ModelUnavailable:return "モデルを利用できません";
     }return "不明な終了理由";
 }

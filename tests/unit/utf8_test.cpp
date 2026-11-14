@@ -28,6 +28,8 @@ int main() {
         count_allocations=false;
         check(usable&&translation&&allocations==0);
         check(!opt::has_usable_text(" \t　� "));
+        check(!opt::has_usable_text("\xee\xb8\x80"));
+        check(!opt::has_usable_text("\x01\x7f\xc2\x85"));
         for(const auto* invalid:{"a\xc0\x80","a\xed\xa0\x80","a\xf4\x90\x80\x80","a\xe6\x97"}){
             bool failed=false;
             try{opt::has_usable_text(invalid);}catch(const opt::Utf8Error&){failed=true;}

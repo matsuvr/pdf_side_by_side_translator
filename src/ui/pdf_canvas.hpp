@@ -53,6 +53,7 @@ private:
     bool loading_=false;
     ActivityDots loading_dots_;
     wxString loading_message_;
+    bool zoom_limited_=false;
     bool panning_=false,space_=false;
     bool selecting_=false;
     std::shared_ptr<const PageLayout> layout_;
