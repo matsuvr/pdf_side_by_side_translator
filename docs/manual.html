@@ -13,7 +13,7 @@
 <body>
   <a class="skip-link" href="#main">本文へスキップ</a>
   <header class="site-header"><div class="shell header-inner"><a class="brand" href="./" aria-label="Offline PDF Translator ホーム"><img src="assets/app-icon.png" width="36" height="36" alt=""><span>Offline PDF <strong>Translator</strong></span></a><nav aria-label="メインナビゲーション"><a href="./#features">特長</a><a href="manual.html" aria-current="page">マニュアル</a><a class="nav-download" href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">ダウンロード <span aria-hidden="true">↓</span></a></nav></div></header>
-  <div class="shell manual-heading"><a class="breadcrumb" href="./">製品紹介 <span aria-hidden="true">/</span></a><h1>使い方・マニュアル</h1><p>アプリの起動、PDFの閲覧と翻訳、各種設定の手順を説明します。</p><span class="version-label">0.2.0 対応 / Windows・macOS</span></div>
+  <div class="shell manual-heading"><a class="breadcrumb" href="./">アプリ紹介 <span aria-hidden="true">/</span></a><h1>使い方・マニュアル</h1><p>アプリの起動、PDFの閲覧と翻訳、各種設定の手順を説明します。</p><span class="version-label">Windows・macOS</span></div>
   <div class="shell manual-layout">
     <aside class="manual-sidebar"><nav aria-label="マニュアルの目次"><p class="toc-label">このページの内容</p><a href="#start">01 はじめに</a><a href="#read">02 PDFを読む</a><a href="#search">03 検索・選択・コピー</a><a href="#translation">04 翻訳の設定  </a><a href="#model">05 モデル設定</a><a href="#shortcuts">06 ショートカット</a><a href="#data">07 文書データの扱い</a><a href="#troubleshooting">08 困ったときは  </a><a href="#licenses">09 モデルとライセンス  </a></nav><a class="sidebar-back" href="./">← 製品紹介に戻る</a></aside>
     <main class="manual-content" id="main">
@@ -23,7 +23,7 @@
 <p><a href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">最新のリリースページ</a>を開き、「Assets」からご利用のOSに合ったアプリ用ZIPをダウンロードし、フォルダーごと展開してください。</p>
 <div class="table-wrap"><table><caption>配布ファイルと起動するアプリ</caption><thead><tr><th scope="col">環境</th><th scope="col">ZIPの名前の末尾</th><th scope="col">起動するファイル</th></tr></thead><tbody><tr><th scope="row">Windows x64</th><td><code>windows-x64-release.zip</code></td><td><code>offline-pdf-translator.exe</code></td></tr><tr><th scope="row">macOS 14以降 / Apple Silicon</th><td><code>macos-arm64-release.zip</code></td><td><code>Offline PDF Translator.app</code></td></tr></tbody></table></div>
 <h3>同梱ファイル</h3>
-<p>ZIPにはアプリ本体、翻訳モデル、ライセンス文書が同梱されています。展開後も、アプリとモデルを同一フォルダーに配置してください。Mac環境では、GGUFファイルを.appの外側に配置してください。</p>
+<p>ZIPにはアプリ本体、翻訳モデル、ライセンス文書が同梱されています。展開後も、アプリとモデルを同一フォルダーに配置してください。</p>
 <pre class="file-tree" aria-label="配布フォルダーの構成">展開したフォルダー/
 ├─ offline-pdf-translator.exe（Windows）
 │  または Offline PDF Translator.app（Mac）
@@ -102,17 +102,13 @@
 <ul>
 <li>「翻訳」メニューの「標準文体」または「やさしい文体」から希望の文体を選択してください。</li>
 </ul>
-<h3>翻訳結果を原文と照合してください。</h3>
-<ul>
-<li>モデルが翻訳を行う際に、誤訳や情報の欠落が発生することがあります。</li>
-</ul>
 </section>
 <section class="manual-section" id="model">
 <h2>モデル設定</h2>
 <p>「モデル設定」→「モデルを選択…」を開く。</p>
-<p>「ファイルを選択…」から対応する GGUF を選ぶ。</p>
+<p>「ファイルを選択…」から対応する GGUF を選ぶ。（※通常は変更の必要はありません）</p>
 <p>「OK」を押し、読み込みが完了するのを待つ。</p>
-<p>対応モデルは PLaMo 3 Translate 0.8B（英語→日本語）です。この系列以外の GGUF は対象外となります。</p>
+<p>対応モデルは PLaMo 3 Translate 0.8Bです。この系列以外の GGUF は対象外となります。</p>
 </section>
 <section class="manual-section" id="shortcuts">
 <h2>ショートカット</h2>
@@ -123,21 +119,17 @@
 <section class="manual-section" id="data">
 <h2>文書データの扱い</h2>
 <ul>
-<li>入力PDFとGGUFは読み取り専用で開き、変更・削除・コピーはできません。</li>
-<li>本文は読み取り専用で、入力・貼り付け・切り取り・削除・Undoは無効です。選択・コピーは可能で、検索語・ページ番号・倍率・モデルの場所は入力できます。</li>
+<li>入力PDFとGGUFは読み取り専用で開き、編集はできません。</li>
+<li>本文は読み取り専用で、入力・貼り付け・切り取り・削除・Undoは無効です。選択・コピーは可能です。</li>
 <li>状態とキャッシュはメモリ内で管理し、原文・訳文・読書位置・モデル選択・設定・診断情報および「この起動中に開いたPDF」の一覧はアプリ終了時に破棄されます。</li>
 <li>ファイル出力は非対応です。作業ファイル、一時ファイル、状態DB、設定、履歴、ログ、lockの自動作成、訳文やセッションの保存・書き出しは行いません。</li>
 <li>文章や診断情報をコピーすると、その内容がOSのクリップボードに渡されます。</li>
-</ul>
-<h3>0.1.1以前を使ったことがある方へ</h3>
-<ul>
-<li>旧バージョンで作成された保存データはそのまま保持され、管理は利用者が行います。保存場所については、<a href="https://github.com/matsuvr/pdf_side_by_side_translator/blob/main/docs/session-data.md">セッションデータの仕様</a>をご覧ください。</li>
 </ul>
 </section>
 <section class="manual-section" id="troubleshooting">
 <h2>困ったときは</h2>
 <h3>モデル選択画面</h3>
-<p>配置方法は「<a href="#start">はじめに</a>」を、手動選択は「<a href="#model">モデル設定</a>」を参照してください。</p>
+<p>設定方法は「<a href="#start">はじめに</a>」を、手動選択は「<a href="#model">モデル設定</a>」を参照してください。</p>
 <h3>訳文表示</h3>
 <p>訳文表示は「<a href="#translation">翻訳の設定</a>」で確認できます。</p>
 <h3>翻訳失敗</h3>
