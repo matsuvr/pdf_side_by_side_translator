@@ -56,13 +56,13 @@
         <article class="feature">
           <span class="feature-number">02 / PRIVACY</span>
           <h3>通信とデータ保持</h3>
-          <p>外部ネットワークとの通信は一切行いません。翻訳処理から画面描画までを端末内部で完結させ、作業ログや翻訳キャッシュもディスク上へ一切残さない構造です。そのため、取り扱い注意のファイルも読み込めます。　※なお、本アプリは完全な機密保護性能を保証するものではありません</p>
+          <p>外部ネットワークとの通信は一切行いません。翻訳処理から画面描画までを端末内部で完結させ、作業ログや翻訳キャッシュもディスク上へ一切残さない構造です。そのため、取り扱い注意のファイルも読み込めます。※なお、本アプリは完全な機密保護性能を保証するものではありません。</p>
           <div class="feature-note">外部非接続・終了時破棄</div>
         </article>
         <article class="feature">
           <span class="feature-number">03 / RESOURCE</span>
           <h3>計算負荷と動作環境</h3>
-          <p>翻訳モデルには、軽量な小PLaMo 3 Translate 0.8Bを採用しました。専用GPUを搭載していない一般的な事務用ノートPCでも、CPUのみの演算によって実用的な速度で訳文を出力します。</p>
+          <p>翻訳モデルには、軽量な小型モデル（PLaMo 3 Translate 0.8B）を採用しました。専用GPUを搭載していない一般的な事務用ノートPCでも、CPUのみの演算によって実用的な速度で訳文を出力します。</p>
           <div class="feature-note">省リソース設計</div>
         </article>
       </div>
@@ -75,21 +75,13 @@
           <h2>利用開始の手引き</h2>
           <p>ご利用のOSに応じた圧縮ファイルをGitHub Releasesから取得してください。</p>
         </div>
-        <div class="download-grid">
-          <article class="download-card">
-            <div class="platform-symbol" aria-hidden="true">⊞</div>
-            <h3>Windows版</h3>
-            <p>対象：Windows 10 / 11（x64）</p>
-            <a class="button primary" href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">最新版を取得する <span aria-hidden="true">↗</span></a>
-            <p class="small">Assets欄から <code>windows-x64-release.zip</code> を選択してください。展開後のフォルダー内にある実行ファイルを起動します。</p>
-          </article>
-          <article class="download-card">
-            <div class="platform-symbol mac-symbol" aria-hidden="true">M</div>
-            <h3>macOS版</h3>
-            <p>対象：macOS 14以降（Apple Silicon）</p>
-            <a class="button primary" href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">最新版を取得する <span aria-hidden="true">↗</span></a>
-            <p class="small">Assets欄から <code>macos-arm64-release.zip</code> を選択してください。初回起動時のセキュリティ許可手順は<a href="manual.html#mac-first-launch">マニュアル</a>に記載しています。</p>
-          </article>
+        <div class="download-panel">
+          <div class="download-panel-main">
+            <h3>ダウンロード</h3>
+            <p>対応OS：Windows 10 / 11（x64）・macOS 14以降（Apple Silicon）</p>
+          </div>
+          <a class="button primary" href="https://github.com/matsuvr/pdf_side_by_side_translator/releases">GitHub Releasesを開く <span aria-hidden="true">↗</span></a>
+          <p class="small">Assets欄から <code>windows-x64-release.zip</code>（Windows）または <code>macos-arm64-release.zip</code>（macOS）を選択してください。macOSで初めて起動するときの許可手順は<a href="manual.html#mac-first-launch">マニュアル</a>に記載しています。</p>
         </div>
         <p class="download-footnote">翻訳モデルのライセンス条件については、同梱の規約書（PLaMoコミュニティライセンス）および<a href="manual.html#licenses">ライセンス説明欄</a>をご確認ください。</p>
       </div>

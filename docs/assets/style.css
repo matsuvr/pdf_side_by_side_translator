@@ -235,41 +235,22 @@ p + p { margin-top: 0.9em; }
   background: var(--panel);
   border-block: 1px solid var(--line);
 }
-.download-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-.download-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 24px;
-  background: var(--surface);
-  display: grid;
-  grid-template-columns: 36px 1fr;
-  column-gap: 14px;
+.download-panel {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-}
-.platform-symbol {
-  grid-row: 1 / 3;
-  font-size: 30px;
-  color: var(--ink);
-  line-height: 1;
-}
-.mac-symbol {
-  font-size: 18px;
-  font-weight: 500;
+  justify-content: space-between;
+  gap: 14px 24px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
+  padding: 22px 24px;
+  background: var(--surface);
 }
-.download-card h3 { font-size: 18px; }
-.download-card > p { color: var(--muted); font-size: 12px; }
-.download-card .button, .download-card .small { grid-column: 1 / -1; margin-top: 18px; }
-.download-card .small { font-size: 12px; line-height: 1.7; color: var(--muted); margin-top: 12px; }
+.download-panel-main { flex: 1 1 300px; min-width: 0; }
+.download-panel h3 { font-size: 18px; }
+.download-panel-main p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.download-panel .button { flex: 0 0 auto; }
+.download-panel .small { flex-basis: 100%; font-size: 12px; line-height: 1.7; color: var(--muted); }
 .download-footnote { font-size: 12px; color: var(--muted); margin-top: 20px; line-height: 1.7; }
 
 /* Help / Manual Strip */
@@ -417,7 +398,6 @@ details p { color: var(--muted); font-size: 13.5px; padding-left: 16px; }
 @media(max-width: 800px) {
   .section { padding-block: 40px; }
   .feature-grid { grid-template-columns: 1fr; gap: 16px; }
-  .download-grid { grid-template-columns: 1fr; gap: 16px; }
   .manual-layout { grid-template-columns: 1fr; gap: 0; }
   .manual-sidebar { position: static; padding: 18px 0; border-bottom: 1px solid var(--line); }
   .manual-sidebar nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 12px; }
