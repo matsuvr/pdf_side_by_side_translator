@@ -92,3 +92,15 @@ Releaseでも試験を実行します。検証条件を `assert()` だけに置�
 メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。
 
 `.github/workflows/security.yml` はレイアウト・検索のASan/UBSan試験とlibFuzzer、セッションI/O・推論配信キューのTSan試験を実行します。固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で個別にも実行できます。
+
+## 製品紹介・マニュアルのサイト
+
+GitHub Pagesの公開元は `main` ブランチの `/docs` です。`index.html` が製品紹介、`manual.html` が利用者向けマニュアル、`assets/` が共通CSSとアプリアイコンです。`.nojekyll` により静的ファイルをそのまま配信します。ビルドや外部JavaScript・フォントは不要です。
+
+ローカルで表示を確認するには、リポジトリのルートから次を実行します。
+
+```sh
+python -m http.server 8765 --bind 127.0.0.1 --directory docs
+```
+
+`http://127.0.0.1:8765/` と `/manual.html` を確認します。公開前にPC・スマートフォン幅での表示、相互リンク、目次、画像、リリースページへの導線を確認してください。機能・メニュー名・対応OS・配布ファイル名は現行ソースとリリース情報に合わせます。紹介ページの対訳例は説明用の文章であり、実画面や実モデルの出力ではありません。

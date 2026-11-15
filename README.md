@@ -6,6 +6,8 @@ PDFの原文を左に、日本語訳を右に並べて読む、閲覧専用の�
 
 Built with PLaMo
 
+[製品紹介](https://matsuvr.github.io/pdf_side_by_side_translator/) · [使い方・マニュアル](https://matsuvr.github.io/pdf_side_by_side_translator/manual.html)
+
 ## 使い方
 
 1. [リリースページ](https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest)から、使うOSに対応した **0.1.2 以降**のアプリ用ZIPをダウンロードし、フォルダーごと展開します。ZIPにはアプリ、翻訳用GGUF、ライセンス文書が入っています。
