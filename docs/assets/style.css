@@ -290,11 +290,12 @@ p + p { margin-top: 0.9em; }
 .site-footer nav a:hover { color: var(--ink); }
 
 /* Manual Page Specifics */
-.manual-heading { padding-block: 28px 30px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.manual-heading { background: var(--surface); border-bottom: 1px solid var(--line); }
+.manual-heading-inner { padding-block: 28px 30px; }
 .breadcrumb { font-size: 12px; text-decoration: none; color: var(--muted); display: inline-block; margin-bottom: 14px; }
 .breadcrumb span { margin-left: 8px; color: var(--line); }
 .manual-heading h1 { font-size: clamp(24px, 3vw, 30px); margin-top: 6px; }
-.manual-heading > p:not(.eyebrow) { color: var(--muted); margin-top: 6px; font-size: 14px; }
+.manual-heading p:not(.eyebrow) { color: var(--muted); margin-top: 6px; font-size: 14px; }
 .version-label {
   display: inline-block;
   font-size: 11px;
@@ -340,6 +341,7 @@ p + p { margin-top: 0.9em; }
 .manual-section h2 { font-size: 22px; margin: 4px 0 16px; }
 .manual-section h3 { font-size: 16px; margin: 24px 0 8px; }
 .manual-section p { margin-top: 10px; }
+.manual-section p + p { margin-top: 14px; }
 .manual-section li { margin-block: 6px; }
 .manual-section ul, .manual-section ol { padding-left: 20px; margin-block: 12px; }
 .note {
@@ -423,7 +425,7 @@ details p { color: var(--muted); font-size: 13.5px; padding-left: 16px; }
   .shell { width: 100%; }
   .manual-layout { display: block; }
   .manual-content { max-width: none; }
-  .manual-heading { padding-top: 0; }
+  .manual-heading-inner { padding-top: 0; }
   a { color: inherit; }
   table { font-size: 9pt; }
   tr, .note { break-inside: avoid; }

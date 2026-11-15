@@ -13,18 +13,18 @@
 <body>
   <a class="skip-link" href="#main">本文へスキップ</a>
   <header class="site-header"><div class="shell header-inner"><a class="brand" href="./" aria-label="Offline PDF Translator ホーム"><img src="assets/app-icon.png" width="36" height="36" alt=""><span>Offline PDF <strong>Translator</strong></span></a><nav aria-label="メインナビゲーション"><a href="./#features">特長</a><a href="manual.html" aria-current="page">マニュアル</a><a class="nav-download" href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">ダウンロード <span aria-hidden="true">↓</span></a></nav></div></header>
-  <div class="shell manual-heading"><a class="breadcrumb" href="./">アプリ紹介 <span aria-hidden="true">/</span></a><h1>使い方・マニュアル</h1><p>アプリの起動、PDFの閲覧と翻訳、各種設定の手順を説明します。</p><span class="version-label">Windows・macOS</span></div>
+  <div class="manual-heading"><div class="shell manual-heading-inner"><a class="breadcrumb" href="./">アプリ紹介 <span aria-hidden="true">/</span></a><h1>使い方・マニュアル</h1><p>アプリの起動、PDFの閲覧と翻訳、各種設定の手順を説明します。</p><span class="version-label">Windows・macOS</span></div></div>
   <div class="shell manual-layout">
-    <aside class="manual-sidebar"><nav aria-label="マニュアルの目次"><p class="toc-label">このページの内容</p><a href="#start">01 はじめに</a><a href="#read">02 PDFを読む</a><a href="#search">03 検索・選択・コピー</a><a href="#translation">04 翻訳の設定  </a><a href="#model">05 モデル設定</a><a href="#shortcuts">06 ショートカット</a><a href="#data">07 文書データの扱い</a><a href="#troubleshooting">08 困ったときは  </a><a href="#licenses">09 モデルとライセンス  </a></nav><a class="sidebar-back" href="./">← 製品紹介に戻る</a></aside>
+    <aside class="manual-sidebar"><nav aria-label="マニュアルの目次"><p class="toc-label">このページの内容</p><a href="#start">01 はじめに</a><a href="#read">02 PDFを読む</a><a href="#search">03 検索・選択・コピー</a><a href="#translation">04 翻訳の設定</a><a href="#model">05 モデル設定</a><a href="#shortcuts">06 ショートカット</a><a href="#data">07 文書データの扱い</a><a href="#troubleshooting">08 困ったときは</a><a href="#licenses">09 モデルとライセンス</a></nav><a class="sidebar-back" href="./">← 製品紹介に戻る</a></aside>
     <main class="manual-content" id="main">
 <section class="manual-section" id="start">
 <h2>はじめに</h2>
-<h3>ZIPをダウンロードして展開する</h3>
-<p><a href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">最新のリリースページ</a>を開き、「Assets」からご利用のOSに合ったアプリ用ZIPをダウンロードし、フォルダーごと展開してください。</p>
-<div class="table-wrap"><table><caption>配布ファイルと起動するアプリ</caption><thead><tr><th scope="col">環境</th><th scope="col">ZIPの名前の末尾</th><th scope="col">起動するファイル</th></tr></thead><tbody><tr><th scope="row">Windows x64</th><td><code>windows-x64-release.zip</code></td><td><code>offline-pdf-translator.exe</code></td></tr><tr><th scope="row">macOS 14以降 / Apple Silicon</th><td><code>macos-arm64-release.zip</code></td><td><code>Offline PDF Translator.app</code></td></tr></tbody></table></div>
-<h3>同梱ファイル</h3>
-<p>ZIPにはアプリ本体、翻訳モデル、ライセンス文書が同梱されています。展開後も、アプリとモデルを同一フォルダーに配置してください。</p>
-<pre class="file-tree" aria-label="配布フォルダーの構成">展開したフォルダー/
+<h3>アプリの入手方法</h3>
+<p><a href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">最新のリリースページ</a>を開き、「Assets」欄からご利用のOSに合ったZIPファイルを保存したうえで、フォルダーごと展開してください。</p>
+<div class="table-wrap"><table><caption>OS別の対応ファイル</caption><thead><tr><th scope="col">環境</th><th scope="col">ZIPファイル名の末尾</th><th scope="col">起動するファイル</th></tr></thead><tbody><tr><th scope="row">Windows x64</th><td><code>windows-x64-release.zip</code></td><td><code>offline-pdf-translator.exe</code></td></tr><tr><th scope="row">macOS 14以降 / Apple Silicon</th><td><code>macos-arm64-release.zip</code></td><td><code>Offline PDF Translator.app</code></td></tr></tbody></table></div>
+<h3>フォルダー構成と配置条件</h3>
+<p>書庫の中にはプログラム本体や翻訳モデル、ライセンス文書が同梱されています。展開し終えた後も、実行ファイルとモデルファイルは同じフォルダーへ収めた状態を保ってください。</p>
+<pre class="file-tree" aria-label="展開したフォルダーの構成">展開したフォルダー/
 ├─ offline-pdf-translator.exe（Windows）
 │  または Offline PDF Translator.app（Mac）
 ├─ plamo-3-translate-0.8b-Q4_K_M.gguf
@@ -32,126 +32,84 @@
 ├─ LICENSE
 ├─ THIRD_PARTY_NOTICES.txt
 └─ README.md</pre>
-<h3>アプリを起動してPDFを開く</h3>
-<ol>
-<li>アプリを起動します。 同一フォルダーにある GGUF が自動的に読み込まれます。</li>
-<li>「PDFを開く」ボタンをクリックするか、メニューバーの <strong>「ファイル」 → 「PDFを開く…」</strong> を選択します。</li>
-<li>表示されたファイル選択ダイアログで開きたい PDF を選び、<strong>「開く」</strong> をクリックします。</li>
-</ol>
-<h3>初回の利用条件確認</h3>
-<p>初回起動時に<a href="manual.html#licenses">モデルの利用条件</a>が表示されたら、必ず内容を確認してください。</p>
-<h3 id="mac-first-launch">Macで初めて起動するとき</h3>
-<p>macOSが起動をブロックしたときは、「システム設定」→「プライバシーとセキュリティ」→「アプリケーションの実行許可」を開きます。Offline PDF Translatorの「このまま開く」を選択し、実行を許可してください。</p>
-<h3>Windows未署名の注意</h3>
-<p>現在配布中のWindows実行ファイルは未署名です。必ず、このプロジェクトのGitHub Releasesから取得したファイルであることを確認してください。</p>
+<h3>基本の立ち上げ手順</h3>
+<p>プログラムを実行すると、同じフォルダーにあるGGUFファイルを自動で読み込みます。続けて画面上の「PDFを開く」ボタン、あるいはメニューバーの「ファイル」から「PDFを開く…」へ進んだうえで、一覧から対象の文書を指定して「開く」を押してください。</p>
+<h3>契約条項への同意</h3>
+<p>初めて起動する際は画面に<a href="#licenses">翻訳モデルの利用規約</a>が現れるため、内容をよくお読みください。</p>
+<h3 id="mac-first-launch">macOSにおける実行許可</h3>
+<p>初めて動かす際にOS側の保護機能によって起動が止められた場合は、「システム設定」から「プライバシーとセキュリティ」内の「アプリケーションの実行許可」を開いたら、本アプリの「このまま開く」を選んでください。</p>
+<h3>Windows版の配布形式</h3>
+<p>現在配布している実行ファイルには電子署名を省いているため、必ず本プロジェクトの公式GitHub Releasesから手に入れたファイルであるか確認してください。</p>
 </section>
 <section class="manual-section" id="read">
 <h2>PDFを読む</h2>
-<h3>原文と訳文を見比べる</h3>
-<ul>
-<li>中央の境界をドラッグすれば、各欄の幅を自由に調整できます。</li>
-<li>「表示」→「左右を均等にする」を選択すると、左右の幅が同一になります。</li>
-</ul>
-<h3>ページを移動する</h3>
-<ul>
-<li>原文の左右に配置された矢印を使用して、前後のページへ移動できます。</li>
-<li>ページ番号欄にページ番号を入力し、Enterキーを押すと、指定したページへ移動します。</li>
-</ul>
-<h3>PDFの倍率・向きを変える</h3>
-<ul>
-<li>原文枠の上部に配置された倍率欄から、「幅に合わせる」「ページ全体」または任意の倍率を選択してください。</li>
-<li>倍率を直接入力し、Enterキーを押すことでも変更できます。</li>
-<li>PDFの向きは「表示」メニューの「左回転」または「右回転」で変更できます。</li>
-</ul>
-<h3>訳文の文字サイズを変更する</h3>
-<ul>
-<li>「表示」メニューから「訳文の文字サイズ…」を開き、ポイント数を指定してください。</li>
-<li>訳文の文字サイズとPDFの倍率はそれぞれ個別に調整できます。</li>
-</ul>
-<h3>処理の状態を確認する</h3>
-<ul>
-<li>PDFの読込み中や翻訳中は、点が循環して処理中であることを示します。</li>
-<li>画面下部のステータスバーには、モデルの読込み状態やコンピューター全体のCPU使用率の概算などが表示されます。</li>
-<li>翻訳に要する時間は、ページの長さとコンピューターの性能に応じて変わります。</li>
-</ul>
+<h3>表示領域の幅</h3>
+<p>画面中央の境界線をドラッグすると、原文と訳文それぞれの欄の幅を自在に変えられます。「表示」メニューの「左右を均等にする」を選べば、両方の幅を同一に揃えられます。</p>
+<h3>表示箇所の移動</h3>
+<p>原文の両脇にある矢印を押すと、前後のページへ進みます。特定のページへ移りたい場合は、ページ番号欄へ数字を打ち込んでEnterキーを押してください。</p>
+<h3>表示の大きさと角度</h3>
+<p>原文枠の上にある欄で「幅に合わせる」「ページ全体」といった選択肢を選ぶか、任意の倍率を直接入力してEnterキーを押すと拡大率が変わります。紙面の向きは「表示」メニューの「左回転」および「右回転」で調整できます。</p>
+<h3>訳文の書式</h3>
+<p>「表示」メニューの「訳文の文字サイズ…」から好みのポイント数を指定してください。なお、この設定はPDF側の倍率とは独立して機能します。</p>
+<h3>稼働状況の把握</h3>
+<p>読み込みや翻訳を進める間は循環する点が現れます。画面下のステータスバーを見ると、モデルの準備段階やコンピューター全体のCPU使用率の目安が分かります。翻訳が終わるまでの時間は、文書の分量と端末の性能に左右されます。</p>
 </section>
 <section class="manual-section" id="search">
 <h2>検索・選択・コピー</h2>
-<h3>PDF内を検索する</h3>
-<ul>
-<li>「選択・コピー」→「PDF内を検索…」を選択して検索欄を開きます。</li>
-<li>検索語を入力し、「前の結果」や「次の結果」を使って検索結果を移動します。</li>
-<li>大文字と小文字を区別したいときは「英字の大文字・小文字を区別」を選択します。</li>
-<li>検索が完了したら「閉じる」を選択して検索欄を閉じます。</li>
-</ul>
-<h3>必要な文章をコピーする</h3>
-<ul>
-<li>原文または訳文の文章を選択し、コピーします。</li>
-<li>現在のページから抽出した原文をまとめてコピーしたいときは、「選択・コピー」→「ページの原文をコピー」を選択します。</li>
-</ul>
+<h3>語句の照合</h3>
+<p>「選択・コピー」メニューから「PDF内を検索…」を呼び出して言葉を入力すると、「前の結果」や「次の結果」ボタンで該当箇所を行き来できます。英字の大文字と小文字を区別したい場合は、「英字の大文字・小文字を区別」を選択してください。用が済んだら「閉じる」を押して入力欄を片付けます。</p>
+<h3>テキストの取り出し</h3>
+<p>原文や訳文の任意の範囲を選んで、クリップボードへ複写できます。表示中のページ全体から原文をまとめて写し取りたいときは、「選択・コピー」メニューの「ページの原文をコピー」を使ってください。</p>
 </section>
 <section class="manual-section" id="translation">
 <h2>翻訳の設定</h2>
-<h3>現在のページを自動で翻訳する</h3>
-<ul>
-<li>起動時に「翻訳」→「現在ページを自動翻訳」が有効になります。</li>
-<li>PDFを開いたときやページを移動したときに、現在表示中のページが翻訳されます。</li>
-<li>自動翻訳を停止したい場合は、該当項目のチェックを外してください。</li>
-</ul>
-<h3>日本語の文体を選ぶ</h3>
-<ul>
-<li>「翻訳」メニューの「標準文体」または「やさしい文体」から希望の文体を選択してください。</li>
-</ul>
+<h3>自動実行の切り替え</h3>
+<p>起動直後は「翻訳」メニューの「現在ページを自動翻訳」が有効になっており、文書を開いたりページを送ったりするたびに表示中の紙面が翻訳されます。ご自身でタイミングを決めたいときは、該当項目のチェックを外してください。</p>
+<h3>日本語の表現形式</h3>
+<p>「翻訳」メニューにある「標準文体」と「やさしい文体」のいずれかから、好みに合う文体を指定できます。</p>
 </section>
 <section class="manual-section" id="model">
 <h2>モデル設定</h2>
-<p>「モデル設定」→「モデルを選択…」を開く。</p>
-<p>「ファイルを選択…」から対応する GGUF を選ぶ。（※通常は変更の必要はありません）</p>
-<p>「OK」を押し、読み込みが完了するのを待つ。</p>
-<p>対応モデルは PLaMo 3 Translate 0.8Bです。この系列以外の GGUF は対象外となります。</p>
+<p>標準構成のままで運用できますが、別のファイルへ差し替える際は「モデル設定」メニューの「モデルを選択…」から「ファイルを選択…」と進み、対象のGGUFを指定して「OK」を押してください。読み込みが終わるまで待つと利用可能になります。なお、本アプリが扱えるのはPLaMo 3 Translate 0.8B系列のファイルです。</p>
 </section>
 <section class="manual-section" id="shortcuts">
 <h2>ショートカット</h2>
-<p>表中の「Ctrl / ⌘」は、Windows では Ctrl、Mac では ⌘ を意味します。</p>
-<div class="table-wrap"><table><caption>キーボード操作</caption><thead><tr><th scope="col">操作</th><th scope="col">キー</th></tr></thead><tbody><tr><th scope="row">PDFを開く</th><td><code>Ctrl / ⌘ + O</code></td></tr><tr><th scope="row">文書を閉じる</th><td><code>Ctrl / ⌘ + W</code></td></tr><tr><th scope="row">ページ番号欄へ移動</th><td><code>Ctrl / ⌘ + G</code></td></tr><tr><th scope="row">PDF内を検索</th><td><code>Ctrl / ⌘ + F</code></td></tr><tr><th scope="row">選択したテキストをコピー</th><td><code>Ctrl / ⌘ + C</code></td></tr><tr><th scope="row">全選択</th><td><code>Ctrl / ⌘ + A</code></td></tr><tr><th scope="row">モデル設定</th><td><code>Ctrl / ⌘ + ,</code></td></tr><tr><th scope="row">前のページ / 次のページ（Windows）</th><td><code>Alt + PageUp / Alt + PageDown</code></td></tr><tr><th scope="row">前のページ / 次のページ（Mac）</th><td><code>⌘ + [ / ⌘ + ]</code></td></tr><tr><th scope="row">ペイン間の移動</th><td><code>F6 / Shift + F6</code></td></tr><tr><th scope="row">検索欄を閉じる</th><td><code>Esc</code></td></tr></tbody></table></div>
-<div class="table-wrap"><table><caption>PDF上のマウス操作</caption><thead><tr><th scope="col">操作</th><th scope="col">マウス操作</th></tr></thead><tbody><tr><th scope="row">縦スクロール</th><td><code>ホイール</code></td></tr><tr><th scope="row">横スクロール</th><td><code>Shift + ホイール</code></td></tr><tr><th scope="row">PDFの拡大・縮小</th><td><code>Ctrl / ⌘ + ホイール</code></td></tr><tr><th scope="row">PDFを掴んで移動</th><td><code>Space + ドラッグ / 中ボタン</code></td></tr></tbody></table></div>
+<p>表中の「Ctrl / ⌘」という表記は、Windows環境におけるCtrlキー、およびMac環境における⌘キーを指します。</p>
+<div class="table-wrap"><table><caption>キーボード操作</caption><thead><tr><th scope="col">機能</th><th scope="col">キー</th></tr></thead><tbody><tr><th scope="row">PDFを開く</th><td><code>Ctrl / ⌘ + O</code></td></tr><tr><th scope="row">文書を閉じる</th><td><code>Ctrl / ⌘ + W</code></td></tr><tr><th scope="row">ページ番号欄へ移動</th><td><code>Ctrl / ⌘ + G</code></td></tr><tr><th scope="row">PDF内を検索</th><td><code>Ctrl / ⌘ + F</code></td></tr><tr><th scope="row">選択したテキストをコピー</th><td><code>Ctrl / ⌘ + C</code></td></tr><tr><th scope="row">全選択</th><td><code>Ctrl / ⌘ + A</code></td></tr><tr><th scope="row">モデル設定</th><td><code>Ctrl / ⌘ + ,</code></td></tr><tr><th scope="row">前のページ / 次のページ（Windows）</th><td><code>Alt + PageUp / Alt + PageDown</code></td></tr><tr><th scope="row">前のページ / 次のページ（Mac）</th><td><code>⌘ + [ / ⌘ + ]</code></td></tr><tr><th scope="row">ペイン間の移動</th><td><code>F6 / Shift + F6</code></td></tr><tr><th scope="row">検索欄を閉じる</th><td><code>Esc</code></td></tr></tbody></table></div>
+<div class="table-wrap"><table><caption>PDF上のマウス操作</caption><thead><tr><th scope="col">機能</th><th scope="col">マウス入力</th></tr></thead><tbody><tr><th scope="row">縦スクロール</th><td><code>ホイール</code></td></tr><tr><th scope="row">横スクロール</th><td><code>Shift + ホイール</code></td></tr><tr><th scope="row">PDFの拡大・縮小</th><td><code>Ctrl / ⌘ + ホイール</code></td></tr><tr><th scope="row">PDFを掴んで移動</th><td><code>Space + ドラッグ / 中ボタン</code></td></tr></tbody></table></div>
 </section>
 <section class="manual-section" id="data">
 <h2>文書データの扱い</h2>
-<ul>
-<li>入力PDFとGGUFは読み取り専用で開き、編集はできません。</li>
-<li>本文は読み取り専用で、入力・貼り付け・切り取り・削除・Undoは無効です。選択・コピーは可能です。</li>
-<li>状態とキャッシュはメモリ内で管理し、原文・訳文・読書位置・モデル選択・設定・診断情報および「この起動中に開いたPDF」の一覧はアプリ終了時に破棄されます。</li>
-<li>ファイル出力は非対応です。作業ファイル、一時ファイル、状態DB、設定、履歴、ログ、lockの自動作成、訳文やセッションの保存・書き出しは行いません。</li>
-<li>文章や診断情報をコピーすると、その内容がOSのクリップボードに渡されます。</li>
-</ul>
+<p>読み込んだPDFや翻訳モデル、ならびに画面上の本文はすべて読み取り専用として扱うため、元のファイルや表示内容をそのままの状態で保護します。テキストに対しては文字の入力や貼り付け、切り取り、削除、取り消しといった操作を省き、選択と複写に機能を集約しています。</p>
+<p>動作中の状態やキャッシュはメモリ上で管理します。そのため、原文や訳文、閲覧位置、モデル選択、設定、診断情報、および起動中に開いたPDFの一覧は、アプリを閉じた時点で消去します。また、作業用の一時ファイルやデータベース、設定、履歴、ログ、ロックファイルの生成、さらに訳文や作業状態の書き出しをすべて見送った設計により、すべての処理をメモリ内で完結させます。</p>
+<p>なお、文章や診断情報をコピーした際は、その内容がOSのクリップボードへ送られます。</p>
 </section>
 <section class="manual-section" id="troubleshooting">
 <h2>困ったときは</h2>
-<h3>モデル選択画面</h3>
-<p>設定方法は「<a href="#start">はじめに</a>」を、手動選択は「<a href="#model">モデル設定</a>」を参照してください。</p>
-<h3>訳文表示</h3>
-<p>訳文表示は「<a href="#translation">翻訳の設定</a>」で確認できます。</p>
-<h3>翻訳失敗</h3>
-<p>翻訳失敗時は「モデル設定」に表示されるエラーメッセージを確認し、該当する PLaMo 3 Translate 0.8B GGUF を選択してください。ページが長いと入力・出力容量や利用可能メモリの上限に達することがあります。メモリが不足している場合は、他のアプリを終了して確保してください。</p>
-<h3>読込失敗</h3>
-<p>パスワードが設定された PDF を開くと入力画面が表示されますので、そこでパスワードを入力してください。ページが破損して読込みエラーが起きた場合は、別のページへ移動することで閲覧できる場合があります。</p>
-<h3>再起動</h3>
-<p>再起動した場合は、PDF を再度開いて閲覧してください。</p>
-<h3>報告</h3>
-<p>「ヘルプ」→「診断情報をコピー…」で診断情報を確認・コピーできます。公開内容を確認したら、<a href="https://github.com/matsuvr/pdf_side_by_side_translator/issues">GitHub Issues</a> に OS、アプリのバージョン、問題が起きた操作、画面に表示された状態を記入してください。公開の可否を確認する前に PDF を添付することは禁止されています。</p>
-<h3>制約</h3>
-<p>画像で構成された PDF は文字抽出・翻訳・OCR の対象外であり、画像ページや文字情報が多く検索を省略したページは検索対象外です。非常に複雑なページでは自動文字抽出が停止することがありますが、文字抽出に失敗した場合でも閲覧は可能です。</p>
+<h3>モデル選択画面が現れた場合</h3>
+<p>初期設定の進め方は「<a href="#start">はじめに</a>」を、手動での切り替え手順は「<a href="#model">モデル設定</a>」をそれぞれご覧ください。</p>
+<h3>翻訳結果の調整</h3>
+<p>出力に関する各種の切り替えは「<a href="#translation">翻訳の設定</a>」で確認できます。</p>
+<h3>翻訳が途中で止まる場合</h3>
+<p>「モデル設定」の画面に現れるエラーメッセージを確かめたうえで、規定のPLaMo 3 Translate 0.8B GGUFを指定し直してください。また、分量が多いページでは入出力の許容量や空きメモリが上限へ届くことがあるため、動作中の他アプリを閉じて余力を確保すると改善する場合があります。</p>
+<h3>ファイルを開く際に支障が生じた場合</h3>
+<p>保護用の暗号がかけられた文書では入力欄が現れるため、解除用のパスワードを打ち込んでください。一部のページが壊れてエラーが生じた際でも、前後の画面へ移動すると残りの箇所を閲覧できるケースがあります。</p>
+<h3>再起動後の閲覧</h3>
+<p>終了時に作業状態が消去される仕様上、改めて起動した際は対象のPDFをもう一度指定して開いてください。</p>
+<h3>動作の異常を連絡する手順</h3>
+<p>開発元へ状況を伝える際は、まず「ヘルプ」メニューの「診断情報をコピー…」から動作環境を写し取ったうえで、外部へ公開しても安全な中身か目を通してください。そのうえで、<a href="https://github.com/matsuvr/pdf_side_by_side_translator/issues">GitHub Issues</a>へOSやアプリの版数、発生時の操作、画面の表示内容を書き添えてお送りください。なお、PDFファイルを添える場合は、あらかじめ第三者へ公開して安全な文書であるか必ず確認してください。</p>
+<h3>機能上の条件と仕様</h3>
+<p>テキスト情報を備えたPDFを対象に文字の取り出しと翻訳を行うため、画像データで構成された文書や紙面は閲覧機能によって表示します。文字量が極端に多いページや構造が極めて複雑なページでは、負荷を抑える目的で検索インデックスの作成や自動読み取りを見合わせる仕組みです。その際も、紙面の閲覧自体は通常通り続けられます。</p>
 </section>
 <section class="manual-section" id="licenses">
 <h2>モデルとライセンス</h2>
 <ul>
 <li>提供元：株式会社Preferred Networks</li>
 <li>アプリ：<a href="https://github.com/matsuvr/pdf_side_by_side_translator/blob/main/LICENSE">MITライセンス</a></li>
-<li>モデル：ZIPに同梱されている PLaMo-Community-ja.txt（PLaMoコミュニティライセンス契約）</li>
-<li>依存ライブラリとフォントのライセンス文書：ZIPに同梱されている THIRD_PARTY_NOTICES.txt に記載されています。</li>
-<li><a href="https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF">Preferred Networksの公式配布ページ</a></li>
-<li>利用条件を見る操作：アプリ内の「ヘルプ」→「ライセンス…」から確認できます。</li>
+<li>モデル：同梱の「PLaMo-Community-ja.txt」（PLaMoコミュニティライセンス契約）</li>
+<li>依存ライブラリとフォントの権利文書：同梱の「THIRD_PARTY_NOTICES.txt」</li>
+<li>公式配布案内：<a href="https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF">Preferred Networksの公式配布ページ</a></li>
+<li>アプリ内での閲覧方法：「ヘルプ」メニューの「ライセンス…」から各文書を呼び出せます。</li>
 </ul>
 </section>
 <div class="manual-end"><a class="text-link" href="#start">ページの先頭へ移動 ↑</a><a class="text-link" href="https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest">ダウンロードへ移動 →</a></div>
