@@ -8,8 +8,10 @@ namespace opt {
 inline constexpr std::uint32_t page_plan_version=2;
 struct ModelProfile {
     std::string id="plamo3-translation-pfml3-v1";
-    std::uint32_t prompt_version=1,chunk_algorithm_version=page_plan_version,completion_version=2,engine_cache_version=2;
-    std::string source_language="en",target_language="ja";
+    // prompt_version 2 drops the input lang attribute so PLaMo 3 Translate
+    // detects the source language; earlier cached prompts carried lang="en".
+    std::uint32_t prompt_version=2,chunk_algorithm_version=page_plan_version,completion_version=2,engine_cache_version=2;
+    std::string source_language="auto",target_language="ja";
 };
 struct ChunkRequest {
     WorkStamp stamp;

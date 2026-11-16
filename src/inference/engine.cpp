@@ -164,8 +164,12 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         }
         if (p.bos != llama_vocab_bos(p.vocab) || !llama_vocab_get_add_bos(p.vocab))
             throw std::runtime_error("BOS設定が対応profileと一致しません。");
+        // The input element carries no lang attribute: PLaMo 3 Translate then
+        // detects the language of each page itself. Pinning lang="en" here made
+        // every other language translate against a wrong hint, and this form is
+        // the one the model card's handwritten PFML3 prompt shows.
         p.prompt_prefix = tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
-                                   "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>", true, true);
+                                   "<|plamo:tag|>input<|plamo:msg|>", true, true);
         const std::string output = "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>";
         p.plain_suffix = tokenize(output + "ja<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>", false, true);
         // The official template normalizes target_lang="ja(easy)" to PFML3's ja-easy.

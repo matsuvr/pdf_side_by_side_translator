@@ -104,3 +104,20 @@ completed with Japanese output (about 0.07–0.15 s per chunk in this run).
 The injected failure is available only in the test executable. This verifies
 cleanup/rebuild with actual resources; it does not reproduce a physical GPU
 or driver failure. The normal Metal and forced CPU paths were also exercised.
+
+## Source language detection
+
+The `input` element used to pin `<|plamo:key|>lang<|plamo:val|>en`, so every
+page was translated against an English hint even when it was written in another
+language. The app now omits that attribute: PLaMo 3 Translate detects the
+language of each page, which is the handwritten PFML3 prompt shown on the model
+card. `ModelProfile::prompt_version` is 2 and `source_language` is `auto`, so
+nothing cached under the English-hinted prompt is reused.
+
+The inference probe still checks the pinned official token vectors. Those were
+tokenized with `source_lang="en"`, so the probe rebuilds each official vector by
+inserting the four attribute tokens, and separately checks that the prompt the
+engine builds is that vector without them. With the bundled Q4_K_M model the
+plain and easy styles both translated Chinese (本设备有三个传感器。它不使用网络。)
+and French (Cet appareil dispose de trois capteurs.) into Japanese, and the
+probe now fails if a translation does not contain Japanese kana.

@@ -17,6 +17,19 @@ int main(int argc, char** argv) {
         if (positional_count > 3) {
             std::ifstream fixture(argv[3]);
             if (!fixture) throw std::runtime_error("Fixture not found");
+            // The pinned official vectors were tokenized with source_lang="en".
+            // The app omits the input lang attribute so PLaMo detects the source
+            // language, so the reference is rebuilt by inserting the attribute
+            // between the input tag and its body. Comparing both forms keeps the
+            // official tokenizer pinned while covering the app's own prompt.
+            const auto reference_prefix=engine.tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
+                "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>",true,true);
+            const auto detected_prefix=engine.tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
+                "<|plamo:tag|>input<|plamo:msg|>",true,true);
+            const auto plain_tail=engine.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
+                "<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>",false,true);
+            const auto easy_tail=engine.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja-easy"
+                "<|plamo:msg|>",false,true);
             std::string line;
             int count = 0;
             while (std::getline(fixture, line)) {
@@ -32,8 +45,18 @@ int main(int argc, char** argv) {
                 std::istringstream numbers(expected);
                 int id; while(numbers>>id) ids.push_back(id);
                 if(form!="plain"&&form!="easy") throw std::runtime_error("Unknown fixture style: "+form);
-                auto actual=engine.prepare(source,opt::form_from_setting(form));
-                if(ids!=actual.tokens) throw std::runtime_error("Tokenizer mismatch: "+name);
+                const auto style=opt::form_from_setting(form);
+                const auto& tail=style==opt::Form::Easy?easy_tail:plain_tail;
+                const auto body=engine.tokenize(source,false,false);
+                auto official=reference_prefix;
+                official.insert(official.end(),body.begin(),body.end());
+                official.insert(official.end(),tail.begin(),tail.end());
+                if(ids!=official) throw std::runtime_error("Official prompt vector mismatch: "+name);
+                auto detected=detected_prefix;
+                detected.insert(detected.end(),body.begin(),body.end());
+                detected.insert(detected.end(),tail.begin(),tail.end());
+                if(engine.prepare(source,style).tokens!=detected)
+                    throw std::runtime_error("Source-language detection prompt mismatch: "+name);
                 ++count;
             }
             if (!count) throw std::runtime_error("Empty tokenizer fixture");
@@ -51,7 +74,7 @@ int main(int argc, char** argv) {
         }
         if(rejected) throw std::runtime_error("Reserved marker should be filtered, not rejected");
         const auto prefix=engine.tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
-            "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>",true,true);
+            "<|plamo:tag|>input<|plamo:msg|>",true,true);
         const auto suffix=engine.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
             "<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>",false,true);
         std::string boundary_run;
@@ -84,14 +107,27 @@ int main(int argc, char** argv) {
         if(!preparation_cancelled)throw std::runtime_error("Preparation ignored cancellation");
         std::cout << "bounded_preparation_private_boundaries_and_cancellation=passed\n";
         if(prepare_only)return 0;
+        auto has_kana=[](std::string_view text){
+            for(std::size_t i=0;i+2<text.size();++i)
+                if(static_cast<unsigned char>(text[i])==0xE3){
+                    const auto second=static_cast<unsigned char>(text[i+1]);
+                    if(second==0x81||second==0x82||second==0x83)return true;
+                }
+            return false;
+        };
         for (auto form : {opt::Form::Plain,opt::Form::Easy}) {
             std::cout << "style=" << opt::form_setting(form) << '\n';
+            // The input carries no language hint, so the Chinese and French
+            // samples exercise the detected source language end to end.
             for (const auto* input : {"The device has 3 sensors. It does not use the network.",
-                                      "This application translates documents offline."}) {
+                                      "This application translates documents offline.",
+                                      "本设备有三个传感器。它不使用网络。",
+                                      "Cet appareil dispose de trois capteurs."}) {
                 auto prepared=engine.prepare(input,form);
                 auto result=engine.generate(prepared,[](std::string_view delta){std::cout<<delta<<std::flush;});
                 std::cout << "\nreason=" << static_cast<int>(result.reason) << " generated=" << result.output_tokens << '\n';
                 if(result.reason!=opt::FinishReason::Completed) throw std::runtime_error("Incomplete generation");
+                if(!has_kana(result.text)) throw std::runtime_error("Translation did not come back in Japanese");
             }
         }
         auto prepared=engine.prepare("The device has 3 sensors. It does not use the network.",opt::Form::Plain);
