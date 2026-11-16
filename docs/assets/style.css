@@ -220,14 +220,6 @@ p + p { margin-top: 0.9em; }
 }
 .feature h3 { margin: 10px 0 8px; font-size: 16px; }
 .feature p { font-size: 13.5px; line-height: 1.7; color: var(--text); }
-.feature-note {
-  font-size: 11.5px;
-  color: var(--muted);
-  margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid #f0f2f5;
-  width: 100%;
-}
 
 /* Download Section: Native installer panel aesthetic */
 .download-section {
