@@ -10,7 +10,7 @@ Built with PLaMo
 
 ## 使い方
 
-1. [リリースページ](https://github.com/matsuvr/pdf_side_by_side_translator/releases/latest)から、使うOSに対応した **0.1.2 以降**のアプリ用ZIPをダウンロードし、フォルダーごと展開します。ZIPにはアプリ、翻訳用GGUF、ライセンス文書が入っています。
+1. [リリースページ](https://github.com/matsuvr/pdf_side_by_side_translator/releases)から、使うOSに対応した **0.1.2 以降**のアプリ用ZIPをダウンロードし、フォルダーごと展開します。ZIPにはアプリ、翻訳用GGUF、ライセンス文書が入っています。
 2. Windowsでは `offline-pdf-translator.exe`、Macでは `Offline PDF Translator.app` を起動します。同じフォルダーの `plamo-3-translate-0.8b-Q4_K_M.gguf` を自動で読み込みます。
 3. PDFを開きます。左に原文、右に現在のページの日本語訳が表示されます。
 
