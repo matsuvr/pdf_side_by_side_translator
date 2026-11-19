@@ -5,6 +5,7 @@
 #include "pdf/delivery_inbox.hpp"
 #ifdef OPT_PAGE_IMAGE_READING
 #include "ocr/image_reading.hpp"
+#include "image_reading_assets.hpp"
 #include "core/utf8.hpp"
 #endif
 #include "platform/font.hpp"
@@ -70,7 +71,7 @@ wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(IO_WAKE,wxThreadEvent);
 #ifdef OPT_PAGE_IMAGE_READING
 wxDEFINE_EVENT(PAGE_IMAGE_RESULT,wxThreadEvent);
-struct PageImageResult {DocumentEpoch document;PageIndex page;std::uint64_t generation;std::string text,error;};
+struct PageImageResult {DocumentEpoch document;PageIndex page;std::uint64_t generation;ImageReadingResult reading;std::string error;};
 #endif
 enum class Command { Open, Close, Previous, Next, GoPage, FocusPage, FitWidth, FitPage, Zoom, Left, Right, Equal, TextSize, Copy, SelectAll, CopySource, Find, FindNext, FindPrevious, CloseSearch, Automatic, Plain, Easy, ModelSettings, Help, Diagnostics, Licenses, About, Quit };
 enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,FitPage,Zoom,Left,Right,Equal,TextSize,Help,Diagnostics,Licenses,About,CopySource,Find,FindNext,FindPrevious,CloseSearch,Automatic,Plain,Easy,ModelSettings };
@@ -172,7 +173,7 @@ struct ApplicationController::Impl {
     std::optional<std::uint64_t> pending_image;
     std::uint64_t image_generation=0;
     std::shared_ptr<const PageLayout> image_layout;
-    ImageLanguage pending_image_language=ImageLanguage::English;
+    std::string_view pending_image_language;
 #endif
     wxTimer search_timer;
     wxTimer translate_timer,stream_timer;
@@ -429,7 +430,8 @@ struct ApplicationController::Impl {
     void request_image_reading(){
         if(closing||document_state!=DocumentState::Ready||pending_image||image_running)return;
         auto lang=image_language->GetSelection();
-        pending_image_language=lang==1?ImageLanguage::SimplifiedChinese:lang==2?ImageLanguage::TraditionalChinese:ImageLanguage::English;
+        pending_image_language=lang>0&&static_cast<std::size_t>(lang)<=std::size(image_languages)
+            ?image_languages[lang-1].tag:std::string_view{};
         pending_image=++image_generation;update_image_controls();
         if(!pdf->render_page_image(epoch,page,canvas->rotation(),*pending_image)){
             pending_image.reset();update_image_controls();
@@ -450,7 +452,7 @@ struct ApplicationController::Impl {
         image_running=true;
         try{
             image_worker=std::jthread([this,pixels,dpi,lang=pending_image_language,result,wake=std::move(wake)](std::stop_token stop) mutable {
-                try{result->text=read_page_image(pixels->bgra.data(),pixels->width,pixels->height,pixels->stride,dpi,lang,stop,read_bundled_image_model);}
+                try{result->reading=read_page_image(pixels->bgra.data(),pixels->width,pixels->height,pixels->stride,dpi,lang,stop,read_bundled_image_model);}
                 catch(const std::exception&){result->error="ページ画像から文字を読み取れませんでした。";}
                 image_running=false;
                 if(!closing)wxQueueEvent(&owner,wake.release());
@@ -465,17 +467,19 @@ struct ApplicationController::Impl {
             update_image_controls();return;
         }
         pending_image.reset();update_image_controls();
-        if(!result->error.empty()||!has_usable_text(result->text)){
+        if(!result->error.empty()||!has_usable_text(result->reading.text)){
             frame->SetStatusText(result->error.empty()?wxString(wxS("ページ画像から文字を見つけられませんでした。")):wxString::FromUTF8(result->error),0);
             return;
         }
         auto found=std::make_shared<PageLayout>();
         found->page=page;found->availability=PageLayout::Availability::TextAvailable;
         // No PDF character coordinates: never replace canvas/search layout.
-        found->layout_version=0x80000001U;found->reading_text_utf8=std::move(result->text);
+        found->layout_version=0x80000001U;found->reading_text_utf8=std::move(result->reading.text);
         image_layout=std::move(found);
         invalidate_translation();
-        frame->SetStatusText(wxS("ページ画像から文字を読み取りました。"),0);
+        if(result->reading.language_uncertain)
+            frame->SetStatusText(wxS("言語は特定できませんでした。読み取りが不自然な場合は言語を選び直してください。"),0);
+        else frame->SetStatusText(wxS("ページ画像の読み取り: ")+wxString::FromUTF8(result->reading.label),0);
         schedule_translation();
     }
 #endif
@@ -1222,8 +1226,10 @@ struct ApplicationController::Impl {
         read_image_button=new wxButton(left,wxID_ANY,wxS("このページを画像分析で読み込む"));
         read_image_button->SetToolTip(wxS("表示中のページを画像として読み取り、翻訳の原文に使います。"));
         image_language=new wxChoice(left,wxID_ANY);
-        image_language->Append(wxS("英語"));image_language->Append(wxS("中国語（簡体字）と英語"));
-        image_language->Append(wxS("中国語（繁体字）と英語"));image_language->SetSelection(0);
+        image_language->Append(wxS("言語を自動で判別"));
+        for(const auto& lang:image_languages)
+            image_language->Append(wxString::FromUTF8(lang.label.data(),lang.label.size()));
+        image_language->SetSelection(0);
         image_language->SetName(wxS("画像から読み取る文字の言語"));
         image_row->Add(read_image_button,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);
         image_row->Add(image_language,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);

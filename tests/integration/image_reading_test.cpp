@@ -1,4 +1,5 @@
 #include "ocr/image_reading.hpp"
+#include "image_reading_assets.hpp"
 #include "pdf/pdf_service.hpp"
 #include <chrono>
 #include <condition_variable>
@@ -44,18 +45,33 @@ int main(int argc,char** argv){
         if(e->image_dpi!=220||p.stride<p.width||p.width*p.height>image_reading_max_area||
            p.bgra.size()!=static_cast<std::size_t>(p.stride)*p.height)
             throw std::runtime_error("Unexpected page raster layout");
-        const auto read=[&](ImageLanguage language,std::stop_token stop={}){
+        const auto read=[&](std::string_view language,std::stop_token stop={}){
             return read_page_image(p.bgra.data(),p.width,p.height,p.stride,e->image_dpi,
                                    language,stop,read_bundled_image_model);
         };
         std::stop_source canceled;canceled.request_stop();
-        if(!read(ImageLanguage::English,canceled.get_token()).empty())
+        if(!read("en",canceled.get_token()).text.empty())
             throw std::runtime_error("Canceled image request produced text");
-        if(read(ImageLanguage::English).find("3 sensors")==std::string::npos)
+        if(read("en").text.find("3 sensors")==std::string::npos)
             throw std::runtime_error("Embedded English model did not recognise the fixture");
-        for(auto lang:{ImageLanguage::SimplifiedChinese,ImageLanguage::TraditionalChinese}){
-            if(read(lang).empty())
+        for(auto lang:{"zh-hans","zh-hant"}){
+            if(read(lang).text.empty())
                 throw std::runtime_error("Embedded Chinese/English model pair did not initialise or recognise text");
+        }
+        const auto automatic=read("");
+        if(automatic.text.find("3 sensors")==std::string::npos)
+            throw std::runtime_error("Automatic mode did not recognise the English fixture");
+        if(automatic.language_uncertain!=automatic.label.empty())
+            throw std::runtime_error("Uncertain language must never display a specific language label");
+        if(std::size(image_languages)!=53)
+            throw std::runtime_error("PLaMo language roster is incomplete");
+        // Every Windows resource must be loadable even if this small test
+        // fixture has no meaningful text in that language.
+        std::vector<unsigned char> blank(256*128,255);
+        for(const auto& lang:image_languages){
+            const auto verified=read_page_image(blank.data(),256,128,256,220,lang.tag,{},read_bundled_image_model);
+            if(verified.label!=lang.label||verified.language_uncertain)
+                throw std::runtime_error("Missing language data: "+std::string(lang.tag));
         }
         pdf.page_info(1,1);wait(PdfEvent::Kind::PageInfo);
         if(pdf.render_page_image(1,0,0,43)||!pdf.render_page_image(1,1,0,44))

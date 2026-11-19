@@ -24,10 +24,10 @@ include(CMakePackageConfigHelpers)
 write_basic_package_version_file("${image_lept_config}/LeptonicaConfigVersion.cmake"
     VERSION 1.85.0 COMPATIBILITY AnyNewerVersion)
 set(Leptonica_DIR "${image_lept_config}" CACHE PATH "" FORCE)
-foreach(flag DISABLE_TIFF DISABLE_ARCHIVE DISABLE_CURL GRAPHICS_DISABLED DISABLED_LEGACY_ENGINE WIN32_MT_BUILD)
+foreach(flag DISABLE_TIFF DISABLE_ARCHIVE DISABLE_CURL GRAPHICS_DISABLED WIN32_MT_BUILD)
     set(${flag} ON CACHE BOOL "" FORCE)
 endforeach()
-foreach(flag OPENMP_BUILD BUILD_TRAINING_TOOLS BUILD_TESTS ENABLE_NATIVE ENABLE_LTO INSTALL_CONFIGS)
+foreach(flag DISABLED_LEGACY_ENGINE OPENMP_BUILD BUILD_TRAINING_TOOLS BUILD_TESTS ENABLE_NATIVE ENABLE_LTO INSTALL_CONFIGS)
     set(${flag} OFF CACHE BOOL "" FORCE)
 endforeach()
 add_subdirectory("${OPT_DEPENDENCIES}/Tesseract" third_party/image-tess EXCLUDE_FROM_ALL)
@@ -35,3 +35,49 @@ add_library(opt_image_reading STATIC "${CMAKE_CURRENT_LIST_DIR}/../src/ocr/image
 target_include_directories(opt_image_reading PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../src")
 target_link_libraries(opt_image_reading PRIVATE libtesseract)
 target_include_directories(opt_image_reading PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/third_party/image-tess/include")
+
+set(cld_root "${OPT_DEPENDENCIES}/CLD2")
+if(NOT EXISTS "${cld_root}/public/compact_lang_det.h")
+    message(FATAL_ERROR "Missing CLD2: run python scripts/bootstrap_image_reading.py")
+endif()
+# Upstream compile_libs.sh, full statically linked language tables.
+set(cld_sources cldutil cldutil_shared compact_lang_det compact_lang_det_hint_code
+    compact_lang_det_impl debug fixunicodevalue generated_entities generated_language generated_ulscript
+    getonescriptspan lang_script offsetmap scoreonescriptspan tote utf8statetable
+    cld_generated_cjk_uni_prop_80 cld2_generated_cjk_compatible cld_generated_cjk_delta_bi_32
+    generated_distinct_bi_0 cld2_generated_quad0122 cld2_generated_deltaocta0122
+    cld2_generated_distinctocta0122 cld_generated_score_quad_octa_0122)
+list(TRANSFORM cld_sources PREPEND "${cld_root}/internal/")
+list(TRANSFORM cld_sources APPEND ".cc")
+add_library(opt_cld2 STATIC ${cld_sources})
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(opt_cld2 PRIVATE /clang:-Wno-c++11-narrowing)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(opt_cld2 PRIVATE -Wno-narrowing)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(opt_cld2 PRIVATE -Wno-c++11-narrowing)
+endif()
+target_include_directories(opt_cld2 PRIVATE "${cld_root}/internal")
+target_include_directories(opt_cld2 INTERFACE "${cld_root}")
+target_link_libraries(opt_image_reading PRIVATE opt_cld2)
+
+set(OPT_IMAGE_MODEL_DIR "${PROJECT_SOURCE_DIR}/.work/resources/tessdata" CACHE PATH "Verified OCR data")
+set(image_asset_root "${CMAKE_CURRENT_LIST_DIR}/..")
+set(image_generated "${CMAKE_CURRENT_BINARY_DIR}/image-reading")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+file(STRINGS "${image_asset_root}/deps/image_reading_models.tsv" image_model_rows)
+set(image_model_files)
+foreach(row IN LISTS image_model_rows)
+    if(row MATCHES "^([a-zA-Z_/]+)[ 	]+[0-9a-f]+")
+        list(APPEND image_model_files "${OPT_IMAGE_MODEL_DIR}/${CMAKE_MATCH_1}.traineddata")
+    endif()
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${image_asset_root}/scripts/image_reading_assets.py"
+    "${image_asset_root}/deps/image_reading_languages.tsv"
+    "${image_asset_root}/deps/image_reading_models.tsv" ${image_model_files})
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${image_asset_root}/scripts/image_reading_assets.py"
+    --out "${image_generated}" --model-dir "${OPT_IMAGE_MODEL_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+target_include_directories(opt_image_reading PUBLIC "${image_generated}")
+set(image_rc "${image_generated}/windows-image-reading.rc")
+set_source_files_properties("${image_rc}" PROPERTIES OBJECT_DEPENDS "${image_model_files}")

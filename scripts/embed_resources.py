@@ -11,8 +11,8 @@ def main():
     for name,path in inputs.items():
         data=path.read_bytes()
         if name=='licenses' and args.image_reading:
-            data+=b"\n\nExperimental page image reading: Tesseract 5.5.0 and tessdata_fast (Apache 2.0); Leptonica 1.85.0 (BSD 2-Clause).\n"
-            for name_license in ('Tesseract-Apache-2.0.txt','Leptonica.txt'):
+            data+=b"\n\nExperimental page image reading: Tesseract 5.5.0 and tessdata_fast and CLD2 (Apache 2.0); Leptonica 1.85.0 (BSD 2-Clause).\n"
+            for name_license in ('Tesseract-Apache-2.0.txt','Leptonica.txt','CLD2-Apache-2.0.txt'):
                 data+=b"\n"+(root/'licenses'/name_license).read_bytes()
         lines.append(f'constexpr unsigned char {name}_data[]={{')
         lines.extend(','.join(str(n) for n in data[i:i+32])+',' for i in range(0,len(data),32))

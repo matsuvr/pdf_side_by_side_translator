@@ -1,3 +1,0 @@
-211 RCDATA "@OPT_IMAGE_MODEL_DIR@/eng.traineddata"
-212 RCDATA "@OPT_IMAGE_MODEL_DIR@/chi_sim.traineddata"
-213 RCDATA "@OPT_IMAGE_MODEL_DIR@/chi_tra.traineddata"
