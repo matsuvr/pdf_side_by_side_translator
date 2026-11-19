@@ -8,6 +8,7 @@
 
 namespace opt {
 class MappedFile;
+struct OpenFileStatus;
 // Owns an open read-only file object. Path replacement cannot redirect reads.
 class FileSnapshot {
 public:
@@ -17,6 +18,7 @@ public:
     FileSnapshot& operator=(const FileSnapshot&)=delete;
     FileSignature signature() const;
     const FileSignature& initial_signature() const;
+    bool matches_initial_signature() const;
     std::size_t read_at(std::uint64_t offset,std::span<std::byte> output) const;
     // Caller owns and closes the stream. Hash reads never share its seek position.
     std::FILE* open_stream() const;
@@ -24,7 +26,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     explicit FileSnapshot(std::unique_ptr<Impl> impl);
-    static std::shared_ptr<const FileSnapshot> duplicate(std::intptr_t native,FileSignature original);
+    static std::shared_ptr<const FileSnapshot> duplicate(std::intptr_t native,const OpenFileStatus& status,FileSignature original);
     friend class MappedFile;
 };
 }

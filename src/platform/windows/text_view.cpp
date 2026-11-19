@@ -44,18 +44,32 @@ bool replace_range(HWND handle, LONG start, const wxString& suffix) {
 }
 }
 void update_readonly_text(wxTextCtrl& control, const std::string& before, const std::string& after, bool reset) {
-    const auto old_display = rich_edit_text(before);
-    const auto new_display = rich_edit_text(after);
-    std::size_t common = 0;
-    if (!reset) {
-        if (old_display == new_display) return;
-        while (common < std::min(old_display.size(), new_display.size()) && old_display[common] == new_display[common])
-            ++common;
-        while (common < new_display.size() && common > 0 && (static_cast<unsigned char>(new_display[common]) & 0xc0) == 0x80)
-            --common;
+    LONG start = 0;
+    wxString suffix;
+    bool appended = false;
+    const auto tail = reset ? std::string_view{} : appended_utf8_suffix(before, after);
+    // A CRLF across the boundary must be canonicalized with the prefix.
+    if (!tail.empty() && (before.back() != '\r' || tail.front() != '\n')) {
+        if (const auto units = utf16_units(before, true)) {
+            start = static_cast<LONG>(*units);
+            suffix = wxString::FromUTF8(rich_edit_text(tail));
+            appended = true;
+        }
     }
-    const auto start = static_cast<LONG>(wxString::FromUTF8(new_display.data(), common).length());
-    const auto suffix = wxString::FromUTF8(new_display.data() + common, new_display.size() - common);
+    if (!appended) {
+        const auto old_display = rich_edit_text(before);
+        const auto new_display = rich_edit_text(after);
+        std::size_t common = 0;
+        if (!reset) {
+            if (old_display == new_display) return;
+            while (common < std::min(old_display.size(), new_display.size()) && old_display[common] == new_display[common])
+                ++common;
+            while (common < new_display.size() && common > 0 && (static_cast<unsigned char>(new_display[common]) & 0xc0) == 0x80)
+                --common;
+        }
+        start = static_cast<LONG>(wxString::FromUTF8(new_display.data(), common).length());
+        suffix = wxString::FromUTF8(new_display.data() + common, new_display.size() - common);
+    }
     const auto handle = static_cast<HWND>(control.GetHandle());
     CHARRANGE selection{};
     POINT position{};

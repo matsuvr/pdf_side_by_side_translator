@@ -66,6 +66,7 @@ int main(){
         const auto timestamp=std::filesystem::last_write_time(path);
         auto file=opt::FileSnapshot::open(path);opt::MappedFile mapping(path);auto mapped_file=mapping.snapshot();
         check(file->initial_signature()==mapped_file->initial_signature(),"Mapping and hash do not identify the same file object");
+        check(file->matches_initial_signature()&&mapped_file->matches_initial_signature(),"Both open handles must match their initial metadata");
         const auto alias=root/"regular-file-alias.gguf";std::error_code link_error;std::filesystem::create_symlink(path,alias,link_error);
         if(!link_error){
             const auto aliased=opt::FileSnapshot::open(alias);opt::MappedFile aliased_mapping(alias);

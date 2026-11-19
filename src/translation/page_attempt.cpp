@@ -81,7 +81,7 @@ bool PageAttempt::finished(const WorkStamp& stamp,const GenerationResult& result
     if(!accepts(stamp))return false;
     auto& c=data_.chunks.front();c.reason=result.reason;c.output_tokens=result.output_tokens;
     if(result.text.size()>max_translation_bytes)c.reason=FinishReason::OutputLimit;
-    else{
+    else if(result.text!=c.text){
         try{validate_utf8(result.text);c.text=result.text;}
         catch(const Utf8Error&){c.reason=FinishReason::InvalidEncoding;} // Keep the last valid streamed prefix.
     }
@@ -129,10 +129,11 @@ void PageAttempt::settle(){
 std::string PageAttempt::display_text()const{
     if(data_.chunks.empty())return {};
     const auto& page=data_.chunks.front();
-    auto text=page.text;
-    if(page.state==LeafState::Failed||page.state==LeafState::Partial){
-        text+="\n［";text+=finish_reason_label(page.reason);text+="：このページの翻訳は未完了です］\n";
-    }
+    if(page.state!=LeafState::Failed&&page.state!=LeafState::Partial)return page.text;
+    constexpr std::string_view opening="\n［",closing="：このページの翻訳は未完了です］\n";
+    const auto reason=finish_reason_label(page.reason);
+    std::string text;text.reserve(page.text.size()+opening.size()+reason.size()+closing.size());
+    text+=page.text;text+=opening;text+=reason;text+=closing;
     return text;
 }
 }
