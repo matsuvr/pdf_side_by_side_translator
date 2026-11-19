@@ -4,6 +4,7 @@
 #include "platform/mapped_file.hpp"
 #include "platform/clear_secret.hpp"
 #include "pdf/layout.hpp"
+#include "ocr/image_reading.hpp"
 #include "fpdfview.h"
 #include "fpdf_text.h"
 #include "fpdf_edit.h"
@@ -119,6 +120,8 @@ struct PdfService::Impl {
     std::unique_ptr<OpenRequest> opening;
     std::optional<std::pair<DocumentEpoch,PageIndex>> requested_page;
     std::optional<ViewRequest> requested_view;
+    struct PageImageRequest {DocumentEpoch document;PageIndex page;int rotation;std::uint64_t generation;};
+    std::optional<PageImageRequest> requested_image;
     std::optional<PdfSearchRequest> searching;
     std::deque<std::pair<DocumentEpoch,PageIndex>> extraction;
     std::optional<std::pair<DocumentEpoch,PageIndex>> extracting;
@@ -203,11 +206,13 @@ struct PdfService::Impl {
                 std::unique_ptr<OpenRequest> open;
                 std::optional<std::pair<DocumentEpoch,PageIndex>> page_request;
                 std::optional<ViewRequest> viewport;
+                std::optional<PageImageRequest> image_request;
                 {
                     std::lock_guard lock(mutex);
                     if(opening)open=std::move(opening);
                     else if(requested_page){page_request=requested_page;requested_page.reset();}
                     else if(requested_view){viewport=std::move(requested_view);requested_view.reset();}
+                    else if(requested_image)image_request=std::exchange(requested_image,{});
                 }
                 PageIndex operation_page=view?view->page:0;
                 std::uint64_t operation_query=0;
@@ -295,6 +300,61 @@ struct PdfService::Impl {
                         PdfEvent e;e.kind=PdfEvent::Kind::ViewReady;e.document=epoch;e.page=view->page;
                         e.key={epoch,view->page,view->width,view->height,view->rotation,pdf_render_flags,0,0};
                         e.transform=transform(get_page(view->page)->page,view->width,view->height,view->rotation);emit(std::move(e));
+                    }
+                    if(image_request){
+                        const auto q=*image_request;
+                        PdfEvent e;e.kind=PdfEvent::Kind::PageImage;e.document=q.document;
+                        e.page=q.page;e.image_generation=q.generation;
+                        const auto stale=[&]{return stopping.load()||requested_document.load()!=q.document||displayed_page.load()!=q.page;};
+                        if(stale()||q.document!=epoch)continue;
+                        try{
+                            if(active){tiles.push_front(active->key);active.reset();}
+                            auto p=get_page(q.page);
+                            const auto info=describe(p->page);
+                            const auto w=(q.rotation%2)?info.height_points:info.width_points;
+                            const auto h=(q.rotation%2)?info.width_points:info.height_points;
+                            if(!std::isfinite(w)||!std::isfinite(h)||w<=0||h<=0)
+                                throw std::runtime_error("ページの寸法を取得できません。");
+                            const auto scale=std::min({image_reading_dpi/72.0,(image_reading_max_side-4)/w,
+                                (image_reading_max_side-4)/h,std::sqrt((image_reading_max_area-16384.0)/w/h)});
+                            auto pixels=std::make_shared<RasterBuffer>();
+                            pixels->width=std::max(1,static_cast<int>(w*scale));
+                            pixels->height=std::max(1,static_cast<int>(h*scale));
+                            // PageImage events carry 8-bit grayscale; canvas tiles remain BGRA.
+                            pixels->stride=(pixels->width+3)&~3;
+                            pixels->bgra.resize(static_cast<std::size_t>(pixels->stride)*pixels->height,255);
+                            const auto bitmap=FPDFBitmap_CreateEx(pixels->width,pixels->height,FPDFBitmap_Gray,
+                                pixels->bgra.data(),pixels->stride);
+                            if(!bitmap)throw std::runtime_error("ページ画像を確保できません。");
+                            struct Cleanup {
+                                FPDF_PAGE page;FPDF_BITMAP bitmap;
+                                ~Cleanup(){FPDF_RenderPage_Close(page);FPDFBitmap_Destroy(bitmap);}
+                            } cleanup{p->page,bitmap};
+                            struct Pause : IFSDK_PAUSE {
+                                const decltype(stale)* is_stale;
+                                Clock::time_point deadline;
+                            } pause;
+                            const auto limit=Clock::now()+std::chrono::seconds(8);
+                            pause.version=1;pause.is_stale=&stale;
+                            pause.NeedToPauseNow=[](IFSDK_PAUSE* x)->FPDF_BOOL{
+                                const auto* p=static_cast<const Pause*>(x);
+                                return (*p->is_stale)()||Clock::now()>=p->deadline;
+                            };
+                            pause.deadline=Clock::now()+std::chrono::milliseconds(8);
+                            int result=FPDF_RenderPageBitmap_Start(bitmap,p->page,0,0,pixels->width,pixels->height,q.rotation,
+                                FPDF_GRAYSCALE|FPDF_RENDER_LIMITEDIMAGECACHE,&pause);
+                            while(result==FPDF_RENDER_TOBECONTINUED&&!stale()&&Clock::now()<limit){
+                                pause.deadline=Clock::now()+std::chrono::milliseconds(8);
+                                result=FPDF_RenderPage_Continue(p->page,&pause);
+                            }
+                            if(stale())continue;
+                            file->check();
+                            if(result!=FPDF_RENDER_DONE)throw std::runtime_error("ページ画像の作成が完了しませんでした。");
+                            e.image_dpi=std::max(1,static_cast<int>(std::lround(scale*72)));
+                            e.pixels=std::move(pixels);
+                        }catch(const std::exception& error){e.message=error.what();}
+                        if(!stale())emit(std::move(e));
+                        continue;
                     }
                     if(active){
                         active->deadline=Clock::now()+std::chrono::milliseconds(10);
@@ -423,7 +483,7 @@ struct PdfService::Impl {
                     e.code=operation_query?"PdfSearch":open?"PdfOpen":"PdfPage";e.query_generation=operation_query;e.message=error.what();emit(std::move(e));
                 }
                 std::unique_lock lock(mutex);
-                cv.wait(lock,[&]{return stopping.load()||opening||requested_page||requested_view||searching||!extraction.empty()||text_work;});
+                cv.wait(lock,[&]{return stopping.load()||opening||requested_page||requested_view||requested_image||searching||!extraction.empty()||text_work;});
             }
         }catch(...){
             stopping=true;
@@ -438,19 +498,27 @@ void PdfService::open(DocumentEpoch epoch,const std::filesystem::path& path,std:
     std::lock_guard lock(impl_->mutex);impl_->opening=std::make_unique<Impl::OpenRequest>(epoch,path,password);
     impl_->requested_document=epoch;
     impl_->displayed_page=0;
-    impl_->requested_view.reset();impl_->requested_page.reset();impl_->extraction.clear();impl_->searching.reset();
+    impl_->requested_view.reset();impl_->requested_image.reset();impl_->requested_page.reset();impl_->extraction.clear();impl_->searching.reset();
     ++impl_->request_generation;impl_->cv.notify_one();
 }
 void PdfService::close(DocumentEpoch epoch){open(epoch,{});}
 void PdfService::page_info(DocumentEpoch epoch,PageIndex page){
     std::lock_guard lock(impl_->mutex);if(epoch!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->requested_page=std::pair{epoch,page};
     impl_->displayed_page=page;
+    if(impl_->requested_image&&impl_->requested_image->page!=page)impl_->requested_image.reset();
     ++impl_->request_generation;impl_->cv.notify_one();
 }
 void PdfService::viewport(ViewRequest request){
     if(request.tiles.size()>64)request.tiles.resize(64);
     std::lock_guard lock(impl_->mutex);if(request.document!=impl_->requested_document.load()||impl_->stopping.load())return;impl_->displayed_page=request.page;impl_->requested_view=std::move(request);
     ++impl_->request_generation;impl_->cv.notify_one();
+}
+bool PdfService::render_page_image(DocumentEpoch epoch,PageIndex page,int rotation,std::uint64_t generation){
+    std::lock_guard lock(impl_->mutex);
+    if(impl_->stopping.load()||impl_->finished.load()||epoch!=impl_->requested_document.load()||
+       page!=impl_->displayed_page.load()||rotation<0||rotation>3||impl_->requested_image)return false;
+    impl_->requested_image=Impl::PageImageRequest{epoch,page,rotation,generation};
+    impl_->cv.notify_one();return true;
 }
 bool PdfService::extract(DocumentEpoch epoch,PageIndex page){
     std::lock_guard lock(impl_->mutex);const auto key=std::pair{epoch,page};

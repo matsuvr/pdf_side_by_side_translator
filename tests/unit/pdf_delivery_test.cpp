@@ -23,6 +23,17 @@ int main(){try{
     excessive=std::make_shared<PdfEvent>();excessive->kind=PdfEvent::Kind::TileReady;excessive->document=3;excessive->pixels=huge_pixels;
     inbox.push(excessive);batch=inbox.take();
     require(batch.raster_bytes==0&&batch.events.front()->kind==PdfEvent::Kind::Failed,"One oversized raster escaped the inbox budget");
+    auto image=std::make_shared<PdfEvent>(*excessive);image->kind=PdfEvent::Kind::PageImage;image->image_generation=5;
+    inbox.push(image);batch=inbox.take();
+    require(batch.raster_bytes==0&&batch.events.front()->kind==PdfEvent::Kind::PageImage&&
+        batch.events.front()->image_generation==5&&!batch.events.front()->pixels,
+        "Oversized page image should notify the matching request of failure");
+    image->pixels=pixels;inbox.push(image);
+    for(unsigned i=0;i<32;++i){
+        auto e=std::make_shared<PdfEvent>();e->kind=PdfEvent::Kind::TileReady;
+        e->document=3;e->page=i;e->pixels=pixels;inbox.push(e);
+    }
+    batch=inbox.take();require(batch.lost_page_image,"Dropped page image should clear the GUI busy state");
     require(pdf_render_flags==(0x001|0x200),"Tile identity lost PDFium's limited image cache flag");
     std::cout<<"bounded pixels/layout deliveries, retry acknowledgements and single wake passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
