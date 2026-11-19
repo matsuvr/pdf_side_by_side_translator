@@ -83,16 +83,21 @@ PdfCanvas::PdfCanvas(wxWindow* parent,ViewSink sink):wxScrolledWindow(parent,wxI
 void PdfCanvas::begin_loading(){loading_=true;loading_dots_.reset();loading_message_.clear();Refresh();}
 void PdfCanvas::advance_loading(){if(loading_){loading_dots_.advance();Refresh();}}
 void PdfCanvas::loading_message(const wxString& message){if(!loading_)return;loading_=false;loading_message_=message;Refresh();}
-void PdfCanvas::clear_document(){loading_=false;loading_message_.clear();timer_.Stop();document_=0;info_.reset();transform_.reset();pending_anchor_.reset();layout_.reset();selection_.reset();search_range_.reset();cache_.clear();cache_bytes_=0;width_=height_=0;last_request_.reset();SetVirtualSize(1,1);Refresh();}
+void PdfCanvas::clear_document(){
+    loading_=false;loading_message_.clear();timer_.Stop();document_=0;info_.reset();transform_.reset();pending_anchor_.reset();
+    layout_.reset();selection_.reset();search_range_.reset();selection_highlight_={};search_highlight_={};
+    cache_.clear();cache_bytes_=0;width_=height_=0;last_request_.reset();SetVirtualSize(1,1);Refresh();
+}
 void PdfCanvas::set_page(DocumentEpoch document,PageIndex page,std::optional<PdfPageInfo> info){
     if(document_!=document){cache_.clear();cache_bytes_=0;}
     document_=document;page_=page;info_=info;transform_.reset();pending_anchor_.reset();last_request_.reset();
-    layout_.reset();selection_.reset();search_range_.reset();
+    layout_.reset();selection_.reset();search_range_.reset();invalidate_highlights();
     begin_loading();Scroll(0,0);width_=height_=0;calculate();Refresh();
 }
 void PdfCanvas::set_info(const PdfPageInfo& info){info_=info;calculate();}
 void PdfCanvas::set_layout(std::shared_ptr<const PageLayout> layout){
-    if(layout_==layout)return;layout_=std::move(layout);selection_.reset();Refresh();
+    if(layout_==layout)return;
+    layout_=std::move(layout);selection_.reset();invalidate_highlights();Refresh();
 }
 bool PdfCanvas::has_selection() const noexcept{return selection_&&selection_->first!=selection_->second&&bool(layout_);}
 void PdfCanvas::clear_selection(){selection_.reset();Refresh();}
@@ -197,6 +202,7 @@ void PdfCanvas::request_visible(){
 void PdfCanvas::accept(const PdfEvent& e){
     if(e.document!=document_)return;
     if(e.kind==PdfEvent::Kind::ViewReady&&matches(e.key)){
+        if(!transform_||transform_->pdf_to_page_px!=e.transform.pdf_to_page_px)invalidate_highlights();
         transform_=e.transform;
         if(pending_anchor_){
             const auto p=e.transform.pdf_to_page_px.apply(pending_anchor_->pdf);
@@ -212,12 +218,17 @@ void PdfCanvas::accept(const PdfEvent& e){
     const auto& r=*e.pixels;
     if(r.width<=0||r.width>512||r.height<=0||r.height>512||r.stride<r.width*4||
        static_cast<std::size_t>(r.stride)>r.bgra.size()/static_cast<std::size_t>(r.height))return;
-    wxImage image(r.width,r.height);
-    if(!image.IsOk()||!image.GetData())return;
-    auto* rgb=image.GetData();
-    for(int y=0;y<r.height;++y)for(int x=0;x<r.width;++x){
-        const auto i=static_cast<std::size_t>(y)*r.stride+x*4,j=(static_cast<std::size_t>(y)*r.width+x)*3;
-        rgb[j]=r.bgra[i+2];rgb[j+1]=r.bgra[i+1];rgb[j+2]=r.bgra[i];
+    // The BGRA-to-RGB conversion writes every byte of the image.
+    wxImage image(r.width,r.height,false);
+    auto* rgb=image.IsOk()?image.GetData():nullptr;
+    if(!rgb)return;
+    for(int y=0;y<r.height;++y){
+        const unsigned char* source=r.bgra.data()+static_cast<std::size_t>(y)*r.stride;
+        unsigned char* target=rgb+static_cast<std::size_t>(y)*r.width*3;
+        for(int x=0;x<r.width;++x){
+            target[0]=source[2];target[1]=source[1];target[2]=source[0];
+            source+=4;target+=3;
+        }
     }
     wxBitmap bitmap(image);if(!bitmap.IsOk())return;bitmap.SetScaleFactor(scale_);
     const auto bytes=static_cast<std::size_t>(r.width)*r.height*4;
@@ -247,28 +258,49 @@ void PdfCanvas::paint(wxPaintEvent&){
         dc.DrawBitmap(tile.bitmap,origin_.x+static_cast<int>(std::round(key.x/scale_)),origin_.y+static_cast<int>(std::round(key.y/scale_)),false);
     }
     if(layout_&&transform_){
-        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
-        if(gc){
-            gc->Clip(origin_.x,origin_.y,width_/scale_,height_/scale_);gc->SetPen(*wxTRANSPARENT_PEN);
-            auto highlight=[&](const auto& range,wxColour colour){
-                if(!range)return;
-                gc->SetBrush(wxBrush(colour));const auto [a,b]=*range;
-                std::optional<PdfRect> previous_box;
-                for(const auto source:source_ranges(*layout_,std::min(a,b),std::max(a,b)))
-                    for(std::uint64_t i=source.first;i<static_cast<std::uint64_t>(source.first)+source.count&&i<layout_->glyphs.size();++i){
-                        const auto& g=layout_->glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds||g.unicode_continuation)continue;
-                        if(g.bounds.right<=g.bounds.left||g.bounds.top<=g.bounds.bottom)continue;
-                        if(previous_box&&previous_box->left==g.bounds.left&&previous_box->right==g.bounds.right&&previous_box->top==g.bounds.top&&previous_box->bottom==g.bounds.bottom)continue;
-                        previous_box=g.bounds;
-                        const auto p=transform_->pdf_to_page_px.apply({g.bounds.left,g.bounds.bottom});
-                        const auto q=transform_->pdf_to_page_px.apply({g.bounds.right,g.bounds.top});
-                        if(!p.finite()||!q.finite()||!std::isfinite(p.x-q.x)||!std::isfinite(p.y-q.y))continue;
-                        gc->DrawRectangle(origin_.x+std::min(p.x,q.x)/scale_,origin_.y+std::min(p.y,q.y)/scale_,
-                            std::max(1.0,std::abs(p.x-q.x)/scale_),std::max(1.0,std::abs(p.y-q.y)/scale_));
-                    }
-            };
-            highlight(search_range_,wxColour(255,190,20,90));highlight(selection_,wxColour(60,130,245,85));
+        update_highlight(search_range_,search_highlight_);
+        update_highlight(selection_,selection_highlight_);
+        if(!search_highlight_.rects.empty()||!selection_highlight_.rects.empty()){
+            std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+            if(gc){
+                gc->Clip(origin_.x,origin_.y,width_/scale_,height_/scale_);gc->SetPen(*wxTRANSPARENT_PEN);
+                // Individual fills preserve alpha blending when minimum-size rectangles overlap.
+                auto draw=[&](const Highlight& highlight,wxColour colour){
+                    gc->SetBrush(wxBrush(colour));
+                    for(const auto& rect:highlight.rects)
+                        gc->DrawRectangle(origin_.x+rect.x/scale_,origin_.y+rect.y/scale_,
+                            std::max(1.0,rect.width/scale_),std::max(1.0,rect.height/scale_));
+                };
+                draw(search_highlight_,wxColour(255,190,20,90));
+                draw(selection_highlight_,wxColour(60,130,245,85));
+            }
         }
     }
+}
+
+void PdfCanvas::invalidate_highlights(){
+    search_highlight_.range.reset();search_highlight_.rects.clear();
+    selection_highlight_.range.reset();selection_highlight_.rects.clear();
+}
+
+void PdfCanvas::update_highlight(const TextRange& range,Highlight& highlight) const {
+    if(highlight.range==range)return;
+    highlight.range.reset();
+    highlight.rects.clear();
+    if(!range)return;
+    const auto [a,b]=*range;
+    std::optional<PdfRect> previous_box;
+    for(const auto source:source_ranges(*layout_,std::min(a,b),std::max(a,b)))
+        for(std::uint64_t i=source.first;i<static_cast<std::uint64_t>(source.first)+source.count&&i<layout_->glyphs.size();++i){
+            const auto& g=layout_->glyphs[static_cast<std::size_t>(i)];if(!g.valid_bounds||g.unicode_continuation)continue;
+            if(g.bounds.right<=g.bounds.left||g.bounds.top<=g.bounds.bottom)continue;
+            if(previous_box&&previous_box->left==g.bounds.left&&previous_box->right==g.bounds.right&&previous_box->top==g.bounds.top&&previous_box->bottom==g.bounds.bottom)continue;
+            previous_box=g.bounds;
+            const auto p=transform_->pdf_to_page_px.apply({g.bounds.left,g.bounds.bottom});
+            const auto q=transform_->pdf_to_page_px.apply({g.bounds.right,g.bounds.top});
+            if(!p.finite()||!q.finite()||!std::isfinite(p.x-q.x)||!std::isfinite(p.y-q.y))continue;
+            highlight.rects.push_back({std::min(p.x,q.x),std::min(p.y,q.y),std::abs(p.x-q.x),std::abs(p.y-q.y)});
+        }
+    highlight.range=range;
 }
 }

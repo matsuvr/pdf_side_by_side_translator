@@ -23,6 +23,7 @@ struct Affine2D {
     double a=1,b=0,c=0,d=1,tx=0,ty=0;
     PdfPoint apply(PdfPoint p) const noexcept {return {a*p.x+c*p.y+tx,b*p.x+d*p.y+ty};}
     Affine2D inverse() const;
+    bool operator==(const Affine2D&)const=default;
 };
 struct WorkStamp {
     DocumentEpoch document=0;

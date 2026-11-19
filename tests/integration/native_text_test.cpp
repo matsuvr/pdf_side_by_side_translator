@@ -24,6 +24,20 @@ double scroll_y(wxTextCtrl& control){
 #endif
 }
 void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+void check_append_text(wxTextCtrl& control){
+    const auto check=[&](const std::string& prefix,const std::string& suffix){
+        const auto complete=prefix+suffix;
+        opt::update_readonly_text(control,{},prefix,true);
+        opt::update_readonly_text(control,prefix,complete,false);
+        const auto streamed=control.GetValue();
+        opt::update_readonly_text(control,{},complete,true);
+        require(streamed==control.GetValue(),"streamed append differs from full native text");
+    };
+    check("絵文字 👩‍💻\n最初の行", " 😀\r\n次の行");
+    check("最初の行\r", "\n次の行");
+    check("最初の行\r", "\n");
+    check("先頭", "\xef\xbb\xbf" "続き");
+}
 void check_readonly_copy(wxTextCtrl& control){
     const auto original=control.GetValue();
     require(!control.IsEditable(),"viewer text is read-only after streaming");
@@ -110,6 +124,7 @@ class TextTest final:public wxApp {
     wxTimer timer_{this};
     void run(){
         try{
+            check_append_text(*text_);
 #ifdef _WIN32
             check_streamed_wrap(*text_);
 #endif

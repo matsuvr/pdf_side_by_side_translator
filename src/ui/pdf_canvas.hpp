@@ -38,6 +38,12 @@ public:
 private:
     struct CachedTile {wxBitmap bitmap;std::size_t bytes;std::uint64_t used;};
     struct Anchor {PdfPoint pdf;wxPoint screen;};
+    using TextRange=std::optional<std::pair<std::size_t,std::size_t>>;
+    struct HighlightRect {double x,y,width,height;};
+    struct Highlight {
+        TextRange range;
+        std::vector<HighlightRect> rects;
+    };
     ViewSink sink_;
     wxTimer timer_{this};
     DocumentEpoch document_=0;
@@ -57,7 +63,8 @@ private:
     bool panning_=false,space_=false;
     bool selecting_=false;
     std::shared_ptr<const PageLayout> layout_;
-    std::optional<std::pair<std::size_t,std::size_t>> selection_,search_range_;
+    TextRange selection_,search_range_;
+    Highlight selection_highlight_,search_highlight_;
     std::map<TileKey,CachedTile> cache_;
     std::size_t cache_bytes_=0;
     std::uint64_t tick_=0;
@@ -68,5 +75,7 @@ private:
     void paint(wxPaintEvent& event);
     bool matches(const TileKey& key) const;
     PdfPoint page_pixel(wxPoint point) const;
+    void invalidate_highlights();
+    void update_highlight(const TextRange& range,Highlight& highlight) const;
 };
 }

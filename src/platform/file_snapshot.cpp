@@ -1,46 +1,28 @@
 #include "platform/file_snapshot.hpp"
 #include "platform/access_path.hpp"
+#include "platform/open_file_status.hpp"
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
 #include <io.h>
 #include <fcntl.h>
 #else
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
 namespace opt {
 struct FileSnapshot::Impl {
+    OpenFileStatus initial_status;
     FileSignature original;
 #ifdef _WIN32
     HANDLE file=INVALID_HANDLE_VALUE;
     ~Impl(){if(file!=INVALID_HANDLE_VALUE)CloseHandle(file);}
-    FileSignature signature() const {
-        BY_HANDLE_FILE_INFORMATION info{};
-        if(!GetFileInformationByHandle(file,&info))throw std::system_error(GetLastError(),std::system_category(),"File identity");
-        if(info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)throw std::runtime_error("通常のファイルを指定してください。");
-        const auto timestamp=(static_cast<std::uint64_t>(info.ftLastWriteTime.dwHighDateTime)<<32)|info.ftLastWriteTime.dwLowDateTime;
-        return {std::to_string(info.dwVolumeSerialNumber)+":"+std::to_string(info.nFileIndexHigh)+":"+std::to_string(info.nFileIndexLow),
-            (static_cast<std::uint64_t>(info.nFileSizeHigh)<<32)|info.nFileSizeLow,
-            static_cast<std::int64_t>((timestamp-116444736000000000ULL)*100)};
-    }
 #else
     int file=-1;
     ~Impl(){if(file>=0)close(file);}
-    FileSignature signature() const {
-        struct stat info{};
-        if(fstat(file,&info)<0)throw std::system_error(errno,std::generic_category(),"File identity");
-        if(!S_ISREG(info.st_mode))throw std::runtime_error("通常のファイルを指定してください。");
-        return {std::to_string(info.st_dev)+":"+std::to_string(info.st_ino),static_cast<std::uint64_t>(info.st_size),
-            static_cast<std::int64_t>(info.st_mtimespec.tv_sec)*1000000000+info.st_mtimespec.tv_nsec};
-    }
 #endif
 };
 FileSnapshot::FileSnapshot(std::unique_ptr<Impl> impl):impl_(std::move(impl)){}
@@ -58,10 +40,11 @@ std::shared_ptr<const FileSnapshot> FileSnapshot::open(const std::filesystem::pa
     impl->file=::open(path.c_str(),O_RDONLY|O_CLOEXEC|O_NONBLOCK);
     if(impl->file<0)throw std::system_error(errno,std::generic_category(),"Open file");
 #endif
-    impl->original=impl->signature();
+    impl->initial_status=open_file_status(impl->file);
+    impl->original=impl->initial_status.signature();
     return std::shared_ptr<const FileSnapshot>(new FileSnapshot(std::move(impl)));
 }
-std::shared_ptr<const FileSnapshot> FileSnapshot::duplicate(std::intptr_t native,FileSignature original){
+std::shared_ptr<const FileSnapshot> FileSnapshot::duplicate(std::intptr_t native,const OpenFileStatus& status,FileSignature original){
     auto impl=std::make_unique<Impl>();
 #ifdef _WIN32
     impl->file=ReOpenFile(reinterpret_cast<HANDLE>(native),GENERIC_READ,FILE_SHARE_READ,FILE_FLAG_OVERLAPPED);
@@ -70,11 +53,13 @@ std::shared_ptr<const FileSnapshot> FileSnapshot::duplicate(std::intptr_t native
     impl->file=fcntl(static_cast<int>(native),F_DUPFD_CLOEXEC,0);
     if(impl->file<0)throw std::system_error(errno,std::generic_category(),"Duplicate file object");
 #endif
+    impl->initial_status=status;
     impl->original=std::move(original);
     return std::shared_ptr<const FileSnapshot>(new FileSnapshot(std::move(impl)));
 }
-FileSignature FileSnapshot::signature() const{return impl_->signature();}
+FileSignature FileSnapshot::signature() const{return open_file_status(impl_->file).signature();}
 const FileSignature& FileSnapshot::initial_signature() const{return impl_->original;}
+bool FileSnapshot::matches_initial_signature() const{return open_file_status(impl_->file)==impl_->initial_status;}
 std::size_t FileSnapshot::read_at(std::uint64_t offset,std::span<std::byte> output) const{
     if(output.empty())return 0;
     if(offset>static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))throw std::overflow_error("File offset overflow");

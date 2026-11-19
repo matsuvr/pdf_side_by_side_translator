@@ -21,7 +21,7 @@ public:
         try{
             if(failure_!=Failure::None)return false;
             if(cancelled_&&cancelled_()){failure_=Failure::Cancelled;return false;}
-            if(file_->signature()!=initial_signature()){failure_=Failure::Changed;return false;}
+            if(!file_->matches_initial_signature()){failure_=Failure::Changed;return false;}
             if(offset>initial_signature().size||bytes.size()>initial_signature().size-offset){failure_=Failure::Read;return false;}
             while(!bytes.empty()){
                 if(cancelled_&&cancelled_()){failure_=Failure::Cancelled;return false;}
@@ -29,13 +29,13 @@ public:
                 if(!count){failure_=Failure::Changed;return false;}
                 offset+=count;bytes=bytes.subspan(count);
             }
-            if(file_->signature()!=initial_signature()){failure_=Failure::Changed;return false;}
+            if(!file_->matches_initial_signature()){failure_=Failure::Changed;return false;}
             return true;
         }catch(...){failure_=Failure::Read;return false;}
     }
     void check() const{
         if(failure_==Failure::Cancelled)throw std::runtime_error("PDFの読み込みを中断しました。");
-        if(failure_==Failure::Changed||file_->signature()!=initial_signature())
+        if(failure_==Failure::Changed||!file_->matches_initial_signature())
             throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
         if(failure_==Failure::Read)throw std::runtime_error("PDFの読み取りに失敗しました。再度開いてください。");
     }

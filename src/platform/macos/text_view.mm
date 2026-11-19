@@ -1,4 +1,5 @@
 #include "platform/text_view.hpp"
+#include "platform/text_format.hpp"
 #include <wx/textctrl.h>
 #import <AppKit/AppKit.h>
 #include <algorithm>
@@ -9,17 +10,36 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
         auto* scroll=(NSScrollView*)control.GetHandle();
         auto* text=(NSTextView*)[scroll documentView];
         if(![text isKindOfClass:[NSTextView class]])return;
-        auto* value=[[NSString alloc] initWithBytes:after.data() length:after.size() encoding:NSUTF8StringEncoding];
-        if(!value)return;
+        NSString* suffix=nil;
+        std::size_t at=0,length=0;
+        const auto tail=reset?std::string_view{}:appended_utf8_suffix(before,after);
+        constexpr std::string_view bom="\xef\xbb\xbf";
+        // Decode BOMs at their original offsets in the complete string.
+        if(!tail.empty()&&!std::string_view(before).starts_with(bom)&&!tail.starts_with(bom)){
+            if(const auto units=utf16_units(before)){
+                suffix=[[[NSString alloc] initWithBytes:tail.data() length:tail.size()
+                    encoding:NSUTF8StringEncoding] autorelease];
+                if(!suffix)return;
+                at=*units;
+                length=at+[suffix length];
+            }
+        }
+        if(!suffix){
+            auto* value=[[[NSString alloc] initWithBytes:after.data() length:after.size() encoding:NSUTF8StringEncoding] autorelease];
+            if(!value)return;
+            std::size_t common=0;
+            if(!reset){while(common<std::min(before.size(),after.size())&&before[common]==after[common])++common;
+                while(common<after.size()&&common>0&&(static_cast<unsigned char>(after[common])&0xc0)==0x80)--common;}
+            auto* prefix=[[NSString alloc] initWithBytes:after.data() length:common encoding:NSUTF8StringEncoding];
+            at=[prefix length];
+            length=[value length];
+            suffix=[value substringFromIndex:at];
+            [prefix release];
+        }
         auto* clip=[scroll contentView];const auto origin=[clip bounds].origin;
         const auto selection=[text selectedRange];
         const bool follow=!reset&&selection.length==0&&NSMaxY([clip bounds])>=[text bounds].size.height-4;
-        std::size_t common=0;
-        if(!reset){while(common<std::min(before.size(),after.size())&&before[common]==after[common])++common;
-            while(common<after.size()&&common>0&&(static_cast<unsigned char>(after[common])&0xc0)==0x80)--common;}
-        auto* prefix=[[NSString alloc] initWithBytes:after.data() length:common encoding:NSUTF8StringEncoding];
-        const auto at=[prefix length];const auto old_length=[[text string] length];
-        auto* suffix=[value substringFromIndex:at];
+        const auto old_length=[[text string] length];
         auto* storage=[text textStorage];[storage beginEditing];
         [storage replaceCharactersInRange:NSMakeRange(std::min(at,old_length),old_length-std::min(at,old_length)) withString:suffix];
         if([suffix length]){
@@ -29,12 +49,10 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
             [storage setAttributes:attributes range:NSMakeRange(at,[suffix length])];
         }
         [storage endEditing];
-        const auto length=[value length];
         [text setSelectedRange:reset?NSMakeRange(0,0):NSMakeRange(std::min(selection.location,length),std::min(selection.length,length-std::min(selection.location,length)))];
         [[text layoutManager] ensureLayoutForTextContainer:[text textContainer]];
         if(follow)[text scrollRangeToVisible:NSMakeRange(length,0)];
         else {[clip scrollToPoint:reset?NSZeroPoint:origin];[scroll reflectScrolledClipView:clip];}
-        [prefix release];[value release];
     }
 }
 std::size_t text_logical_anchor(wxTextCtrl& control){
