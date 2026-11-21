@@ -6,13 +6,13 @@
 #include <stdexcept>
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::cerr << "usage: inference_probe model.gguf [cpu|auto] [token-fixture.tsv] [--prepare-only]\n"; return 2; }
+    if (argc < 2) { std::cerr << "usage: inference_probe model-path [auto|cpu] [token-fixture.tsv] [--prepare-only]\n"; return 2; }
     try {
         const bool prepare_only=argc>2&&std::string_view(argv[argc-1])=="--prepare-only";
         const int positional_count=argc-static_cast<int>(prepare_only);
         std::atomic_bool cancel{false};
         opt::Engine engine(cancel);
-        engine.load(std::filesystem::u8path(argv[1]), positional_count < 3 || std::string(argv[2]) == "cpu");
+        engine.load(std::filesystem::u8path(argv[1]), positional_count >= 3 && std::string(argv[2]) == "cpu");
         std::cout << "backend=" << engine.backend() << " context=" << engine.capacity() << '\n';
         if (positional_count > 3) {
             std::ifstream fixture(argv[3]);

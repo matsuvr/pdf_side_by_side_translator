@@ -22,15 +22,26 @@ from audit_dependencies import audit_macho,audit_pe
 
 MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
 
-def companion_files(target,model_file):
+def companion_files(target,model_file=None,model_dir=None):
     files={MODEL_LICENSE.name:MODEL_LICENSE,'README.md':ROOT/'README.md',
            'LICENSE':ROOT/'LICENSE','THIRD_PARTY_NOTICES.txt':ROOT/'THIRD_PARTY_NOTICES.txt'}
+    mlx=target.startswith('macos-arm64-')
+    if mlx:files['MACOS-MLX.md']=ROOT/'docs/macos-mlx.md'
     if target.endswith('-release'):
-        model=lock()['model_fixture']
-        path=model_file or ROOT/model['filename']
-        if not path.is_file() or sha256(path)!=model['sha256']:
-            raise RuntimeError('Supply the pinned official GGUF with --model-file: '+str(path))
-        files[model['filename']]=path
+        if mlx:
+            model=lock()['mlx_model_fixture']
+            directory=model_dir or ROOT/'build'/target/model['directory']
+            for name,digest in model['files'].items():
+                path=directory/name
+                if not path.is_file() or sha256(path)!=digest:
+                    raise RuntimeError('Supply the official MLX checkpoint with --model-dir: '+str(path))
+                files[model['directory']+'/'+name]=path
+        else:
+            model=lock()['model_fixture']
+            path=model_file or ROOT/model['filename']
+            if not path.is_file() or sha256(path)!=model['sha256']:
+                raise RuntimeError('Supply the pinned official GGUF with --model-file: '+str(path))
+            files[model['filename']]=path
     return files
 
 def verify_companions(directory,expected):
@@ -53,10 +64,15 @@ def audit_bundle(bundle,arch):
     for path in sorted(bundle.rglob('*')):
         if path.is_symlink():raise RuntimeError('Unexpected bundle symlink: '+str(path.relative_to(bundle)))
         if not path.is_file():continue
-        if path.suffix.lower() in {'.gguf','.py','.dll','.dylib','.metallib'}:raise RuntimeError('Unexpected runtime sidecar: '+path.name)
-        magic=path.read_bytes()[:4]
+        if path.suffix.lower() in {'.gguf','.safetensors','.py','.dll','.dylib'}:raise RuntimeError('Unexpected runtime sidecar: '+path.name)
+        if path.suffix.lower()=='.metallib' and path.relative_to(bundle)!=Path('Contents/MacOS/mlx.metallib'):
+            raise RuntimeError('Unexpected Metal library location: '+str(path.relative_to(bundle)))
+        with path.open('rb') as source:magic=source.read(4)
+        if path.suffix.lower()=='.metallib' and magic!=b'MTLB':raise RuntimeError('Invalid MLX Metal library')
         if magic in (b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca'):
             report=audit_macho(path,arch,'14.0');report['file']=str(path.relative_to(bundle));reports.append(report)
+    if arch=='arm64' and not (bundle/'Contents/MacOS/mlx.metallib').is_file():
+        raise RuntimeError('Missing MLX Metal library in the app bundle')
     if len(reports)!=1:raise RuntimeError('Expected exactly one product Mach-O')
     if any(r['failures'] for r in reports):raise RuntimeError(json.dumps(reports,indent=2))
     return reports
@@ -65,7 +81,10 @@ def write_json(path,value):path.write_text(json.dumps(value,ensure_ascii=False,i
 def source_sbom(info, pdf):
     spec = lock()
     components = []
+    mlx=info['target'].startswith('macos-arm64-')
     for name, entry in spec['dependencies'].items():
+        if mlx and name=='llama.cpp':continue
+        if not mlx and name in {'mlx','json','fmt','metal-cpp'}:continue
         component = {'type': 'file' if name.startswith('Noto') else 'library', 'name': name,
                      'version': entry.get('version') or entry['revision'],
                      'externalReferences': [{'type': 'distribution', 'url': entry['url']}]}
@@ -81,9 +100,14 @@ def source_sbom(info, pdf):
         components.append({'type': 'library', 'name': path, 'version': revision,
                            'externalReferences': [{'type': 'vcs', 'url': url}]})
     if info['target'].endswith('-release'):
-        model = spec['model_fixture']
-        components.append({'type': 'machine-learning-model', 'name': model['filename'],
-                           'version': model['revision'], 'hashes': [{'alg': 'SHA-256', 'content': model['sha256']}]})
+        if mlx:
+            model=spec['mlx_model_fixture']
+            components.append({'type':'machine-learning-model','name':model['repository'],
+                               'version':model['revision'],'hashes':[{'alg':'SHA-256','content':model['files']['model.safetensors']}]})
+        else:
+            model = spec['model_fixture']
+            components.append({'type': 'machine-learning-model', 'name': model['filename'],
+                               'version': model['revision'], 'hashes': [{'alg': 'SHA-256', 'content': model['sha256']}]})
     return {'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
             'metadata': {'component': {'type': 'application', 'name': info['product'], 'version': info['version']},
                          'lifecycles': [{'phase': 'build'}]}, 'components': components}
@@ -127,6 +151,7 @@ def validate_kernel_symbols(entries):
         raise RuntimeError('ISA variants share external functions: ' + ', '.join(sorted(shared)))
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True)
+    parser.add_argument('--model-dir',type=Path,help='Official MLX 4bit checkpoint directory for the Mac Release ZIP')
     parser.add_argument('--model-file',type=Path,help='Pinned official GGUF to include in a Release ZIP')
     parser.add_argument('--windows-cert',help='SHA-1 thumbprint of an Authenticode signing certificate')
     parser.add_argument('--mac-identity',help='Developer ID Application identity in the signing keychain')
@@ -149,7 +174,7 @@ def main():
     run([os.sys.executable,ROOT/'scripts/collect_notices.py','--check'])
     binary=build/(name+'.app')/'Contents/MacOS'/name if mac else build/(exe+'.exe')
     if ('OPT_BUILD_INFO:'+info['identity_sha256']).encode() not in binary.read_bytes():raise SystemExit('Executable does not contain the matching build identity')
-    companions=companion_files(target,args.model_file)
+    companions=companion_files(target,args.model_file,args.model_dir)
     companion_hashes={name:sha256(path) for name,path in companions.items()}
     dist=ROOT/'dist'/target;dist.mkdir(parents=True,exist_ok=True)
     signing_variant='-notarized' if args.notary_profile else '-signed' if args.windows_cert or args.mac_identity else ''
@@ -174,7 +199,9 @@ def main():
         stage=Path(temporary);payload=stage/'payload';payload.mkdir()
         # Publisher-only evidence must not become runtime sidecars in the ZIP.
         evidence=stage/'evidence';evidence.mkdir()
-        for filename,path in companions.items():shutil.copyfile(path,payload/filename)
+        for filename,path in companions.items():
+            destination=payload/filename;destination.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(path,destination)
         sbom=source_sbom(info,pdf)
         write_json(evidence/'SBOM.cdx.json',sbom)
         if mac:

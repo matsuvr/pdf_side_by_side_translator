@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "dependency_lock_sha256": "780961156d49a7361d15a7f4c70adbabdeb64e219b174b62ea3113db42b91254",
-  "notices_sha256": "17483263dd4682e1b31c3901c8a0dd29a2ea26f53ab6a6e33d749fedc89ce6fa",
+  "dependency_lock_sha256": "85630e6f52ad70ad2a5b3f3161fc1b155644981603e56b060f6e1d8d56fc1a9c",
+  "notices_sha256": "501577894291886cba4cfb849eba232155d305406f0245100fd5a9a6fa9fc1f2",
   "inputs": [
     {
       "component": "Application original source/resources",
@@ -256,6 +256,48 @@
       "sha256": "ca0b44aec101afb6b46f4c39b23369fa06a64fb9c0add37c2689d702156fee55"
     },
     {
+      "component": "PLaMo 0.8B dedicated C++ and Metal engine",
+      "root": "project",
+      "path": "third_party/plamo08/LICENSE",
+      "encoding": "utf-8-sig",
+      "sha256": "c95bae1d1ce0235ecccd3560b772ec1efb97f348a79f0fbe0a634f0c2ccefe2c"
+    },
+    {
+      "component": "PLaMo 0.8B dedicated C++ and Metal engine",
+      "root": "project",
+      "path": "third_party/plamo08/THIRD_PARTY_NOTICES.md",
+      "encoding": "utf-8-sig",
+      "sha256": "71afa6cd174eb1407ea6a481439b92e7cfa6db10bfb7eb82ef55c5b45f0e5e4e"
+    },
+    {
+      "component": "MLX",
+      "root": "project",
+      "path": "licenses/MLX-MIT.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "ccfab7ccb2ea306f71531c8ca77bb55507606cd90768b1e32b8b52ab5b48cf01"
+    },
+    {
+      "component": "nlohmann/json",
+      "root": "project",
+      "path": "licenses/nlohmann-json-MIT.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+    },
+    {
+      "component": "fmt",
+      "root": "project",
+      "path": "licenses/fmt-MIT.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "07580f2a3b35709ce703d523f447b242f6dfec7582a8c0df102c7fa2849375f8"
+    },
+    {
+      "component": "Apple metal-cpp",
+      "root": "project",
+      "path": "licenses/metal-cpp-Apache-2.0.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "f4e92c7fe2aa066e294c0da9d08683dc9fb741ee6e6debbfad99a0c96e07c1f2"
+    },
+    {
       "component": "SQLite public-domain declaration",
       "root": "project",
       "path": "licenses/SQLite-public-domain.txt",
@@ -301,6 +343,35 @@
       "url": "https://github.com/ggml-org/llama.cpp.git",
       "revision": "a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5",
       "required_tokenizer_ancestor": "abeada335e2e78bd3fe63febafab7e900ce75810"
+    },
+    "mlx": {
+      "url": "https://github.com/ml-explore/mlx.git",
+      "revision": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "version": "0.32.4"
+    },
+    "json": {
+      "url": "https://github.com/nlohmann/json.git",
+      "revision": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+      "version": "3.11.3"
+    },
+    "fmt": {
+      "url": "https://github.com/fmtlib/fmt.git",
+      "revision": "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f",
+      "version": "12.1.0"
+    },
+    "metal-cpp": {
+      "url": "https://developer.apple.com/metal/cpp/files/metal-cpp_26.zip",
+      "version": "26",
+      "sha256": "4df3c078b9aadcb516212e9cb03004cbc5ce9a3e9c068fa3144d021db585a3a4"
+    },
+    "plamo08": {
+      "url": "https://github.com/pfnet/plamo-translate-cli",
+      "revision": "82788925ce64b5ec15abb25a650ccf4616eff57a",
+      "changes": "C++ host port and specialized 0.8B decoder; see third_party/plamo08/THIRD_PARTY_NOTICES.md"
+    },
+    "mlx_model_license": {
+      "repository": "pfnet/plamo-3-translate-0.8b-MLX-4bit",
+      "revision": "1e4243070fec9e40810240f894b60a86c792fc10"
     },
     "LLVM-compiler-rt": "https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT",
     "Chromium-BSD": "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/LICENSE (text SHA-256 fixed in inputs)",

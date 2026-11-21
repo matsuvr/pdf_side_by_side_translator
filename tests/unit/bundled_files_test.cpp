@@ -40,7 +40,11 @@ int main(){
 
     const auto expected=distribution/opt::bundled_model_filename;
     // Even a damaged/empty file is passed to the loader, not treated as absent.
+#ifdef OPT_USE_MLX
+    fs::create_directories(expected);
+#else
     std::ofstream(expected).close();
+#endif
     for(const auto& directory:{opt::distribution_directory(standalone,opt::ExecutableLayout::Standalone),
                                opt::distribution_directory(mac,opt::ExecutableLayout::MacAppBundle)}){
         const auto model=opt::bundled_model(directory);

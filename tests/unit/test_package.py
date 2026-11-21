@@ -51,9 +51,16 @@ class PackageTest(unittest.TestCase):
                          'PLaMo-Community-ja.txt']:
                 companions[name] = root / name
                 companions[name].write_text('fixture ' + name)
+            if mac:
+                (binary.parent / 'mlx.metallib').write_bytes(b'MTLBkernel fixture')
             if target.endswith('-release'):
-                companions['model.gguf'] = root / 'model.gguf'
-                companions['model.gguf'].write_bytes(b'model fixture')
+                model_names = ['plamo-3-translate-0.8b-MLX-4bit/' + name for name in
+                               ['model.safetensors', 'config.json', 'tokenizer.jsonl',
+                                'tokenizer_config.json', 'generation_config.json']] if mac else ['model.gguf']
+                for name in model_names:
+                    companions[name] = root / name
+                    companions[name].parent.mkdir(parents=True, exist_ok=True)
+                    companions[name].write_bytes(('model fixture ' + name).encode())
             sbom = {'bomFormat': 'CycloneDX', 'components': []}
             spec = {'dependencies': {'PDFium': {'revision': 'pdf-revision'},
                     'NotoSansCJKjp-Regular': {'sha256': package.sha256(font)}}}
@@ -100,6 +107,7 @@ class PackageTest(unittest.TestCase):
                     executable = 'Reader.app/Contents/MacOS/Reader' if mac else 'reader.exe'
                     self.assertEqual(zipped.read(executable), binary.read_bytes())
                     if mac:
+                        self.assertEqual(zipped.read('Reader.app/Contents/MacOS/mlx.metallib'), b'MTLBkernel fixture')
                         self.assertEqual(zipped.read('Reader.app/Contents/Resources/NotoSansCJKjp-Regular.otf'), font.read_bytes())
                 for name in EVIDENCE | {'package-manifest.json'}:
                     self.assertIsInstance(json.loads((output / name).read_text()), dict)
@@ -124,6 +132,25 @@ class PackageTest(unittest.TestCase):
 
     def test_macos_debug(self):
         self.package_fixture('macos-arm64-debug')
+
+    def test_mlx_model_companions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / 'checkpoint'
+            model.mkdir()
+            files = {}
+            for name in ['config.json', 'model.safetensors', 'tokenizer.jsonl',
+                         'tokenizer_config.json', 'generation_config.json']:
+                (model / name).write_bytes(('fixture ' + name).encode())
+                files[name] = package.sha256(model / name)
+            spec = {'mlx_model_fixture': {'directory': 'plamo-3-translate-0.8b-MLX-4bit', 'files': files}}
+            with patch.object(package, 'lock', return_value=spec):
+                companions = package.companion_files('macos-arm64-release', model_dir=model)
+                self.assertEqual({name.split('/')[-1] for name in companions if '/' in name}, set(files))
+                self.assertFalse(any(name.endswith('.gguf') for name in companions))
+                (model / 'config.json').unlink()
+                with self.assertRaises(RuntimeError):
+                    package.companion_files('macos-arm64-release', model_dir=model)
 
 
 if __name__ == '__main__':

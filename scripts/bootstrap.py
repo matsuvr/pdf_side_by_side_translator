@@ -23,6 +23,10 @@ def main():
     for name in ("wxWidgets", "llama.cpp"):
         checkout(deps[name], WORK / "src" / name)
 
+    if args.target.startswith("macos-arm64-"):
+        from prepare_mlx import prepare_dependencies
+        prepare_dependencies()
+
     sqlite = deps["SQLite"]
     archive = WORK / "downloads/sqlite.zip"
     download(sqlite["url"], archive, sqlite.get("sha256"))

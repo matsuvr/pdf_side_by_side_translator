@@ -4,7 +4,11 @@
 
 namespace opt {
 enum class ExecutableLayout { Standalone, MacAppBundle };
+#ifdef OPT_USE_MLX
+inline constexpr auto bundled_model_filename="plamo-3-translate-0.8b-MLX-4bit";
+#else
 inline constexpr auto bundled_model_filename="plamo-3-translate-0.8b-Q4_K_M.gguf";
+#endif
 
 inline std::filesystem::path distribution_directory(const std::filesystem::path& executable,ExecutableLayout layout){
     auto directory=executable.parent_path();

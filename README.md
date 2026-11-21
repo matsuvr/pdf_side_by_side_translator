@@ -8,6 +8,22 @@ Built with PLaMo
 
 [製品紹介](https://matsuvr.github.io/pdf_side_by_side_translator/) · [使い方・マニュアル](https://matsuvr.github.io/pdf_side_by_side_translator/manual.html)
 
+## Apple Silicon MLX専用エンジンのブランチ
+
+このブランチのMac版は、PLaMo 3 Translate 0.8Bの4bit safetensorsをC++ / Metal専用エンジンで読み込みます。実機検証の手順は **[docs/macos-mlx.md](docs/macos-mlx.md)** にあります。
+
+```sh
+python3 scripts/bootstrap.py --target macos-arm64-release
+python3 scripts/prepare_mlx.py --model-only
+cmake --preset macos-arm64-release
+cmake --build --preset macos-arm64-release
+open "build/macos-arm64-release/Offline PDF Translator.app"
+```
+
+モデルは `.app` の隣の `plamo-3-translate-0.8b-MLX-4bit` フォルダーから自動で読み込みます。「モデル設定」でもMLXモデルのフォルダーを選択できます。このブランチのネイティブMacビルドとGPU速度は実機検証待ちです。
+
+以下のリリース案内は既存のGGUF版についての説明です。
+
 ## 使い方
 
 1. [リリースページ](https://github.com/matsuvr/pdf_side_by_side_translator/releases)から、使うOSに対応した **0.1.2 以降**のアプリ用ZIPをダウンロードし、フォルダーごと展開します。ZIPにはアプリ、翻訳用GGUF、ライセンス文書が入っています。

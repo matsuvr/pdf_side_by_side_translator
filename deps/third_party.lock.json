@@ -33,6 +33,26 @@
       "license_url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
       "sha256": "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5",
       "license_sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
+    },
+    "mlx": {
+      "url": "https://github.com/ml-explore/mlx.git",
+      "revision": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "version": "0.32.4"
+    },
+    "json": {
+      "url": "https://github.com/nlohmann/json.git",
+      "revision": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+      "version": "3.11.3"
+    },
+    "fmt": {
+      "url": "https://github.com/fmtlib/fmt.git",
+      "revision": "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f",
+      "version": "12.1.0"
+    },
+    "metal-cpp": {
+      "url": "https://developer.apple.com/metal/cpp/files/metal-cpp_26.zip",
+      "version": "26",
+      "sha256": "4df3c078b9aadcb516212e9cb03004cbc5ce9a3e9c068fa3144d021db585a3a4"
     }
   },
   "model_fixture": {
@@ -47,13 +67,13 @@
   "patches": [],
   "validated_build_configurations": {
     "macos-arm64-release": {
-      "stage": "Product, 24 tests, real CPU/Metal, signed package and relocated network/workspace-denied product execution verified on development Mac; clean-machine/older-OS acceptance unverified",
+      "stage": "MLX branch: host tokenizer, C++ API syntax and packaging checks; native Apple Silicon build and GPU validation pending",
       "llvm": "llvmorg-24-init-14453-ge063be79-1",
       "xcode": "27.2 (27B52)",
       "sdk": "27.2",
       "deployment_target": "14.0",
       "executed_os": "27.2",
-      "record": "docs/m0-macos-arm64.md"
+      "record": "docs/macos-mlx.md"
     },
     "macos-x64-release": {
       "stage": "Product cross-built on arm64; 24 tests, real CPU, native text and signed relocated product executed under Rosetta; physical Intel and clean-machine acceptance unverified",
@@ -64,5 +84,18 @@
       "executed_os": "27.2 under Rosetta on arm64",
       "record": "docs/macos-x64.md"
     }
+  },
+  "mlx_model_fixture": {
+    "repository": "pfnet/plamo-3-translate-0.8b-MLX-4bit",
+    "revision": "1e4243070fec9e40810240f894b60a86c792fc10",
+    "directory": "plamo-3-translate-0.8b-MLX-4bit",
+    "files": {
+      "config.json": "5175a9cd6ba7bab7eecafc508aa3278e58ece44d8edafa4a175ca067c4ed8c69",
+      "generation_config.json": "0410d30499cd9db0a83ecbd59a2811b1c4f63f7c9412126a43e8d2b96ec44a85",
+      "model.safetensors": "4769685905d03c7f5ceaef316cbef245c9099f548f8dea00ecfdf980d698b29f",
+      "tokenizer.jsonl": "bdce9e430e65931b28c56de2054f52b4cf8ed59b322db125e016d724d06dbb0e",
+      "tokenizer_config.json": "5468ed5c68b5cf4cf971bcb34be6bfbfd749fe30cc5bc65ace5835ae3bff65b3"
+    },
+    "license": "PLaMo Community License; see licenses/PLaMo-Community-ja.txt"
   }
 }

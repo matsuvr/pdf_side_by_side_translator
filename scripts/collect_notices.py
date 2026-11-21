@@ -49,6 +49,11 @@ PLAN=[
  ('llama.cpp / xxHash','llama',['vendor/hash/xxhash/LICENSE']),
  ('llama.cpp / SHA-256','llama',['vendor/hash/sha256/LICENSE']),
  ('llama.cpp / rotate-bits','llama',['vendor/hash/rotate-bits/LICENSE.md']),
+ ('PLaMo 0.8B dedicated C++ and Metal engine','project',['third_party/plamo08/LICENSE','third_party/plamo08/THIRD_PARTY_NOTICES.md']),
+ ('MLX','project',['licenses/MLX-MIT.txt']),
+ ('nlohmann/json','project',['licenses/nlohmann-json-MIT.txt']),
+ ('fmt','project',['licenses/fmt-MIT.txt']),
+ ('Apple metal-cpp','project',['licenses/metal-cpp-Apache-2.0.txt']),
  ('SQLite public-domain declaration','project',['licenses/SQLite-public-domain.txt']),
  ('Noto Sans CJK JP Regular font','resources',['NotoSansCJK-LICENSE.txt']),
  ('PLaMo Community License for the bundled model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
@@ -66,7 +71,7 @@ Third-party components retain their own licenses. Release ZIPs include PLaMo
 model weights under the PLaMo Community License reproduced below.
 
 Built with PLaMo
-Bundled model: PLaMo 3 Translate 0.8B Q4_K_M (pfnet).
+Bundled model: PLaMo 3 Translate 0.8B (pfnet).\nApple Silicon: MLX 4bit; Windows: GGUF Q4_K_M.
 Model use and publication/provision of model outputs are subject to the PLaMo
 Community License reproduced at the end for offline reference. In particular,
 models trained using outputs are subject to that agreement. Consult the full
@@ -98,6 +103,10 @@ patches are applied by this application.
     manifest={'schema':1,'dependency_lock_sha256':hashlib.sha256(read_lf(ROOT/'deps/third_party.lock.json')).hexdigest(),
       'notices_sha256':hashlib.sha256(notice).hexdigest(),'inputs':records,
       'origins':{'pdfium':lock['dependencies']['PDFium'],'wx':lock['dependencies']['wxWidgets'],'llama':lock['dependencies']['llama.cpp'],
+       'mlx':lock['dependencies']['mlx'],'json':lock['dependencies']['json'],'fmt':lock['dependencies']['fmt'],
+       'metal-cpp':lock['dependencies']['metal-cpp'],
+       'plamo08':{'url':'https://github.com/pfnet/plamo-translate-cli','revision':'82788925ce64b5ec15abb25a650ccf4616eff57a','changes':'C++ host port and specialized 0.8B decoder; see third_party/plamo08/THIRD_PARTY_NOTICES.md'},
+       'mlx_model_license':{'repository':lock['mlx_model_fixture']['repository'],'revision':lock['mlx_model_fixture']['revision']},
        'LLVM-compiler-rt':'https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT',
        'Chromium-BSD':'https://chromium.googlesource.com/chromium/src/+/refs/heads/main/LICENSE (text SHA-256 fixed in inputs)',
        'model_license':{'repository':lock['model_fixture']['repository'],'revision':lock['model_fixture']['revision'],'paths':['LICENSE/ja','LICENSE/en']}}}
