@@ -10,27 +10,42 @@ namespace opt {
 class Utf8Error final : public std::runtime_error {
 public:using std::runtime_error::runtime_error;
 };
+// A valid prefix may end partway through a scalar. Return the byte length
+// through the last complete scalar, or npos if no suffix could make it valid.
+inline std::size_t complete_utf8_prefix(std::string_view bytes) noexcept {
+    std::size_t i = 0;
+    while (i < bytes.size()) {
+        const auto lead = static_cast<unsigned char>(bytes[i]);
+        const std::size_t n = lead < 0x80 ? 1 : lead >= 0xc2 && lead <= 0xdf ? 2
+            : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+        if (!n) return std::string_view::npos;
+        const auto available = bytes.size() - i;
+        for (std::size_t j = 1; j < n && j < available; ++j) {
+            const auto b = static_cast<unsigned char>(bytes[i + j]);
+            if ((b & 0xc0) != 0x80 || (j == 1 &&
+                ((lead == 0xe0 && b < 0xa0) || (lead == 0xed && b >= 0xa0) ||
+                 (lead == 0xf0 && b < 0x90) || (lead == 0xf4 && b >= 0x90))))
+                return std::string_view::npos;
+        }
+        if (available < n) break;
+        i += n;
+    }
+    return i;
+}
 // Retains an incomplete scalar between token pieces. Rejects invalid UTF-8.
 class Utf8Stream {
 public:
+    bool accepts(std::string_view bytes) const {
+        if (pending_.empty()) return complete_utf8_prefix(bytes) != std::string_view::npos;
+        return complete_utf8_prefix(std::string(pending_).append(bytes)) != std::string_view::npos;
+    }
     std::string push(std::string_view bytes) {
+        const auto previous = pending_.size();
         pending_.append(bytes);
-        std::size_t i = 0;
-        while (i < pending_.size()) {
-            const auto lead = static_cast<unsigned char>(pending_[i]);
-            const std::size_t n = lead < 0x80 ? 1 : lead >= 0xc2 && lead <= 0xdf ? 2
-                : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
-            if (!n) throw Utf8Error("Invalid UTF-8 leading byte");
-            const auto available = pending_.size() - i;
-            for (std::size_t j = 1; j < n && j < available; ++j) {
-                const auto b = static_cast<unsigned char>(pending_[i + j]);
-                if ((b & 0xc0) != 0x80 || (j == 1 &&
-                    ((lead == 0xe0 && b < 0xa0) || (lead == 0xed && b >= 0xa0) ||
-                     (lead == 0xf0 && b < 0x90) || (lead == 0xf4 && b >= 0x90))))
-                    throw Utf8Error("Invalid UTF-8 continuation");
-            }
-            if (available < n) break;
-            i += n;
+        const auto i = complete_utf8_prefix(pending_);
+        if (i == std::string_view::npos) {
+            pending_.resize(previous);
+            throw Utf8Error("Invalid UTF-8 token sequence");
         }
         auto complete = pending_.substr(0, i);
         pending_.erase(0, i);

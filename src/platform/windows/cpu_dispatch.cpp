@@ -25,6 +25,22 @@ bool can_use_avx2() {
     return (regs[1] & (1 << 5)) != 0;
 }
 const bool use_avx2 = can_use_avx2();
+
+bool can_use_vnni() {
+    if (!use_avx2) return false;
+    const char* mode = std::getenv("OPT_CPU_KERNELS");
+    if (mode && std::strcmp(mode, "avx2") == 0) return false;
+    int regs[4];
+    __cpuidex(regs, 7, 0);
+    if (regs[0] < 1) return false;
+    __cpuidex(regs, 7, 1);
+    return (regs[0] & (1 << 4)) != 0; // AVX-VNNI, VEX encoding
+}
+const bool use_vnni = can_use_vnni();
+}
+
+extern "C" int opt_windows_has_vnni_kernels() {
+    return use_vnni;
 }
 
 extern "C" int opt_windows_has_avx2_kernels() {

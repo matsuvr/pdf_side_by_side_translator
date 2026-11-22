@@ -42,6 +42,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Test UTF-8 token selection on macOS
+        run: |
+          xcrun clang++ -std=c++20 -Isrc tests/unit/utf8_test.cpp -o "$RUNNER_TEMP/utf8-test"
+          "$RUNNER_TEMP/utf8-test"
       - name: Run session I/O with ThreadSanitizer
         run: |
           clang++ -std=c++20 -Isrc -O1 -g -fsanitize=thread tests/integration/io_service_test.cpp \

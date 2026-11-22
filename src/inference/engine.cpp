@@ -1,5 +1,7 @@
 #include "inference/engine.hpp"
 #include "inference/bounded_tokenizer.hpp"
+#include "inference/platform_backend.hpp"
+#include "inference/utf8_token_filter.hpp"
 #include "core/utf8.hpp"
 #include "platform/file_snapshot.hpp"
 #include "llama.h"
@@ -15,10 +17,6 @@
 #include <limits>
 #include <stdexcept>
 #include <thread>
-
-#ifdef OPT_WINDOWS_CPU_KERNELS
-extern "C" int opt_windows_has_avx2_kernels();
-#endif
 
 namespace opt {
 namespace {
@@ -71,7 +69,7 @@ struct Engine::Impl {
     llama_token tag = LLAMA_TOKEN_NULL;
     std::vector<llama_token> protocol;
     std::vector<llama_token> stops;
-    std::vector<llama_token> nonprinting_bytes;
+    Utf8TokenFilter output_filter;
     std::vector<llama_token> prompt_prefix, plain_suffix, easy_suffix;
     std::size_t max_token_bytes=1;
     bool cpu = true;
@@ -84,7 +82,7 @@ struct Engine::Impl {
         if (model) llama_model_free(model);
         context = nullptr; workers = nullptr; model = nullptr; vocab = nullptr;
         if(stream)std::fclose(stream);stream=nullptr;file.reset();
-        protocol.clear();stops.clear();nonprinting_bytes.clear();
+        protocol.clear();stops.clear();output_filter = {};
         prompt_prefix.clear(); plain_suffix.clear(); easy_suffix.clear();
         max_token_bytes=1;
     }
@@ -102,15 +100,7 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
     unload();
     auto& p = *impl_;
     auto mp = llama_model_default_params();
-    // Register only an actual Metal device, or explicitly use the CPU path.
-    std::array<ggml_backend_dev_t,2> devices{nullptr,nullptr};
-    if(!cpu_only)for(std::size_t i=0;i<ggml_backend_dev_count();++i){
-        auto device=ggml_backend_dev_get(i);const auto type=ggml_backend_dev_type(device);
-        if((type==GGML_BACKEND_DEVICE_TYPE_GPU||type==GGML_BACKEND_DEVICE_TYPE_IGPU)&&
-           std::string_view(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)))=="MTL"){
-            devices[0]=device;break;
-        }
-    }
+    std::array<ggml_backend_dev_t,2> devices{cpu_only ? nullptr : preferred_gpu(), nullptr};
     p.cpu=devices[0]==nullptr;mp.devices=devices.data();mp.n_gpu_layers=p.cpu?0:-1;
     // Keep tensors in owned buffers. A mapped GGUF can fault in the middle of
     // CPU/Metal work if another process truncates it; signature checks cannot
@@ -141,11 +131,9 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
         }
         p.bos = p.protocol[0]; p.tag = p.protocol[1];
         p.stops={p.bos,p.tag};
+        std::array<char, max_piece_bytes> piece_buffer;
         for(llama_token id=0;id<llama_vocab_n_tokens(p.vocab);++id){
             if(p.cancelled.load())throw PreparationCancelled();
-            if((llama_vocab_get_attr(p.vocab,id)&LLAMA_TOKEN_ATTR_BYTE)&&
-               unsupported_text_control(piece(p.vocab,id,false))!=std::string_view::npos)
-                p.nonprinting_bytes.push_back(id);
             if(llama_vocab_is_eog(p.vocab,id)&&std::find(p.stops.begin(),p.stops.end(),id)==p.stops.end())p.stops.push_back(id);
             const auto* raw=llama_vocab_get_text(p.vocab,id);if(!raw)continue;
             const std::string_view name(raw);
@@ -153,12 +141,14 @@ void Engine::load(const std::filesystem::path& path, bool cpu_only) {
             if((attr&LLAMA_TOKEN_ATTR_USER_DEFINED)&&!(attr&(LLAMA_TOKEN_ATTR_CONTROL|LLAMA_TOKEN_ATTR_UNKNOWN))&&
                ((attr&(LLAMA_TOKEN_ATTR_LSTRIP|LLAMA_TOKEN_ATTR_RSTRIP))||piece(p.vocab,id,true).find("\xee\xb8\x80")!=std::string::npos))
                 throw std::runtime_error("未対応のPLaMo tokenizer設定です。入力を省略する特殊tokenは使用できません。");
-            // The public length query includes embedded NULs, unlike get_text().
-            char unused=0;
-            const auto bytes=llama_token_to_piece(p.vocab,id,&unused,0,0,true);
-            if(bytes < -max_piece_bytes || bytes > max_piece_bytes)
+            // Use the decoded bytes, including embedded NULs and byte fallback pieces.
+            const auto bytes=llama_token_to_piece(p.vocab,id,piece_buffer.data(),max_piece_bytes,0,true);
+            if(bytes < 0 || bytes > max_piece_bytes)
                 throw std::runtime_error("Token piece exceeds byte limit");
-            p.max_token_bytes=std::max(p.max_token_bytes,static_cast<std::size_t>(bytes<0?-bytes:bytes));
+            p.max_token_bytes=std::max(p.max_token_bytes,static_cast<std::size_t>(bytes));
+            if (!(attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED)) &&
+                !llama_vocab_is_eog(p.vocab,id))
+                p.output_filter.add(id, {piece_buffer.data(), static_cast<std::size_t>(bytes)});
             if(name.starts_with("<|plamo:")&&name.ends_with("|>")&&
                std::find(p.protocol.begin(),p.protocol.end(),id)==p.protocol.end())p.protocol.push_back(id);
         }
@@ -268,11 +258,7 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
 }
 std::uint32_t Engine::capacity() const { return impl_->context ? llama_n_ctx(impl_->context) : 0; }
 std::string Engine::backend() const {
-#ifdef OPT_WINDOWS_CPU_KERNELS
-    return opt_windows_has_avx2_kernels() ? "CPU (AVX2)" : "CPU (portable)";
-#else
-    return impl_->cpu ? "CPU" : "Metal";
-#endif
+    return backend_name(impl_->cpu);
 }
 std::shared_ptr<const FileSnapshot> Engine::file_snapshot() const{return impl_->file;}
 
@@ -329,10 +315,17 @@ GenerationResult Engine::generate(const PreparedInput& input,
         // instead of building a vocabulary-sized candidate array per token.
         float* logits = llama_get_logits_ith(p.context, -1);
         if (!logits || vocab_size <= 0) { result.reason = FinishReason::DecodeError; break; }
-        // Byte fallback tokens for binary controls cannot appear in display text.
-        // Mask them before selection so a single such candidate cannot end a page.
-        for (const auto id : p.nonprinting_bytes) logits[id] = -std::numeric_limits<float>::infinity();
-        const llama_token token = static_cast<llama_token>(std::max_element(logits, logits + vocab_size) - logits);
+        llama_token token;
+        if (decoder.complete()) {
+            p.output_filter.mask_invalid_starters(logits);
+            token = greedy_token(logits, vocab_size);
+        } else {
+            token = p.output_filter.best_continuation(logits, decoder);
+        }
+        if (token < 0 || !(logits[token] > -std::numeric_limits<float>::infinity())) {
+            result.reason = FinishReason::InvalidModelOutput;
+            break;
+        }
         if (std::find(input.stop_ids.begin(),input.stop_ids.end(),token)!=input.stop_ids.end()) {
             result.reason = has_usable_text(result.text) ? FinishReason::Completed : FinishReason::EmptyOutput;
             break;

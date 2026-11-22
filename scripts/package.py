@@ -73,6 +73,9 @@ def source_sbom(info, pdf):
             component['properties'] = [{'name': 'git:revision', 'value': entry['revision']}]
         if 'sha256' in entry:
             component['hashes'] = [{'alg': 'SHA-256', 'content': entry['sha256']}]
+        for patch in spec['patches']:
+            if patch['dependency'] == name and info['target'] in patch['targets']:
+                component['properties'].append({'name': 'git:patched-tree', 'value': patch['tree']})
         components.append(component)
     for path, url, revision in re.findall(r'^([\w./-]+): (https://\S+)@([0-9a-f]{40})\s*$',
                                           pdf['resolved_dependencies'], re.MULTILINE):
@@ -104,15 +107,17 @@ def validate_static_windows(build,target):
 def validate_kernel_symbols(entries):
     # COFF COMDAT selection may pick either definition of a template. The
     # portable ggml-cpu objects must not share function names with the AVX2 ones.
-    groups = {True: [], False: []}
+    groups = {'baseline': [], 'AVX2': [], 'AVX-VNNI': []}
     for entry in entries:
         output = Path(entry['output'])
         if 'ggml-cpu.dir' in output.parts:
             if not output.is_absolute():
                 output = Path(entry['directory']) / output
-            groups['-mavx2' in entry['command']].append(output)
+            isa = ('AVX-VNNI' if '-mavxvnni' in entry['command'] else
+                   'AVX2' if '-mavx2' in entry['command'] else 'baseline')
+            groups[isa].append(output)
     if not all(groups.values()):
-        raise RuntimeError('Missing AVX2 or baseline kernel objects')
+        raise RuntimeError('Missing baseline, AVX2 or AVX-VNNI kernel objects')
     def functions(paths):
         symbols = set()
         for path in paths:
@@ -122,9 +127,12 @@ def validate_kernel_symbols(entries):
         if not symbols:
             raise RuntimeError('Cannot identify external COFF functions')
         return symbols
-    shared = functions(groups[True]) & functions(groups[False])
-    if shared:
-        raise RuntimeError('ISA variants share external functions: ' + ', '.join(sorted(shared)))
+    seen = set()
+    for paths in groups.values():
+        symbols = functions(paths)
+        if seen & symbols:
+            raise RuntimeError('ISA variants share external functions: ' + ', '.join(sorted(seen & symbols)))
+        seen.update(symbols)
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True)
     parser.add_argument('--model-file',type=Path,help='Pinned official GGUF to include in a Release ZIP')
