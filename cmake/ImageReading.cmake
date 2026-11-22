@@ -31,6 +31,15 @@ foreach(flag DISABLED_LEGACY_ENGINE OPENMP_BUILD BUILD_TRAINING_TOOLS BUILD_TEST
     set(${flag} OFF CACHE BOOL "" FORCE)
 endforeach()
 add_subdirectory("${OPT_DEPENDENCIES}/Tesseract" third_party/image-tess EXCLUDE_FROM_ALL)
+if(MSVC)
+    # Tesseract passes a char buffer to GetModuleFileName in this file.
+    set_property(SOURCE "${OPT_DEPENDENCIES}/Tesseract/src/ccutil/ccutil.cpp"
+        TARGET_DIRECTORY libtesseract APPEND PROPERTY COMPILE_OPTIONS /UUNICODE /U_UNICODE)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        # Parse clang-cl's vector types before Tesseract defines __attribute__ away.
+        target_compile_options(libtesseract PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIintrin.h>")
+    endif()
+endif()
 add_library(opt_image_reading STATIC "${CMAKE_CURRENT_LIST_DIR}/../src/ocr/image_reading.cpp")
 target_include_directories(opt_image_reading PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../src")
 target_link_libraries(opt_image_reading PRIVATE libtesseract)
