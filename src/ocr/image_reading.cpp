@@ -69,15 +69,8 @@ std::string page_script(const GrayPage& page,ImageModelReader models){
     if(name=="Katakana"||name=="Hiragana")return "Japanese";
     return name;
 }
-const ImageLanguage* text_language(std::string_view text,std::string_view script){
-    if(text.size()<64)return nullptr;
-    const CLD2::CLDHints hints{nullptr,nullptr,0,CLD2::UNKNOWN_LANGUAGE};
-    CLD2::Language guesses[3]{};
-    int shares[3]{},count=0,valid=0;double scores[3]{};bool reliable=false;
-    const auto guess=CLD2::ExtDetectLanguageSummaryCheckUTF8(text.data(),static_cast<int>(text.size()),
-        true,&hints,0,guesses,shares,scores,nullptr,&count,&reliable,&valid);
-    if(!reliable||shares[0]<75||count<40||guess==CLD2::UNKNOWN_LANGUAGE)return nullptr;
-    std::string_view tag=CLD2::LanguageCode(guess);
+const ImageLanguage* detector_language(CLD2::Language language,std::string_view script){
+    std::string_view tag=CLD2::LanguageCode(language);
     if(tag=="zh"||tag=="zh-Hans"||tag=="zh-CN")tag="zh-hans";
     if(tag=="zh-Hant"||tag=="zh-TW")tag="zh-hant";
     if(tag=="jw")tag="jv";
@@ -85,6 +78,52 @@ const ImageLanguage* text_language(std::string_view text,std::string_view script
     if(tag=="in")tag="id";
     const auto* lang=by_tag(tag);
     return lang&&matches_script(lang->scripts,script)?lang:nullptr;
+}
+struct Detection {
+    const ImageLanguage* language=nullptr;
+    std::array<const ImageLanguage*,3> ranked{};
+};
+Detection detect_languages(std::string_view text,std::string_view script){
+    Detection result;
+    if(text.size()<64)return result;
+    const CLD2::CLDHints hints{nullptr,nullptr,0,CLD2::UNKNOWN_LANGUAGE};
+    CLD2::Language guesses[3]{};
+    int shares[3]{},count=0,valid=0;double scores[3]{};bool reliable=false;
+    const auto guess=CLD2::ExtDetectLanguageSummaryCheckUTF8(text.data(),static_cast<int>(text.size()),
+        true,&hints,0,guesses,shares,scores,nullptr,&count,&reliable,&valid);
+    for(std::size_t i=0;i<result.ranked.size();++i)
+        if(shares[i]>0)result.ranked[i]=detector_language(guesses[i],script);
+    if(reliable&&shares[0]>=75&&count>=40)result.language=detector_language(guess,script);
+    return result;
+}
+ImageReadingResult reading_result(std::string text,const ImageLanguage* language,
+                                  const ImageScriptReader* reader,const Detection& detected={}){
+    ImageReadingResult result{std::move(text),language,reader};
+    auto next=result.alternatives.begin();
+    const auto add=[&](const ImageLanguage* candidate){
+        if(candidate&&candidate!=language&&next!=result.alternatives.end()&&
+           std::find(result.alternatives.begin(),next,candidate)==next)*next++=candidate;
+    };
+    for(const auto* candidate:detected.ranked)add(candidate);
+    const auto scripts=reader?reader->script:language->scripts;
+    const auto split=scripts.find('+');
+    const auto same_script=[&](const ImageLanguage& candidate){
+        return matches_script(candidate.scripts,scripts.substr(0,split))||
+               (split!=scripts.npos&&matches_script(candidate.scripts,scripts.substr(split+1)));
+    };
+    // Prefer related languages before filling remaining slots in catalog order.
+    static constexpr std::string_view families[][5]{
+        {"de","en","nl"}, {"fr","it","es","ca"}, {"be","ru","bg","sr"},
+        {"sk","pl","hr","sl","sr"}, {"lt","lv"}, {"ms","id","jv","tl","ceb"}, {"az","kk","uz"}
+    };
+    if(language)for(const auto& family:families){
+        if(std::find(std::begin(family),std::end(family),language->tag)==std::end(family))continue;
+        for(const auto tag:family){
+            if(const auto* candidate=by_tag(tag);candidate&&same_script(*candidate))add(candidate);
+        }
+    }
+    for(const auto& candidate:image_languages)if(same_script(candidate))add(&candidate);
+    return result;
 }
 }
 
@@ -101,7 +140,7 @@ ImageReadingResult recognize_page_image(GrayPage image,std::string_view language
     if(!language_tag.empty()){
         const auto* lang=by_tag(language_tag);
         if(!lang)throw std::invalid_argument("画像の読み取りに対応していない言語です。");
-        return {recognize(image,exact_model(*lang),models,limit),std::string(lang->label),false,lang->tag};
+        return reading_result(recognize(image,exact_model(*lang),models,limit),lang,nullptr);
     }
 
     const auto script=page_script(image,models);
@@ -110,25 +149,17 @@ ImageReadingResult recognize_page_image(GrayPage image,std::string_view language
         if(only){only=nullptr;break;}
         only=&lang;
     }
-    if(only)return {recognize(image,exact_model(*only),models,limit),std::string(only->label),false,only->tag};
+    if(only)return reading_result(recognize(image,exact_model(*only),models,limit),only,nullptr);
 
     // At most one shared-script pass and one targeted pass, loaded sequentially.
     // A weak/unsupported script result falls back to Latin *without* claiming
     // a precise language, so short or mixed pages can be retried manually.
-    std::string_view group=script;
-    std::string generic;
-    if(script=="Han")generic="chi_sim+chi_tra";
-    else if(script=="Cyrillic"||script=="Arabic"||script=="Devanagari")generic="script/"+script;
-    else{generic="script/Latin";group="Latin";}
-    auto text=recognize(image,std::move(generic),models,limit);
-    if(!script.empty()&&script==group)if(const auto* lang=text_language(text,group)){
-        // The shared-script result is still useful if the specific model
-        // cannot finish inside the shared time budget.
-        try{
-            auto refined=recognize(image,exact_model(*lang),models,limit);
-            if(!refined.empty())return {std::move(refined),std::string(lang->label),false,lang->tag};
-        }catch(const std::runtime_error&){}
-    }
-    return {std::move(text),{},true};
+    const auto* reader=&image_script_readers[0];
+    for(const auto& available:image_script_readers)if(available.script==script)reader=&available;
+    auto text=recognize(image,std::string(reader->model),models,limit);
+    const auto detected=detect_languages(text,reader->script);
+    if(const auto* lang=detected.language;lang&&script==reader->script)
+        return reading_result(recognize(image,exact_model(*lang),models,limit),lang,nullptr,detected);
+    return reading_result(std::move(text),nullptr,reader,detected);
 }
 }

@@ -7,7 +7,8 @@
 namespace opt {
 struct PdfDeliveryBatch {
     std::deque<std::shared_ptr<const PdfEvent>> events;
-    bool lost_layout=false,lost_raster=false,lost_page_image=false;
+    bool lost_layout=false,lost_raster=false;
+    std::optional<std::uint64_t> lost_page_image;
     std::size_t raster_bytes=0,layout_bytes=0;
 };
 // One pending wake; bounds raw pixels and pending layouts independently. Dropped
@@ -35,7 +36,11 @@ public:
         }
         std::lock_guard lock(mutex_);auto& q=pending_.events;
         auto remove=[&](auto at,bool dropped){
-            if(dropped){pending_.lost_page_image|=(*at)->kind==PdfEvent::Kind::PageImage;pending_.lost_raster|=bool((*at)->pixels)&&(*at)->kind!=PdfEvent::Kind::PageImage;pending_.lost_layout|=bool((*at)->layout)||(*at)->kind==PdfEvent::Kind::SearchResult;}
+            if(dropped){
+                if((*at)->kind==PdfEvent::Kind::PageImage)pending_.lost_page_image=(*at)->image_generation;
+                else pending_.lost_raster|=bool((*at)->pixels);
+                pending_.lost_layout|=bool((*at)->layout)||(*at)->kind==PdfEvent::Kind::SearchResult;
+            }
             pending_.raster_bytes-=raster(*at);pending_.layout_bytes-=layout(*at);return q.erase(at);
         };
         for(auto i=q.begin();i!=q.end();){

@@ -4,6 +4,7 @@
 #include "blread.h"
 #include "ocrblock.h"
 #include <windows.h>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -125,8 +126,8 @@ int main(int argc,char** argv){
         const auto automatic=read("");
         if(automatic.text.find("3 sensors")==std::string::npos)
             throw std::runtime_error("Automatic mode did not recognise the English fixture");
-        if(automatic.language_uncertain!=automatic.label.empty())
-            throw std::runtime_error("Uncertain language must never display a specific language label");
+        if(bool(automatic.language)==bool(automatic.script_reader))
+            throw std::runtime_error("Automatic reading must identify exactly one language or script model");
         if(std::size(image_languages)!=53)
             throw std::runtime_error("PLaMo language roster is incomplete");
         // Every Windows resource must be loadable even if this small test
@@ -134,8 +135,19 @@ int main(int argc,char** argv){
         std::vector<unsigned char> blank(256*128,255);
         for(const auto& lang:image_languages){
             const auto verified=read_page_image({blank,256,128,256,220},lang.tag,{});
-            if(verified.label!=lang.label||verified.language_tag!=lang.tag||verified.language_uncertain)
+            if(verified.language!=&lang||verified.script_reader)
                 throw std::runtime_error("Missing language data: "+std::string(lang.tag));
+            std::vector<std::string_view> alternatives;
+            for(const auto* item:verified.alternatives){
+                if(!item)continue;
+                if(item==&lang||std::find(alternatives.begin(),alternatives.end(),item->tag)!=alternatives.end())
+                    throw std::runtime_error("Current or duplicate language in correction menu");
+                alternatives.push_back(item->tag);
+            }
+            if(lang.tag=="ru"&&(alternatives.size()!=4||alternatives.front()!="be"))
+                throw std::runtime_error("Cyrillic alternatives were lost in the OCR worker");
+            if(lang.tag=="zh-hans"&&alternatives!=std::vector<std::string_view>{"zh-hant"})
+                throw std::runtime_error("Traditional Chinese must be a direct correction for Simplified Chinese");
         }
         pdf.page_info(1,1);wait(PdfEvent::Kind::PageInfo);
         if(pdf.render_page_image(1,0,0,43)||!pdf.render_page_image(1,1,0,44))

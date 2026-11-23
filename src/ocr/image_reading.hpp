@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <chrono>
 #include <span>
 #include <stdexcept>
@@ -22,9 +23,22 @@ struct GrayPage {
     int width,height,stride,dpi;
     void validate() const;
 };
-// An empty tag requests language detection. When classification is uncertain,
-// text can still be useful; never label the result as a specific language.
-struct ImageReadingResult {std::string text,label;bool language_uncertain=false;std::string_view language_tag;};
+struct ImageLanguage;
+struct ImageScriptReader {std::string_view script,model;};
+inline constexpr ImageScriptReader image_script_readers[]{
+    {"Latin","script/Latin"}, {"Cyrillic","script/Cyrillic"},
+    {"Arabic","script/Arabic"}, {"Devanagari","script/Devanagari"},
+    {"Han","chi_sim+chi_tra"}
+};
+using ImageAlternatives=std::array<const ImageLanguage*,4>;
+// Only the model which produced the returned text is reported. Catalog entries
+// have static lifetime; a script-only read never claims a specific language.
+struct ImageReadingResult {
+    std::string text;
+    const ImageLanguage* language=nullptr;
+    const ImageScriptReader* script_reader=nullptr;
+    ImageAlternatives alternatives{};
+};
 ImageReadingResult read_page_image(GrayPage page,std::string_view language_tag,std::stop_token stop,
     std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+image_reading_timeout);
 

@@ -531,7 +531,8 @@ void PdfService::viewport(ViewRequest request){
 bool PdfService::render_page_image(DocumentEpoch epoch,PageIndex page,int rotation,std::uint64_t generation){
     std::lock_guard lock(impl_->mutex);
     if(impl_->stopping.load()||impl_->finished.load()||epoch!=impl_->requested_document.load()||
-       page!=impl_->displayed_page.load()||rotation<0||rotation>3||impl_->requested_image)return false;
+       page!=impl_->displayed_page.load()||rotation<0||rotation>3)return false;
+    // Rapid mode/rotation changes replace the queued raster for this page.
     impl_->requested_image=Impl::PageImageRequest{epoch,page,rotation,generation};
     impl_->cv.notify_one();return true;
 }

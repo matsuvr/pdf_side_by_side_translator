@@ -5,6 +5,7 @@
 #include "pdf/delivery_inbox.hpp"
 #ifdef OPT_PAGE_IMAGE_READING
 #include "ocr/image_reading.hpp"
+#include "ui/image_reading_bar.hpp"
 #include "image_reading_assets.hpp"
 #include "core/utf8.hpp"
 #endif
@@ -77,6 +78,11 @@ enum Id { Open=wxID_HIGHEST+400,Close,Previous,Next,GoPage,FocusPage,FitWidth,Fi
 // readers can enlarge the text and dense layouts can shrink it; the number
 // entry dialog still rejects non-numeric or nonsensical values.
 constexpr int min_translation_text_size=4,max_translation_text_size=200;
+#ifdef OPT_PAGE_IMAGE_READING
+constexpr auto missing_page_text="翻訳するテキストがありません。「画像から読み取り (OCR)」をお試しください。";
+#else
+constexpr auto missing_page_text="翻訳するテキストがありません。PDFは引き続き表示できます。";
+#endif
 std::filesystem::path application_directory(){
 #ifdef __WXMAC__
     constexpr auto layout=ExecutableLayout::MacAppBundle;
@@ -164,15 +170,15 @@ struct ApplicationController::Impl {
     wxSplitterWindow* split=nullptr;
     wxButton* open_button=nullptr;
 #ifdef OPT_PAGE_IMAGE_READING
-    wxButton* read_image_button=nullptr;
-    wxChoice* image_language=nullptr;
+    ImageReadingBar* image_bar=nullptr;
+    bool image_enabled=false;
+    const ImageLanguage* manual_language=nullptr;
     std::jthread image_worker;
-    std::atomic_bool image_running=false;
     std::optional<std::uint64_t> pending_image;
     std::uint64_t image_generation=0;
     std::shared_ptr<const PageLayout> image_layout;
-    std::string_view pending_image_language;
-    std::string_view image_source_language;
+    ImageReadingResult image_result;
+    std::string image_error;
 #endif
     wxTimer search_timer;
     wxTimer translate_timer,stream_timer;
@@ -260,10 +266,8 @@ struct ApplicationController::Impl {
             if(delivered.lost_layout){requested_layouts.clear();if(document_state==DocumentState::Ready){request_layout(page);if(scheduled_page)request_layout(*scheduled_page);if(search.active)search_step();}}
             if(delivered.lost_raster)canvas->retry_missing_tiles();
 #ifdef OPT_PAGE_IMAGE_READING
-            if(delivered.lost_page_image&&pending_image&&!image_running){
-                pending_image.reset();update_image_controls();
-                frame->SetStatusText(wxS("ページ画像を受け取れませんでした。もう一度お試しください。"),0);
-            }
+            if(pending_image&&delivered.lost_page_image==pending_image)
+                fail_image_reading("ページ画像を受け取れませんでした。");
 #endif
         });
 #ifdef OPT_PAGE_IMAGE_READING
@@ -418,7 +422,7 @@ struct ApplicationController::Impl {
     }
     std::string_view source_language()const{
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_layout)return image_source_language;
+        if(image_layout)return image_result.language?image_result.language->tag:std::string_view{};
 #endif
         return document_language;
     }
@@ -446,80 +450,88 @@ struct ApplicationController::Impl {
     }
 #ifdef OPT_PAGE_IMAGE_READING
     void update_image_controls(){
-        if(!read_image_button)return;
-        const bool ready=document_state==DocumentState::Ready&&!pending_image&&!image_running&&!closing;
-        read_image_button->Enable(ready);image_language->Enable(ready);
+        const bool ready=document_state==DocumentState::Ready;
+        image_bar->Show(ready);right_heading->Show(!ready);
+        image_bar->update(image_enabled,manual_language,image_result,!image_error.empty());
+        right_heading->GetParent()->Layout();
     }
-    void reset_image_reading(){
+    void clear_page_reading(){
         pending_image.reset();++image_generation;image_layout.reset();image_worker.request_stop();
+        image_result={};image_error.clear();
+    }
+    void reset_document_reading(){
+        image_enabled=false;manual_language=nullptr;clear_page_reading();
+    }
+    void change_reading(bool enabled,const ImageLanguage* language){
+        if(closing||document_state!=DocumentState::Ready)return;
+        image_enabled=enabled;manual_language=language;
+        clear_page_reading();invalidate_translation();update_image_controls();
+        frame->SetStatusText({},0);
+        if(enabled)request_image_reading();else schedule_translation();
+    }
+    void fail_image_reading(std::string error){
+        pending_image.reset();image_error=std::move(error);
         update_image_controls();
+        show_waiting_translation();
     }
     void request_image_reading(){
-        if(closing||document_state!=DocumentState::Ready||pending_image||image_running)return;
-        auto lang=image_language->GetSelection();
-        pending_image_language=lang>0&&static_cast<std::size_t>(lang)<=std::size(image_languages)
-            ?image_languages[lang-1].tag:std::string_view{};
-        pending_image=++image_generation;update_image_controls();
-        if(!pdf->render_page_image(epoch,page,canvas->rotation(),*pending_image)){
-            pending_image.reset();update_image_controls();
-            frame->SetStatusText(wxS("ページ画像の読み取りを開始できません。"),0);return;
-        }
-        frame->SetStatusText(wxS("ページ画像を読み取っています…"),0);
+        pending_image=image_generation;
+        if(!pdf->render_page_image(epoch,page,canvas->rotation(),*pending_image))
+            fail_image_reading("ページ画像の読み取りを開始できません。");
     }
     void receive_page_image(const PdfEvent& event){
         if(event.page!=page||!pending_image||event.image_generation!=*pending_image)return;
         if(!event.pixels){
-            pending_image.reset();update_image_controls();
-            frame->SetStatusText(event.message.empty()?wxString(wxS("ページ画像を作成できませんでした。")):wxString::FromUTF8(event.message),0);return;
+            fail_image_reading(event.message.empty()?"ページ画像を作成できませんでした。":event.message);return;
         }
         const auto pixels=event.pixels;const auto dpi=event.image_dpi;
         auto result=std::make_shared<PageImageResult>(PageImageResult{event.document,event.page,event.image_generation,{},{}});
         auto wake=std::make_unique<wxThreadEvent>(PAGE_IMAGE_RESULT);
         wake->SetPayload(result);
-        image_running=true;
         try{
-            image_worker=std::jthread([this,pixels,dpi,lang=pending_image_language,result,wake=std::move(wake)](std::stop_token stop) mutable {
-                try{result->reading=read_page_image({pixels->bgra,pixels->width,pixels->height,pixels->stride,dpi},lang,stop);}
+            image_worker=std::jthread([this,pixels,dpi,language=manual_language,result,wake=std::move(wake)](std::stop_token stop) mutable {
+                const auto tag=language?language->tag:std::string_view{};
+                try{result->reading=read_page_image({pixels->bgra,pixels->width,pixels->height,pixels->stride,dpi},tag,stop);}
                 catch(const ImageReadingTimeout& error){result->error=error.what();}
                 catch(const std::exception&){result->error="ページ画像から文字を読み取れませんでした。";}
-                image_running=false;
                 if(!closing)wxQueueEvent(&owner,wake.release());
             });
         }catch(const std::exception&){
-            image_running=false;pending_image.reset();update_image_controls();
-            frame->SetStatusText(wxS("ページ画像の読み取りを開始できませんでした。"),0);
+            fail_image_reading("ページ画像の読み取りを開始できませんでした。");
         }
     }
     void finish_image_reading(const std::shared_ptr<PageImageResult>& result){
-        if(!pending_image||result->document!=epoch||result->page!=page||result->generation!=*pending_image){
-            update_image_controls();return;
-        }
-        pending_image.reset();update_image_controls();
-        if(!result->error.empty()||!has_usable_text(result->reading.text)){
-            frame->SetStatusText(result->error.empty()?wxString(wxS("ページ画像から文字を見つけられませんでした。")):wxString::FromUTF8(result->error),0);
+        if(!pending_image||result->document!=epoch||result->page!=page||result->generation!=*pending_image)return;
+        pending_image.reset();
+        image_result=std::move(result->reading);
+        if(!result->error.empty()){fail_image_reading(result->error);return;}
+        if(!image_result.language){
+            fail_image_reading("言語の自動判定に失敗。言語を選択すれば翻訳できる可能性があります。");
             return;
+        }
+        if(!has_usable_text(image_result.text)){
+            fail_image_reading("ページ画像から文字を見つけられませんでした。");return;
         }
         auto found=std::make_shared<PageLayout>();
         found->page=page;found->availability=PageLayout::Availability::TextAvailable;
         // No PDF character coordinates: never replace canvas/search layout.
-        found->layout_version=0x80000001U;found->reading_text_utf8=std::move(result->reading.text);
+        found->layout_version=0x80000001U;found->reading_text_utf8=std::move(image_result.text);
         image_layout=std::move(found);
-        image_source_language=result->reading.language_tag;
-        invalidate_translation();
-        if(result->reading.language_uncertain)
-            frame->SetStatusText(wxS("言語は特定できませんでした。読み取りが不自然な場合は言語を選び直してください。"),0);
-        else frame->SetStatusText(wxS("ページ画像の読み取り: ")+wxString::FromUTF8(result->reading.label),0);
-        schedule_translation();
+        update_image_controls();show_waiting_translation();schedule_translation();
     }
 #endif
     void show_waiting_translation(){
         if(document_state!=DocumentState::Ready)return;
         std::string text;wxString status;
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_layout){
-            show_translation(image_layout->reading_text_utf8,true,image_source_language);
-            right_heading->SetLabel(wxS("画像から読み取った文字"));right_heading->GetParent()->Layout();
-            frame->SetStatusText(auto_translate&&model_state==ModelState::Ready?wxS("翻訳待ち"):wxS("読み取り結果"),2);
+        if(image_enabled){
+            if(image_layout){
+                show_translation(image_layout->reading_text_utf8,true,source_language());
+                frame->SetStatusText(auto_translate&&model_state==ModelState::Ready?wxS("翻訳待ち"):wxS("読み取り結果"),2);
+            }else{
+                show_translation(image_error.empty()?"ページ画像を読み取っています…":image_error);
+                frame->SetStatusText(image_error.empty()?wxS("読み取り中"):wxS("読み取り終了"),2);
+            }
             return;
         }
 #endif
@@ -527,7 +539,7 @@ struct ApplicationController::Impl {
            (layout->availability==PageLayout::Availability::NoTextLayer||layout->availability==PageLayout::Availability::NoTranslatableText||layout->availability==PageLayout::Availability::UnicodeUnavailable||layout->availability==PageLayout::Availability::ResourceLimited)){
             if(layout->availability==PageLayout::Availability::ResourceLimited){text="このページの自動文字抽出はメモリ予算を超えるため停止しました。PDFは引き続き表示できます。";status=wxS("自動文字抽出の容量上限");}
             else if(layout->availability==PageLayout::Availability::UnicodeUnavailable){text="文字のUnicode情報を取得できないため、このページは翻訳できません。PDFは引き続き表示できます。";status=wxS("Unicode情報なし");}
-            else{text="翻訳するテキストがありません。PDFは引き続き表示できます。";status=wxS("翻訳テキストなし");}
+            else{text=missing_page_text;status=wxS("翻訳テキストなし");}
         }else if(model_state==ModelState::Loading)text="モデルを読み込んでいます。PDFはそのまま読めます。";
         else if(model_state==ModelState::Failed)text="モデルを利用できません。「モデル設定」でGGUFを選び直してください。";
         else if(model_state!=ModelState::Ready)text="翻訳モデルを設定すると、このページの訳文を表示します。";
@@ -620,7 +632,7 @@ struct ApplicationController::Impl {
         case PageState::Failed:status=wxS("翻訳できませんでした");break;
         case PageState::NoText:
             status=wxS("翻訳するテキストがありません");
-            if(text.empty())text="翻訳するテキストがありません。PDFは引き続き表示できます。";
+            if(text.empty())text=missing_page_text;
             if(auto layout=current_layout();layout&&layout->availability==PageLayout::Availability::UnicodeUnavailable){status=wxS("文字のUnicode情報を取得できません");text="文字のUnicode情報を取得できないため、このページは翻訳できません。PDFは引き続き表示できます。";}
             break;
         default:status=wxS("翻訳中");if(text.empty())text="翻訳しています…";break;
@@ -641,6 +653,9 @@ struct ApplicationController::Impl {
         else{translation_dots.reset();frame->SetStatusText(status,2);}
     }
     void schedule_translation(){
+#ifdef OPT_PAGE_IMAGE_READING
+        if(image_enabled&&!image_layout)return;
+#endif
         if(closing||!auto_translate||document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
         scheduled_page=page;translate_timer.StartOnce(150);
     }
@@ -655,11 +670,17 @@ struct ApplicationController::Impl {
         if(closing||document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
         if(!auto_translate)return;
         const auto target=page;
-        auto found=layouts.find(target);auto layout=found==layouts.end()?nullptr:found->second.layout;
+        std::shared_ptr<const PageLayout> layout;
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_layout)layout=image_layout;
+        if(image_enabled){
+            layout=image_layout;
+            if(!layout)return;
+        }else
 #endif
-        if(!layout){request_layout(target);return;}
+        {
+            layout=current_layout();
+            if(!layout){request_layout(target);return;}
+        }
         // Restoring the optional reading position must never gate translation:
         // it is display state, and a missing/late answer leaves a readable page
         // untranslated. Ask for it and continue.
@@ -682,7 +703,7 @@ struct ApplicationController::Impl {
             page_source_digest(*layout),target};
         WorkStamp stamp;stamp.document=epoch;stamp.page=target;stamp.model=model_epoch;stamp.source=1;stamp.settings=settings_revision;
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_layout)stamp.source=2;
+        if(image_layout)stamp.source=2+image_generation;
 #endif
         attempt.reset();
         if(io){
@@ -937,7 +958,7 @@ struct ApplicationController::Impl {
         invalidate_translation();
         document_key="provisional:document:"+new_uuid();native_document_key.clear();document_state_loaded=false;reading_touched=false;page_position_touched=false;pending_text_anchor.reset();last_saved_position.reset();loaded_positions.clear();requested_positions.clear();
 #ifdef OPT_PAGE_IMAGE_READING
-        reset_image_reading();
+        reset_document_reading();
 #endif
         path=std::move(next_path);document_state=DocumentState::Opening;page=0;page_count=0;
         cancel_search();search_input->ChangeValue(wxString{});search.query.clear();search_label->SetLabel(wxString{});
@@ -953,14 +974,18 @@ struct ApplicationController::Impl {
         if(!restoring_reading)reading_touched=true;save_reading_position();last_saved_position.reset();
         page_position_touched=false;pending_text_anchor.reset();
 #ifdef OPT_PAGE_IMAGE_READING
-        reset_image_reading();
+        clear_page_reading();
 #endif
         invalidate_translation();
         if(!search_navigation)cancel_search();
         if(auto a=canvas->reading_anchor())anchors[page]=*a;
         page=target;canvas->set_page(epoch,page);
         pending_source_command.reset();if(auto layout=current_layout())canvas->set_layout(std::move(layout));
-        headings();show_waiting_translation();pdf->page_info(epoch,page);request_position(page);schedule_translation();
+        headings();show_waiting_translation();pdf->page_info(epoch,page);request_position(page);
+#ifdef OPT_PAGE_IMAGE_READING
+        if(image_enabled){request_image_reading();return;}
+#endif
+        schedule_translation();
     }
     void receive(const PdfEvent& event){
         if(event.document!=epoch)return;
@@ -1004,13 +1029,12 @@ struct ApplicationController::Impl {
                 if(event.page==page){
                     canvas->set_layout(event.layout);
 #ifdef OPT_PAGE_IMAGE_READING
-                    if(!image_layout){
+                    if(!image_enabled){
 #endif
-                    if(!current_attempt()&&(event.layout->availability==PageLayout::Availability::NoTextLayer||event.layout->availability==PageLayout::Availability::NoTranslatableText))
-                        show_translation("翻訳するテキストがありません。PDFは引き続き表示できます。");
-                    else if(!current_attempt()&&event.layout->availability==PageLayout::Availability::UnicodeUnavailable)
-                        show_translation("文字のUnicode情報を取得できないため、このページは翻訳できません。PDFは引き続き表示できます。");
-                    else if(!current_attempt()&&event.layout->availability==PageLayout::Availability::ResourceLimited)
+                    if(!current_attempt()&&(event.layout->availability==PageLayout::Availability::NoTextLayer||
+                       event.layout->availability==PageLayout::Availability::NoTranslatableText||
+                       event.layout->availability==PageLayout::Availability::UnicodeUnavailable||
+                       event.layout->availability==PageLayout::Availability::ResourceLimited))
                         show_waiting_translation();
 #ifdef OPT_PAGE_IMAGE_READING
                     }
@@ -1052,6 +1076,9 @@ struct ApplicationController::Impl {
             if(event.code=="PdfSearch"&&event.query_generation==search.generation){search.active=false;search_label->SetLabel(wxS("検索できませんでした。PDFを再度開けます。"));}
             if(event.code=="PdfOpen"){document_state=DocumentState::Failed;show_translation(event.message);}
             if(event.code=="PdfService"){invalidate_translation();document_state=DocumentState::Failed;show_translation(event.message);}
+#ifdef OPT_PAGE_IMAGE_READING
+            if(document_state==DocumentState::Failed){reset_document_reading();update_image_controls();}
+#endif
             if(event.code=="PdfPage"&&scheduled_page&&*scheduled_page==event.page){
                 scheduled_page.reset();
             }
@@ -1072,7 +1099,7 @@ struct ApplicationController::Impl {
         }
         case Command::Close:
 #ifdef OPT_PAGE_IMAGE_READING
-            reset_image_reading();
+            reset_document_reading();
 #endif
             save_reading_position();if(io)io->close_document();document_state_loaded=false;last_saved_position.reset();
             invalidate_translation();
@@ -1101,11 +1128,11 @@ struct ApplicationController::Impl {
             break;
         }
         case Command::Left:case Command::Right:
+            canvas->rotate(command==Command::Left?-1:1);
 #ifdef OPT_PAGE_IMAGE_READING
-            if(pending_image){pending_image.reset();++image_generation;image_worker.request_stop();}
-            update_image_controls();
+            if(image_enabled)change_reading(true,manual_language);
 #endif
-            canvas->rotate(command==Command::Left?-1:1);break;
+            break;
         case Command::Equal:split->SetSashPosition(split->GetClientSize().x/2);break;
         case Command::TextSize:{
             wxNumberEntryDialog dialog(frame,wxS("訳文の文字サイズをポイントで指定してください。"),wxString::Format(wxS("文字サイズ (%d〜%d)"),min_translation_text_size,max_translation_text_size),wxS("訳文の文字サイズ"),text_size,min_translation_text_size,max_translation_text_size);
@@ -1233,6 +1260,13 @@ struct ApplicationController::Impl {
         source_header->Add(zoom_input,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);
         auto translation_header=new wxBoxSizer(wxHORIZONTAL);
         translation_header->Add(right_heading,1,wxALL|wxALIGN_CENTER_VERTICAL,gap);
+#ifdef OPT_PAGE_IMAGE_READING
+        image_bar=new ImageReadingBar(right,
+            [this](bool enabled){change_reading(enabled,manual_language);},
+            [this](const ImageLanguage* language){change_reading(true,language);});
+        translation_header->Add(image_bar,1,wxEXPAND);
+        image_bar->Hide();
+#endif
         const int header_height=source_header->GetMinSize().y;
         source_header->SetMinSize(-1,header_height);
         translation_header->SetMinSize(-1,header_height);
@@ -1253,21 +1287,6 @@ struct ApplicationController::Impl {
         search_input->Bind(wxEVT_TEXT,[this](wxCommandEvent&){cancel_search();search_timer.StartOnce(150);});
         search_input->Bind(wxEVT_TEXT_ENTER,[this](wxCommandEvent&){begin_search(false,true);});
         search_case->Bind(wxEVT_CHECKBOX,[this](wxCommandEvent&){cancel_search();begin_search(false,false);});
-#ifdef OPT_PAGE_IMAGE_READING
-        auto* image_row=new wxWrapSizer(wxHORIZONTAL);
-        read_image_button=new wxButton(left,wxID_ANY,wxS("このページを画像分析で読み込む"));
-        read_image_button->SetToolTip(wxS("表示中のページを画像として読み取り、翻訳の原文に使います。"));
-        image_language=new wxChoice(left,wxID_ANY);
-        image_language->Append(wxS("言語を自動で判別"));
-        for(const auto& lang:image_languages)
-            image_language->Append(wxString::FromUTF8(lang.label.data(),lang.label.size()));
-        image_language->SetSelection(0);
-        image_language->SetName(wxS("画像から読み取る文字の言語"));
-        image_row->Add(read_image_button,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);
-        image_row->Add(image_language,0,wxALL|wxALIGN_CENTER_VERTICAL,gap);
-        ls->Add(image_row,0,wxEXPAND);update_image_controls();
-        read_image_button->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){request_image_reading();});
-#endif
         auto page_row=new wxBoxSizer(wxHORIZONTAL);
         auto page_arrow=[&](int id,const wxString& arrow,const wxString& name){
             auto* control=new wxButton(left,id,arrow,wxDefaultPosition,frame->FromDIP(wxSize(30,40)),wxBU_EXACTFIT);

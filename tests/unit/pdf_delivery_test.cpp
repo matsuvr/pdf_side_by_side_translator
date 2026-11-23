@@ -33,7 +33,7 @@ int main(){try{
         auto e=std::make_shared<PdfEvent>();e->kind=PdfEvent::Kind::TileReady;
         e->document=3;e->page=i;e->pixels=pixels;inbox.push(e);
     }
-    batch=inbox.take();require(batch.lost_page_image,"Dropped page image should clear the GUI busy state");
+    batch=inbox.take();require(batch.lost_page_image==5,"Dropped page image must identify the interrupted reading");
     require(pdf_render_flags==(0x001|0x200),"Tile identity lost PDFium's limited image cache flag");
     std::cout<<"bounded pixels/layout deliveries, retry acknowledgements and single wake passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
