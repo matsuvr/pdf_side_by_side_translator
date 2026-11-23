@@ -94,7 +94,7 @@ ASan/UBSanを利用できるホストでは、関連するC++試験を両sanitiz
 Releaseでも試験を実行します。検証条件を `assert()` だけに置かず、`NDEBUG` が有効でも失敗が報告される形を維持します。
 メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。
 
-`.github/workflows/security.yml` はレイアウト・検索のASan/UBSan試験とlibFuzzer、セッションI/O・推論配信キューのTSan試験を実行します。固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で個別にも実行できます。
+固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で実行できます。
 
 ## 製品紹介・マニュアルのサイト
 
