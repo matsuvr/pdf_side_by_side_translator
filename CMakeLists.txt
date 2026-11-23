@@ -248,13 +248,12 @@ if(OPT_BUILD_GUI_PROBE OR OPT_BUILD_APP)
     target_include_directories(opt_platform PUBLIC src)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     if(OPT_PAGE_IMAGE_READING)
-        set(image_notice_arg --image-reading)
-        set(image_notice_deps licenses/Tesseract-Apache-2.0.txt licenses/Leptonica.txt licenses/CLD2-Apache-2.0.txt)
+        set(image_build_arg --image-reading)
     endif()
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/resources.cpp"
         COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/embed_resources.py"
-            --output "${CMAKE_CURRENT_BINARY_DIR}/generated/resources.cpp" ${image_notice_arg}
-        DEPENDS scripts/embed_resources.py resources/help-ja.txt resources/app-icon.png THIRD_PARTY_NOTICES.txt ${image_notice_deps}
+            --output "${CMAKE_CURRENT_BINARY_DIR}/generated/resources.cpp"
+        DEPENDS scripts/embed_resources.py resources/help-ja.txt resources/app-icon.png THIRD_PARTY_NOTICES.txt
         VERBATIM)
     add_library(opt_resources STATIC "${CMAKE_CURRENT_BINARY_DIR}/generated/resources.cpp")
     target_include_directories(opt_resources PUBLIC src)
@@ -281,7 +280,7 @@ if(OPT_BUILD_GUI_PROBE OR OPT_BUILD_APP)
             "${CMAKE_CURRENT_BINARY_DIR}/PLaMo-Community-ja.txt" COPYONLY)
         add_custom_target(opt_build_info
             COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/write_build_info.py"
-                --target "${OPT_TARGET}" --version "${OPT_VERSION}"
+                --target "${OPT_TARGET}" --version "${OPT_VERSION}" ${image_build_arg}
                 --header "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.hpp"
                 --json "${CMAKE_CURRENT_BINARY_DIR}/BUILD-INFO.json"
             BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.hpp" "${CMAKE_CURRENT_BINARY_DIR}/BUILD-INFO.json"

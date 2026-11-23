@@ -19,6 +19,8 @@ import zipfile
 from common import ROOT,TARGETS,lock,run,sha256
 from write_build_info import build_info
 from audit_dependencies import audit_macho,audit_pe
+from bootstrap_image_reading import SOURCES as OCR_SOURCES, REVISION as TESSDATA_REVISION
+from image_reading_assets import catalog
 
 MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
 
@@ -77,6 +79,14 @@ def source_sbom(info, pdf):
             if patch['dependency'] == name and info['target'] in patch['targets']:
                 component['properties'].append({'name': 'git:patched-tree', 'value': patch['tree']})
         components.append(component)
+    if info.get('image_reading'):
+        for name,(url,revision) in OCR_SOURCES.items():
+            components.append({'type':'library','name':name,'version':revision,
+                               'externalReferences':[{'type':'vcs','url':url}]})
+        _, models = catalog()
+        for key, _, _, bundled_sha in models:
+            components.append({'type':'machine-learning-model','name':key+'.traineddata',
+                               'version':TESSDATA_REVISION,'hashes':[{'alg':'SHA-256','content':bundled_sha}]})
     for path, url, revision in re.findall(r'^([\w./-]+): (https://\S+)@([0-9a-f]{40})\s*$',
                                           pdf['resolved_dependencies'], re.MULTILINE):
         if path == 'pdfium':
@@ -147,10 +157,12 @@ def main():
     if (args.mac_identity or args.notary_profile) and not mac:parser.error('Apple signing requires a macOS target')
     if args.notary_profile and not args.mac_identity:parser.error('--notary-profile requires --mac-identity')
     signature=('Developer ID' if args.mac_identity else 'ad-hoc') if mac else ('Authenticode' if args.windows_cert else 'unsigned')
-    info=build_info(target,version)
-    if info['dirty']:raise SystemExit('Commit reviewed source before packaging; working tree is modified')
     build=ROOT/'build'/target
-    if not (build/'BUILD-INFO.json').exists() or json.loads((build/'BUILD-INFO.json').read_text())!=info:
+    info_file=build/'BUILD-INFO.json'
+    recorded=json.loads(info_file.read_text()) if info_file.is_file() else {}
+    info=build_info(target,version,recorded.get('image_reading',False))
+    if info['dirty']:raise SystemExit('Commit reviewed source before packaging; working tree is modified')
+    if recorded!=info:
         raise SystemExit('Build identity is stale. Run cmake --build --preset '+target)
     pdf=json.loads((ROOT/'.work/pdfium'/target/'pdfium-build-manifest.json').read_text())
     if pdf['revision']!=lock()['dependencies']['PDFium']['revision'] or pdf['target']!=target:raise SystemExit('PDFium manifest differs from lock/target')

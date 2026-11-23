@@ -116,6 +116,20 @@ class PackageTest(unittest.TestCase):
     def test_windows_release(self):
         self.package_fixture('windows-x64-release')
 
+    def test_ocr_build_identity_and_inventory(self):
+        target='windows-x64-release'
+        plain=package.build_info(target,'0.3.0',False)
+        ocr=package.build_info(target,'0.3.0',True)
+        self.assertNotEqual(plain['identity_sha256'],ocr['identity_sha256'])
+        def inventory(info):
+            return {c['name']:c for c in package.source_sbom(info,{'resolved_dependencies':''})['components']}
+        with_ocr=inventory(ocr)
+        _,models=package.catalog()
+        self.assertEqual(set(with_ocr)-set(inventory(plain)),
+                         set(package.OCR_SOURCES)|{key+'.traineddata' for key,_,_,_ in models})
+        for key,_,_,digest in models:
+            self.assertEqual(with_ocr[key+'.traineddata']['hashes'],[{'alg':'SHA-256','content':digest}])
+
     def test_macos_release(self):
         self.package_fixture('macos-arm64-release')
 

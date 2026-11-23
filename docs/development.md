@@ -21,6 +21,7 @@ python scripts/package.py --target macos-arm64-release --model-file /absolute/pa
 ```
 
 Windowsではtargetを `windows-x64-release` に変更します。
+0.3.0のWindows配布用ビルドでは、先に `python scripts/bootstrap_image_reading.py` を実行し、configureに `-DOPT_PAGE_IMAGE_READING=ON -DOPT_OCR_ASAN=OFF` を指定します。
 他に `windows-x64-debug`、`macos-arm64-debug` があります。
 Debugには対応するDebug依存を別に構築します。
 
