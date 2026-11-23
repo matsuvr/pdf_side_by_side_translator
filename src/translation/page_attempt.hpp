@@ -41,6 +41,7 @@ public:
     void promote_condition_key(std::string key){data_.condition_key=std::move(key);}
     PageState state() const noexcept {return data_.state;}
     std::string display_text() const;
+    std::string_view source_text() const noexcept {return *source_;}
     static std::shared_ptr<const std::string> source(const PageLayout& layout);
 private:
     WorkStamp base_,active_stamp_;

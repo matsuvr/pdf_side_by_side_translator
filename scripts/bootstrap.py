@@ -12,6 +12,17 @@ import zipfile
 from common import ROOT, WORK, TARGETS, checkout, depot_environment, download, lock, run, sha256
 
 
+def prepare_llama(spec, src, target):
+    entry = spec["dependencies"]["llama.cpp"]
+    upstream = src / "llama.cpp"
+    checkout(entry, upstream)
+    if target.startswith("windows-x64-"):
+        from windows_llama import prepare_windows_worktree
+        patch, = (p for p in spec["patches"] if p["dependency"] == "llama.cpp"
+                  and target in p["targets"])
+        prepare_windows_worktree(upstream, src / "windows-x64/llama.cpp", entry["revision"], patch)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, choices=TARGETS)
@@ -20,8 +31,8 @@ def main():
     args = parser.parse_args()
     spec = lock()
     deps = spec["dependencies"]
-    for name in ("wxWidgets", "llama.cpp"):
-        checkout(deps[name], WORK / "src" / name)
+    checkout(deps["wxWidgets"], WORK / "src/wxWidgets")
+    prepare_llama(spec, WORK / "src", args.target)
 
     sqlite = deps["SQLite"]
     archive = WORK / "downloads/sqlite.zip"

@@ -11,8 +11,18 @@ function(opt_add_windows_cpu_kernels)
         list(APPEND avx2_names "${name}=${name}_avx2")
     endforeach()
 
-    set(cpu_dir "${OPT_DEPENDENCIES}/llama.cpp/ggml/src/ggml-cpu")
+    set(cpu_dir "${opt_llama_source}/ggml/src/ggml-cpu")
     set(isa_flags "/clang:-mavx2;/clang:-mfma;/clang:-mf16c")
+    set(greedy "${dispatch_dir}/greedy_avx2.cpp")
+    target_sources(opt_inference PRIVATE "${greedy}")
+    set_source_files_properties("${greedy}" PROPERTIES COMPILE_OPTIONS "${isa_flags}")
+
+    set(vnni "${cpu_dir}/arch/x86/plamo3-repack-x86.cpp")
+    target_sources(ggml-cpu PRIVATE "${vnni}")
+    set_source_files_properties("${vnni}" TARGET_DIRECTORY ggml-cpu PROPERTIES
+        COMPILE_OPTIONS "${isa_flags};/clang:-mavxvnni")
+    set_property(SOURCE "${cpu_dir}/repack.cpp" TARGET_DIRECTORY ggml-cpu
+        APPEND PROPERTY COMPILE_DEFINITIONS OPT_PLAMO_VNNI)
     set(avx2 "${CMAKE_CURRENT_BINARY_DIR}/windows_quants_avx2.c")
     file(CONFIGURE OUTPUT "${avx2}" CONTENT "#include \"arch/x86/quants.c\"\n")
     target_sources(ggml-cpu PRIVATE "${avx2}" "${dispatch_dir}/cpu_dispatch.cpp")

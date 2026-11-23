@@ -7,7 +7,7 @@
 namespace opt {
 struct PdfDeliveryBatch {
     std::deque<std::shared_ptr<const PdfEvent>> events;
-    bool lost_layout=false,lost_raster=false;
+    bool lost_layout=false,lost_raster=false,lost_page_image=false;
     std::size_t raster_bytes=0,layout_bytes=0;
 };
 // One pending wake; bounds raw pixels and pending layouts independently. Dropped
@@ -29,12 +29,13 @@ public:
             limited->hit.reset();limited->code="PdfTextBudget";limited->message=LayoutResourceLimit{}.what();event=std::move(limited);
         }
         if(raster(event)>raster_budget){
-            auto failed=std::make_shared<PdfEvent>(*event);failed->pixels.reset();failed->kind=PdfEvent::Kind::Failed;
+            auto failed=std::make_shared<PdfEvent>(*event);failed->pixels.reset();
+            if(failed->kind!=PdfEvent::Kind::PageImage)failed->kind=PdfEvent::Kind::Failed;
             failed->code="PdfPage";failed->message="描画用メモリの予算を超えました。表示倍率を変更して再試行できます。";event=std::move(failed);
         }
         std::lock_guard lock(mutex_);auto& q=pending_.events;
         auto remove=[&](auto at,bool dropped){
-            if(dropped){pending_.lost_raster|=bool((*at)->pixels);pending_.lost_layout|=bool((*at)->layout)||(*at)->kind==PdfEvent::Kind::SearchResult;}
+            if(dropped){pending_.lost_page_image|=(*at)->kind==PdfEvent::Kind::PageImage;pending_.lost_raster|=bool((*at)->pixels)&&(*at)->kind!=PdfEvent::Kind::PageImage;pending_.lost_layout|=bool((*at)->layout)||(*at)->kind==PdfEvent::Kind::SearchResult;}
             pending_.raster_bytes-=raster(*at);pending_.layout_bytes-=layout(*at);return q.erase(at);
         };
         for(auto i=q.begin();i!=q.end();){

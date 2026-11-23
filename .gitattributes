@@ -4,3 +4,4 @@
 *.ico binary
 *.icns binary
 *.otf binary
+*.patch text eol=lf whitespace=-blank-at-eol

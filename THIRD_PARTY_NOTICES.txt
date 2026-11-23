@@ -21,8 +21,8 @@ The following documents are reproduced verbatim from the recorded inputs.
 Optional alternatives are explicitly identified in the section names.
 Pinned source revisions are recorded in deps/third_party.lock.json; PDFium's
 transitive commits follow that revision's DEPS. Complete input hashes and
-source paths are recorded in deps/licenses.lock.json. No upstream source
-patches are applied by this application.
+source paths are recorded in deps/licenses.lock.json. Windows builds apply
+the PLaMo CPU optimizations listed in deps/third_party.lock.json to llama.cpp.
 
 ============================================================================
 Application original source/resources

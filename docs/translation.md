@@ -29,6 +29,9 @@ x64 Release measurements use the same PDF-to-translation path.
 
 ### Windows CPU measurements
 
+The November 2026 comparison of the previous reader, updated upstream llama.cpp
+and the Windows PLaMo kernels is in [Windows CPU translation benchmarks](plamo-cpu.md).
+
 On a Core i9-13900, five interleaved runs per case used the same local PLaMo 3
 Translate 0.8B Q4_K_M GGUF (SHA-256 `73a1d942d8ab1e654d83898d997b8b4808c32ba669b378df612230989d18f079`).
 Each run started a new process with a warm filesystem cache. Times are median

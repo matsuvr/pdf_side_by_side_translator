@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "dependency_lock_sha256": "780961156d49a7361d15a7f4c70adbabdeb64e219b174b62ea3113db42b91254",
-  "notices_sha256": "17483263dd4682e1b31c3901c8a0dd29a2ea26f53ab6a6e33d749fedc89ce6fa",
+  "dependency_lock_sha256": "7d5f1880b6fa1dc77899e65f85ad13788aaac6fa0c7e03dd5d49ef26936bb8fe",
+  "notices_sha256": "e805e9b6a063a4c6e1ab29f8518e39ceadfe99a3759d90b89d3653eff75f0e0b",
   "inputs": [
     {
       "component": "Application original source/resources",
@@ -299,7 +299,7 @@
     },
     "llama": {
       "url": "https://github.com/ggml-org/llama.cpp.git",
-      "revision": "a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5",
+      "revision": "8d60873dfb8619f2b5ed31adfbab07cccb40db5c",
       "required_tokenizer_ancestor": "abeada335e2e78bd3fe63febafab7e900ce75810"
     },
     "LLVM-compiler-rt": "https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT",

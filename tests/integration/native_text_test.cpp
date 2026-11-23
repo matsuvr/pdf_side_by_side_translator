@@ -1,6 +1,7 @@
 // Run in an interactive desktop session; this exercises the real native widget.
 #include "platform/font.hpp"
 #include "platform/text_view.hpp"
+#include "platform/text_format.hpp"
 #include <wx/wx.h>
 #include <wx/stdpaths.h>
 #include <wx/clipbrd.h>
@@ -9,6 +10,7 @@
 #include <iostream>
 #ifdef __APPLE__
 #import <AppKit/AppKit.h>
+#import <CoreText/CoreText.h>
 #else
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -24,6 +26,53 @@ double scroll_y(wxTextCtrl& control){
 #endif
 }
 void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+void check_language_at(wxTextCtrl& control,long at,std::string_view language){
+#ifdef _WIN32
+    control.SetSelection(at,at+1);
+    CHARFORMAT2W format{sizeof(format)};
+    SendMessageW(static_cast<HWND>(control.GetHandle()),EM_GETCHARFORMAT,SCF_SELECTION,
+                 reinterpret_cast<LPARAM>(&format));
+    const auto face=language=="ja"?L"Noto Sans CJK JP":language=="zh-hans"?L"Microsoft YaHei":L"Microsoft JhengHei";
+    if(std::wstring_view(format.szFaceName)!=face ||
+       format.lcid!=LocaleNameToLCID(wxString::FromUTF8(language.data(),language.size()).wc_str(),0)){
+        std::cerr<<"position="<<at<<" expected="<<language<<" face="<<wxString(format.szFaceName).ToStdString()
+                 <<" charset="<<int(format.bCharSet)<<" locale="<<format.lcid<<'\n';
+        throw std::runtime_error("wrong face or language in native reader");
+    }
+#else
+    auto* view=(NSTextView*)[(NSScrollView*)control.GetHandle() documentView];
+    auto* attrs=[[view textStorage] attributesAtIndex:at effectiveRange:nil];
+    auto* tag=(NSString*)attrs[(NSString*)kCTLanguageAttributeName];
+    require(tag && std::string_view([tag UTF8String])==language,"wrong text language in native reader");
+    if(language=="ja")
+        require([[attrs[NSFontAttributeName] familyName] isEqualToString:@"Noto Sans CJK JP"],
+                "translated Han must use the Japanese face");
+#endif
+}
+void check_japanese_font(wxTextCtrl& control){
+    const std::string original="列表中的直辖市";
+    for(auto language:{"zh-hans","zh-hant"}){
+        opt::set_reader_font(control,14,true,language);
+        opt::update_readonly_text(control,{},original,true,language);
+        check_language_at(control,4,language);
+    }
+    const std::string heading="第27回大会\n";
+    const std::string mixed=heading+"直近の決議。「直辖市」の直近";
+    opt::set_reader_font(control,14,true,"ja");
+    opt::update_readonly_text(control,original,heading,true);
+    opt::update_readonly_text(control,heading,mixed,false);
+    const auto quotes=opt::ReaderQuoteScanner{}.scan(mixed,original);
+    require(quotes.size()==1,"a verbatim Chinese name was quoted");
+    for(const auto points:{14,21}){
+        if(points!=14)opt::set_reader_font(control,points,true,"ja");
+        opt::style_reader_quotes(control,quotes,"zh-hans");
+        for(const auto at:{4,7,19})check_language_at(control,at,"ja");
+        check_language_at(control,14,"zh-hans");
+    }
+    require(control.GetValue()==wxString::FromUTF8(mixed),"language styling must preserve Unicode text");
+    opt::set_reader_font(control,14,true,"ja");
+    check_language_at(control,14,"ja");
+}
 void check_append_text(wxTextCtrl& control){
     const auto check=[&](const std::string& prefix,const std::string& suffix){
         const auto complete=prefix+suffix;
@@ -124,6 +173,7 @@ class TextTest final:public wxApp {
     wxTimer timer_{this};
     void run(){
         try{
+            check_japanese_font(*text_);
             check_append_text(*text_);
 #ifdef _WIN32
             check_streamed_wrap(*text_);
@@ -140,7 +190,7 @@ class TextTest final:public wxApp {
             require(begin==120&&end==150,"native selection survives repeated streaming appends");
             require(wxWindow::FindFocus()==focus_before,"stream does not steal native focus");
             require(std::abs(scroll_y(*text_)-y)<=1,"native pixel viewport survives streaming");
-            auto font=text_->GetFont();font.SetPointSize(21);text_->SetFont(font);text_->SetSelection(begin,end);opt::restore_text_logical_anchor(*text_,anchor);
+            opt::set_reader_font(*text_,21,true,"ja");text_->SetSelection(begin,end);opt::restore_text_logical_anchor(*text_,anchor);
             auto restored=opt::text_logical_anchor(*text_);
             require(restored<=anchor&&anchor-restored<250,"font resize restores same logical line");
             const auto before_resize=restored;
@@ -173,7 +223,7 @@ public:
 #ifdef _WIN32
         text_->SetDoubleBuffered(true);
 #endif
-        auto font=text_->GetFont();font.SetFaceName("Noto Sans CJK JP");font.SetPointSize(14);text_->SetFont(font);
+        opt::set_reader_font(*text_,14,true,"ja");
         sizer->Add(text_,1,wxEXPAND);frame_->SetSizer(sizer);frame_->SetClientSize(820,600);frame_->Show();frame_->Layout();
         frame_->Raise();
 #ifdef __APPLE__

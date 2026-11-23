@@ -12,7 +12,9 @@ int main(int argc, char** argv) {
         const int positional_count=argc-static_cast<int>(prepare_only);
         std::atomic_bool cancel{false};
         opt::Engine engine(cancel);
-        engine.load(std::filesystem::u8path(argv[1]), positional_count < 3 || std::string(argv[2]) == "cpu");
+        const std::filesystem::path model(reinterpret_cast<const char8_t*>(argv[1]));
+        const bool cpu = positional_count < 3 || std::string(argv[2]) == "cpu";
+        engine.load(model, cpu);
         std::cout << "backend=" << engine.backend() << " context=" << engine.capacity() << '\n';
         if (positional_count > 3) {
             std::ifstream fixture(argv[3]);
@@ -161,5 +163,12 @@ int main(int argc, char** argv) {
         if(engine.generate(prepared,[](std::string_view){}).reason!=opt::FinishReason::ContextLimit)
             throw std::runtime_error("Context overflow was not rejected");
         std::cout << "cancel_output_limit_context_reset=passed\n";
+        engine.unload();
+        engine.load(model, cpu);
+        const auto reloaded_input = engine.prepare("The device has 3 sensors. It does not use the network.", opt::Form::Plain);
+        const auto reloaded = engine.generate(reloaded_input, [](std::string_view){});
+        if (reloaded.reason != opt::FinishReason::Completed || reloaded.text != baseline.text)
+            throw std::runtime_error("Translation changed after unloading and reloading the model");
+        std::cout << "model_reload=passed\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

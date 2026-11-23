@@ -73,9 +73,13 @@ def checkout(entry, destination):
     actual_origin = run(["git", "remote", "get-url", "origin"], cwd=destination, capture=True).strip()
     if actual_origin != entry["url"]:
         raise RuntimeError("Dependency origin differs from the official lock: " + destination.name)
-    if current != entry["revision"]:
-        run(["git", "fetch", "--depth=1", "origin", entry["revision"]], cwd=destination)
-        run(["git", "checkout", "--detach", entry["revision"]], cwd=destination)
+    revision = entry["revision"]
+    if current != revision and subprocess.run(
+            ["git", "cat-file", "-e", revision + "^{commit}"], cwd=destination,
+            stderr=subprocess.DEVNULL).returncode:
+        run(["git", "fetch", "--depth=1", "origin", revision], cwd=destination)
+    if current != revision:
+        run(["git", "checkout", "--detach", revision], cwd=destination)
     if entry.get("submodules"):
         run(["git", "submodule", "update", "--init", "--recursive", "--depth=1"], cwd=destination)
     assert_clean_checkout(destination)

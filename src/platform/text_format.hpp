@@ -34,4 +34,45 @@ inline std::optional<std::size_t> utf16_units(std::string_view text,bool collaps
     }
     return units;
 }
+
+// Native UTF-16 offsets, excluding the Japanese quotation marks themselves.
+struct ReaderQuote {std::size_t begin,end;};
+class ReaderQuoteScanner {
+    std::size_t consumed=0,units=0,begin=0,byte_begin=0;
+    char32_t closing=0;
+public:
+    // text extends the last complete UTF-8 prefix. Reset the scanner on replacement.
+    std::vector<ReaderQuote> scan(std::string_view text,std::string_view source){
+        std::vector<ReaderQuote> ranges;
+        visit_utf8(text.substr(consumed),[&](const Utf8Scalar& c){
+            const auto at=consumed+c.begin;
+#ifdef _WIN32
+            if(c.value=='\n'&&at>0&&text[at-1]=='\r')return;
+#else
+            // NSString consumes a leading UTF-8 BOM.
+            if(at==0&&c.value==0xfeff)return;
+#endif
+            if(closing && c.value==closing){
+                if(begin<units && source.find(text.substr(byte_begin,at-byte_begin))!=source.npos)
+                    ranges.push_back({begin,units});
+                closing=0;
+            }else{
+                char32_t end=0;
+                switch(c.value){
+                case U'「':end=U'」';break;
+                case U'『':end=U'』';break;
+                case U'“':end=U'”';break;
+                case U'‘':end=U'’';break;
+                case U'"':end=U'"';break;
+                case U'（':end=U'）';break;
+                case U'(':end=U')';break;
+                }
+                if(end){closing=end;begin=units+1;byte_begin=consumed+c.end;}
+            }
+            units+=c.value<0x10000?1:2;
+        },[]{});
+        consumed=text.size();
+        return ranges;
+    }
+};
 }

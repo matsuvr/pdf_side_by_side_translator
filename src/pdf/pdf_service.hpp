@@ -53,7 +53,7 @@ struct PdfSearchRequest {
     std::shared_ptr<const PageLayout> cached_layout;
 };
 struct PdfEvent {
-    enum class Kind { Opened, Closed, PageInfo, ViewReady, TileReady, Extracted, ExtractionDeferred, SearchResult, PasswordRequired, Failed };
+    enum class Kind { Opened, Closed, PageInfo, ViewReady, TileReady, Extracted, ExtractionDeferred, SearchResult, PasswordRequired, PageImage, Failed };
     Kind kind=Kind::Failed;
     DocumentEpoch document=0;
     PageIndex page=0;
@@ -69,8 +69,11 @@ struct PdfEvent {
     std::shared_ptr<const RasterBuffer> pixels;
     std::shared_ptr<const PageLayout> layout;
     std::uint64_t query_generation=0;
+    std::uint64_t image_generation=0;
+    int image_dpi=0;
     std::optional<TextHit> hit;
     std::string code,message,detail;
+    std::string document_language;
 };
 struct PdfServiceStats {
     std::uint64_t page_cache_peak=0,extraction_queue_peak=0,tile_bytes_peak=0,render_slices=0,render_yields=0,text_slices=0,text_yields=0,max_render_slice_us=0;
@@ -86,6 +89,7 @@ public:
     void close(DocumentEpoch epoch);
     void page_info(DocumentEpoch epoch,PageIndex page);
     void viewport(ViewRequest request);
+    bool render_page_image(DocumentEpoch epoch,PageIndex page,int rotation,std::uint64_t generation);
     bool extract(DocumentEpoch epoch,PageIndex page);
     void search(PdfSearchRequest request);
     void cancel_search(DocumentEpoch epoch,std::uint64_t generation);
