@@ -45,7 +45,13 @@ if(MSVC)
         target_compile_options(libtesseract PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIintrin.h>")
     endif()
 endif()
-add_library(opt_image_reading STATIC src/ocr/image_reading.cpp src/platform/windows/image_worker.cpp)
+if(WIN32)
+    set(image_platform windows)
+else()
+    set(image_platform macos)
+    enable_language(ASM)
+endif()
+add_library(opt_image_reading STATIC src/ocr/image_reading.cpp src/platform/${image_platform}/image_worker.cpp)
 target_include_directories(opt_image_reading PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../src")
 target_link_libraries(opt_image_reading PRIVATE libtesseract)
 target_include_directories(opt_image_reading PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/third_party/image-tess/include")
@@ -56,14 +62,26 @@ if(NOT EXISTS "${cld_root}/public/compact_lang_det.h")
 endif()
 # Upstream compile_libs.sh, full statically linked language tables.
 set(cld_sources cldutil cldutil_shared compact_lang_det compact_lang_det_hint_code
-    compact_lang_det_impl debug fixunicodevalue generated_entities generated_language generated_ulscript
+    debug fixunicodevalue generated_entities generated_language generated_ulscript
     getonescriptspan lang_script offsetmap scoreonescriptspan tote utf8statetable
     cld_generated_cjk_uni_prop_80 cld2_generated_cjk_compatible cld_generated_cjk_delta_bi_32
     generated_distinct_bi_0 cld2_generated_quad0122 cld2_generated_deltaocta0122
     cld2_generated_distinctocta0122 cld_generated_score_quad_octa_0122)
 list(TRANSFORM cld_sources PREPEND "${cld_root}/internal/")
 list(TRANSFORM cld_sources APPEND ".cc")
-add_library(opt_cld2 STATIC ${cld_sources})
+# CLD2 uses 0xffff for an empty score slot. Keep it out of the Language enum.
+# Apply the common fix to a build-local copy of the pinned translation unit.
+set(cld_fix_dir "${CMAKE_CURRENT_BINARY_DIR}/cld2")
+set(cld_impl "compact_lang_det_impl.cc")
+set(cld_patch "${PROJECT_SOURCE_DIR}/deps/patches/cld2-skip-empty-language-slots.patch")
+file(MAKE_DIRECTORY "${cld_fix_dir}")
+add_custom_command(OUTPUT "${cld_fix_dir}/${cld_impl}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${cld_root}/internal/${cld_impl}" "${cld_fix_dir}/${cld_impl}"
+    COMMAND "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_CURRENT_BINARY_DIR}"
+        "${GIT_EXECUTABLE}" apply --no-index --ignore-space-change "${cld_patch}"
+    WORKING_DIRECTORY "${cld_fix_dir}"
+    DEPENDS "${cld_root}/internal/${cld_impl}" "${cld_patch}" VERBATIM)
+add_library(opt_cld2 STATIC ${cld_sources} "${cld_fix_dir}/${cld_impl}")
 if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(opt_cld2 PRIVATE /clang:-Wno-c++11-narrowing)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -91,7 +109,15 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${image_asset_root}/deps/image_reading_languages.tsv"
     "${image_asset_root}/deps/image_reading_models.tsv" ${image_model_files})
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${image_asset_root}/scripts/image_reading_assets.py"
-    --out "${image_generated}" --model-dir "${OPT_IMAGE_MODEL_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+    --out "${image_generated}" --model-dir "${OPT_IMAGE_MODEL_DIR}" --platform "${image_platform}"
+    COMMAND_ERROR_IS_FATAL ANY)
 target_include_directories(opt_image_reading PUBLIC "${image_generated}")
-set(image_rc "${image_generated}/windows-image-reading.rc")
-set_source_files_properties("${image_rc}" PROPERTIES OBJECT_DEPENDS "${image_model_files}")
+if(WIN32)
+    set(image_rc "${image_generated}/windows-image-reading.rc")
+    set_source_files_properties("${image_rc}" PROPERTIES OBJECT_DEPENDS "${image_model_files}")
+    set(image_model_sources src/platform/windows/image_models.cpp "${image_rc}")
+else()
+    set(image_asm "${image_generated}/macos-image-reading.s")
+    set_source_files_properties("${image_asm}" PROPERTIES OBJECT_DEPENDS "${image_model_files}")
+    target_sources(opt_image_reading PRIVATE src/platform/macos/image_models.cpp "${image_asm}")
+endif()

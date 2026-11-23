@@ -1354,7 +1354,8 @@ struct ApplicationController::Impl {
         welcome->SetSizer(welcome_sizer);
         rs->Add(welcome,1,wxEXPAND);
         left->SetSizer(ls);right->SetSizer(rs);split->SplitVertically(left,right,frame->GetClientSize().x/2);split->SetSashGravity(0.5);split->SetMinimumPaneSize(frame->FromDIP(120));root->Add(split,1,wxEXPAND);frame->SetSizer(root);
-        frame->CreateStatusBar(3);int widths[]{-2,-1,-1};frame->SetStatusWidths(3,widths);frame->SetStatusText(wxS("モデル未設定"),1);
+        frame->CreateStatusBar(3,wxSTB_DEFAULT_STYLE & ~wxSTB_SHOW_TIPS);
+        int widths[]{-2,-1,-1};frame->SetStatusWidths(3,widths);frame->SetStatusText(wxS("モデル未設定"),1);
         if(!font_ok)frame->SetStatusText(wxS("同梱フォントを登録できませんでした。"),2);
         frame->SetDropTarget(new PdfDropTarget([this](const wxString& name){open_path(name);}));
         canvas->SetDropTarget(new PdfDropTarget([this](const wxString& name){open_path(name);}));

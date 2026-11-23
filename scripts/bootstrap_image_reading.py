@@ -11,7 +11,7 @@ SOURCES = {
 }
 REVISION = "87416418657359cb625c412a48b6e1d6d41c29bd"
 
-if __name__ == "__main__":
+def prepare_image_reading():
     for name, (url, revision) in SOURCES.items():
         checkout({"url": url, "revision": revision}, WORK / "src" / name)
     _, models = catalog()
@@ -35,3 +35,7 @@ if __name__ == "__main__":
             tmp.replace(target)
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(fetch, models))
+
+
+if __name__ == "__main__":
+    prepare_image_reading()

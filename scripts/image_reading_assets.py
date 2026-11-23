@@ -1,4 +1,4 @@
-"""Validate the OCR roster/lock; generate the C++ catalog and Windows resources."""
+"""Validate the OCR roster and generate the native embedded model data."""
 import argparse
 from pathlib import Path
 import re
@@ -57,33 +57,48 @@ def write_changed(path, text):
         path.write_bytes(data)
 
 
-def generate(out, model_dir):
+def generate(out, model_dir, platform):
     langs, models = catalog()
     out.mkdir(parents=True, exist_ok=True)
     lang_data = ",\n".join('    {"%s","%s","%s","%s"}' % tuple(row) for row in langs)
-    model_data, rc = [], []
-    for index, (key, digest, size, output_digest) in enumerate(models, 300):
-        model_data.append(f'    {{"{key}",{index}}}')
+    model_data, native_data = [], []
+    offset = 0
+    for index, (key, _, size, output_digest) in enumerate(models, 300):
         path = model_dir / (key + ".traineddata")
         if not path.is_file() or (not key.startswith("script/") and path.stat().st_size != int(size)) or sha256(path) != output_digest:
             raise RuntimeError(f"Missing or unverified {path.name}; run scripts/bootstrap_image_reading.py")
         filename = path.resolve().as_posix()
-        if '"' in filename:
-            raise ValueError("Resource path contains a quote")
-        rc.append(f'{index} RCDATA "{filename}"')
+        if any(c in filename for c in '"\r\n'):
+            raise ValueError("Invalid embedded model path")
+        if platform == "windows":
+            model_data.append(f'    {{"{key}",{index}}}')
+            native_data.append(f'{index} RCDATA "{filename}"')
+        else:
+            length = path.stat().st_size
+            model_data.append(f'    {{"{key}",{offset},{length}}}')
+            offset += length
+            escaped = filename.replace("\\", "\\\\")
+            native_data.append(f'.incbin "{escaped}"')
+    fields = 'int resource;' if platform == "windows" else 'std::size_t offset,size;'
     write_changed(out / "image_reading_assets.hpp", (
-        '#pragma once\n#include <string_view>\nnamespace opt {\n'
+        '#pragma once\n#include <cstddef>\n#include <string_view>\nnamespace opt {\n'
         'struct ImageLanguage {std::string_view tag,model,label,scripts;};\n'
         'inline constexpr ImageLanguage image_languages[]{\n' + lang_data + '\n};\n'
-        'struct ImageModel {std::string_view key;int resource;};\n'
+        'struct ImageModel {std::string_view key;' + fields + '};\n'
         'inline constexpr ImageModel image_models[]{\n' + ',\n'.join(model_data) + '\n};\n}\n'
     ))
-    write_changed(out / "windows-image-reading.rc", "#pragma code_page(65001)\n" + "\n".join(rc) + "\n")
+    if platform == "windows":
+        write_changed(out / "windows-image-reading.rc", "#pragma code_page(65001)\n" + "\n".join(native_data) + "\n")
+    else:
+        write_changed(out / "macos-image-reading.s",
+                      ".section __TEXT,__ocr_models,regular\n"
+                      ".private_extern _opt_ocr_models\n_opt_ocr_models:\n" + "\n".join(native_data) + "\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--model-dir", type=Path, required=True)
+    parser.add_argument("--platform", choices=("windows", "macos"), required=True)
     args = parser.parse_args()
-    generate(args.out, args.model_dir)
+    generate(args.out, args.model_dir, args.platform)

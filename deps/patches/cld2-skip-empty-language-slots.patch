@@ -1,0 +1,24 @@
+--- a/compact_lang_det_impl.cc
++++ b/compact_lang_det_impl.cc
+@@ -1156,6 +1156,8 @@
+                             bool FLAGS_cld2_html, bool FLAGS_cld2_quiet) {
+   for (int sub = 0; sub < doc_tote->MaxSize(); ++sub) {
+     int close_packedlang = doc_tote->Key(sub);
++    // Offline PDF Translator: skip empty slots before converting keys to Language.
++    if (close_packedlang == DocTote::kUnusedKey) {continue;}
+     int subscr = LanguageCloseSet(static_cast<Language>(close_packedlang));
+     if (subscr == 0) {continue;}
+ 
+@@ -1164,9 +1166,10 @@
+ 
+     // Nonzero longword score: Go look for the other of this pair
+     for (int sub2 = sub + 1; sub2 < doc_tote->MaxSize(); ++sub2) {
+-      if (LanguageCloseSet(static_cast<Language>(doc_tote->Key(sub2))) == subscr) {
++      int close_packedlang2 = doc_tote->Key(sub2);
++      if (close_packedlang2 == DocTote::kUnusedKey) {continue;}
++      if (LanguageCloseSet(static_cast<Language>(close_packedlang2)) == subscr) {
+         // We have a matching pair
+-        int close_packedlang2 = doc_tote->Key(sub2);
+ 
+         // Move all the text bytes from lower byte-count to higher one
+         int from_sub, to_sub;

@@ -1,11 +1,13 @@
 #include "ui/image_reading_bar.hpp"
 #include "image_reading_assets.hpp"
 #include <wx/wx.h>
+#ifdef __WXMSW__
 #include <wx/graphics.h>
 #include <wx/renderer.h>
 #include <windows.h>
-#include <algorithm>
 #include <memory>
+#endif
+#include <algorithm>
 
 namespace opt {
 namespace {
@@ -15,22 +17,29 @@ wxColour subdued_text(wxWindow* window){
     const auto fg=wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     return fg.ChangeLightness(window->GetBackgroundColour().GetLuminance()>0.5?140:75);
 }
+#ifdef __WXMSW__
 void draw_focus(wxWindow* control,wxDC& dc){
     if(control->HasFocus()&&!(SendMessageW(control->GetHandle(),WM_QUERYUISTATE,0,0)&UISF_HIDEFOCUS))
         wxRendererNative::Get().DrawFocusRect(control,dc,control->GetClientRect());
 }
+#endif
 }
 
 ImageReadingBar::ImageReadingBar(wxWindow* parent,std::function<void(bool)> toggle,
                                  std::function<void(const ImageLanguage*)> correct)
     :wxPanel(parent),correct_(std::move(correct)){
-    word_=new wxButton(this,wxID_ANY,{},wxDefaultPosition,wxDefaultSize,wxBU_EXACTFIT|wxBORDER_NONE);
+    long word_style=wxBU_EXACTFIT;
+#ifdef __WXMSW__
+    word_style|=wxBORDER_NONE;
+#endif
+    word_=new wxButton(this,wxID_ANY,{},wxDefaultPosition,wxDefaultSize,word_style);
     suffix_=new wxStaticText(this,wxID_ANY,wxS("として読み取り"));
     toggle_=new wxCheckBox(this,wxID_ANY,toggle_label);
     word_->SetCursor(wxCursor(wxCURSOR_HAND));
     word_->SetToolTip(wxS("別の言語で読み直す"));
     word_->Bind(wxEVT_BUTTON,[this](wxCommandEvent&){choose_language();});
     toggle_->Bind(wxEVT_CHECKBOX,[toggle=std::move(toggle)](wxCommandEvent& e){toggle(e.IsChecked());});
+#ifdef __WXMSW__
     // Keep the native button/checkbox input and accessibility semantics.
     word_->Bind(wxEVT_PAINT,[this](wxPaintEvent&){
         wxPaintDC dc(word_);
@@ -61,6 +70,7 @@ ImageReadingBar::ImageReadingBar(wxWindow* parent,std::function<void(bool)> togg
         dc.DrawLabel(toggle_text_,label,wxALIGN_CENTER_VERTICAL|wxALIGN_LEFT);
         draw_focus(toggle_,dc);
     });
+#endif
     Bind(wxEVT_SIZE,[this](wxSizeEvent& event){arrange();event.Skip();});
     update(false,nullptr,{},false);
 }
@@ -89,12 +99,18 @@ void ImageReadingBar::arrange(){
     toggle_text_=switch_width>room?wxS("画像から\n読み取り (OCR)"):toggle_label;
     if(switch_width>room&&toggle_->GetTextExtent(wxS("読み取り (OCR)")).x+FromDIP(46)>room)
         toggle_text_=wxS("画像から\n読み取り\n(OCR)");
+#ifndef __WXMSW__
+    if(toggle_->GetLabel()!=toggle_text_)toggle_->SetLabel(toggle_text_);
+#endif
     const int lines=1+static_cast<int>(toggle_text_.Freq('\n'));
     const int switch_height=std::max(row_height,lines*toggle_->GetCharHeight()+2*pad);
     switch_width=std::min(room,switch_width);
     int top=0;
     if(word_->IsShown()){
-        const int word_width=word_->GetTextExtent(word_->GetLabel()).x+FromDIP(4);
+        int word_width=word_->GetTextExtent(word_->GetLabel()).x+FromDIP(4);
+#ifndef __WXMSW__
+        word_width=std::max(word_width,word_->GetBestSize().x);
+#endif
         const auto suffix=suffix_->IsShown()?suffix_->GetBestSize():wxSize(0,0);
         const int word_row=std::max(row_height,suffix.y+2*pad);
         word_->SetSize(pad,0,word_width,word_row);

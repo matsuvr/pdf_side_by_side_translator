@@ -21,11 +21,11 @@ python scripts/package.py --target macos-arm64-release --model-file /absolute/pa
 ```
 
 Windowsではtargetを `windows-x64-release` に変更します。
-0.3.0のWindows配布用ビルドでは、先に `python scripts/bootstrap_image_reading.py` を実行し、configureに `-DOPT_PAGE_IMAGE_READING=ON -DOPT_OCR_ASAN=OFF` を指定します。
+WindowsとMacの通常ビルドではOCRを有効にします。既存の依存にOCR用のソースとモデルを追加するには `python scripts/bootstrap_image_reading.py` を実行します。
 他に `windows-x64-debug`、`macos-arm64-debug` があります。
 Debugには対応するDebug依存を別に構築します。
 
-bootstrapは公式の固定ソースを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
+bootstrapは公式の固定ソースとOCRモデルを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
 wxWidgets・llama.cpp・SQLiteとアプリはCMakeで静的に構築します。
 通常のCMake configure/buildはネットへ依存を取りに行きません。PDFiumと同じ固定LLVM compiler/linkerを使います。
 presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除外します。
