@@ -6,6 +6,7 @@
 #include "pdf/layout.hpp"
 #include "ocr/image_reading.hpp"
 #include "fpdfview.h"
+#include "fpdf_catalog.h"
 #include "fpdf_text.h"
 #include "fpdf_edit.h"
 #include "fpdf_progressive.h"
@@ -26,6 +27,19 @@ namespace opt {
 namespace {
 static_assert(pdf_render_flags==(FPDF_ANNOT|FPDF_RENDER_LIMITEDIMAGECACHE));
 using Clock=std::chrono::steady_clock;
+std::string catalog_language(FPDF_DOCUMENT document){
+    // PDF /Lang is an optional ASCII language tag returned as UTF-16LE.
+    FPDF_WCHAR tag[128]{};
+    const auto bytes=FPDFCatalog_GetLanguage(document,tag,sizeof(tag));
+    if(bytes<sizeof(*tag)||bytes>sizeof(tag))return {};
+    std::string result;
+    for(std::size_t i=0;i+1<bytes/sizeof(*tag);++i){
+        const auto c=tag[i];
+        if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='-'))return {};
+        result+=static_cast<char>(c>='A'&&c<='Z'?c-'A'+'a':c);
+    }
+    return result;
+}
 struct Page {
     FPDF_PAGE page=nullptr;
     FPDF_TEXTPAGE text=nullptr;
@@ -258,6 +272,7 @@ struct PdfService::Impl {
                         if(count<=0)throw std::runtime_error("PDFにページがありません。");
                         page_count=static_cast<unsigned>(count);
                         PdfEvent e;e.kind=PdfEvent::Kind::Opened;e.document=epoch;e.page_count=page_count;
+                        e.document_language=catalog_language(document);
                         e.file_signature=file->initial_signature();
                         e.file_snapshot=file->snapshot();
                         try{ e.info=describe(get_page(0)->page); }

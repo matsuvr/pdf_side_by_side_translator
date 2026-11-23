@@ -23,4 +23,23 @@ int main(){try{
     require(appended_utf8_suffix("原文","訳文").empty(),"replacement has no suffix");
     require(appended_utf8_suffix("同文","同文").empty(),"unchanged text has no suffix");
     require(appended_utf8_suffix("","先頭").empty(),"initial text uses full conversion");
+    const std::string beginning="😀\r\n『直辖";
+    opt::ReaderQuoteScanner scanner;
+    constexpr std::string_view source="设立直辖市 UNDP";
+    require(scanner.scan("😀\r",source).empty(),"stream starts before split CRLF");
+    require(scanner.scan(beginning,source).empty(),"unclosed quote spans updates");
+    const auto text=beginning+"市』と「日本語訳」（UNDP）";
+    const auto quotes=scanner.scan(text,source);
+    const auto first=*utf16_units("😀\r\n『"
+#ifdef _WIN32
+        ,true
+#endif
+    );
+    require(quotes.size()==2&&quotes[0].begin==first&&quotes[0].end==first+3&&
+            quotes[1].end-quotes[1].begin==4,"only source-matched quoted text gets source-language ranges");
+    require(opt::ReaderQuoteScanner{}.scan("直辖市と『未完","直辖市 未完").empty(),"unmarked or unfinished quotes use Japanese");
+    require(scanner.scan(text+"続き",source).empty(),
+            "streamed text does not format already closed quotes again");
+    scanner={};
+    require(scanner.scan("「原語」","原語").size()==1,"replacement restarts native offsets");
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -26,4 +26,16 @@ ctest --preset windows-x64-release -R page_image_reading
 
 全モデルを一括ロードしません。手動は指定言語のモデル（中国語は英語も）、自動は判別用モデルと該当する認識モデルだけを順次使います。実行ファイルには読み取り用データとして約150 MiBが加わります。自動で全文を最大2回認識するため、処理速度を重視する場合は手動で指定してください。
 
+OCRは同じ実行ファイルの子プロセスで動き、ページ画像と結果を匿名の共有メモリで受け渡します。ビューアーはページ切替・終了時、またはOCR開始から20秒で子プロセスを停止できます。Tesseractの文字領域は渡された画像から決定します。
+
 固定した上流ソースは[取得スクリプト](../scripts/bootstrap_image_reading.py)、言語対応表は[一覧](../deps/image_reading_languages.tsv)、モデルのSHA-256は[ロック](../deps/image_reading_models.tsv)に記載しています。自動判別に使う共通文字体系モデルのみ、サイズ削減のため上流の単語辞書を除去しました。手動選択用モデルは無加工です。ライセンスはアプリ内の第三者通知と `licenses/` を参照してください。
+
+## WindowsでのASan検証
+
+```powershell
+cmake --preset windows-x64-release -B build/windows-x64-ocr-asan -DOPT_PAGE_IMAGE_READING=ON -DOPT_OCR_ASAN=ON
+cmake --build build/windows-x64-ocr-asan --target image_reading_test
+ctest --test-dir build/windows-x64-ocr-asan -R '^page_image_reading$' --output-on-failure
+```
+
+この構成はOCR本体、Tesseract、Leptonica、CLD2、PDFから画像を受け渡すコードをASanで計測します。リンク時には `/OPT:REF,NOICF` を使います。ICFを有効にすると、異なるサイズの文字列定数が同じアドレスに統合され、ASanのグローバル変数登録と境界情報が衝突することを、PDFを開く前の起動試験で確認しています。

@@ -2,14 +2,59 @@
 #include "platform/text_format.hpp"
 #include <wx/textctrl.h>
 #import <AppKit/AppKit.h>
+#import <CoreText/CoreText.h>
 #include <algorithm>
 
 namespace opt {
-void update_readonly_text(wxTextCtrl& control,const std::string& before,const std::string& after,bool reset){
+namespace {
+NSString* language_tag(std::string_view language){
+    return language.empty()?nil:[[[NSString alloc] initWithBytes:language.data() length:language.size()
+        encoding:NSUTF8StringEncoding] autorelease];
+}
+}
+void set_reader_font(wxTextCtrl& control,int points,bool bundled_font,std::string_view language){
+    @autoreleasepool {
+        wxFontInfo font(points);
+        if(language=="ja")font.FaceName(bundled_font?"Noto Sans CJK JP":"Hiragino Sans");
+        const wxFont face(font);
+        control.SetFont(face);
+        auto* view=(NSTextView*)[(NSScrollView*)control.GetHandle() documentView];
+        auto* storage=[view textStorage];
+        const auto range=NSMakeRange(0,[storage length]);
+        [storage beginEditing];
+        [storage addAttribute:NSFontAttributeName value:face.OSXGetNSFont() range:range];
+        auto* key=(NSString*)kCTLanguageAttributeName;
+        if(auto* tag=language_tag(language))[storage addAttribute:key value:tag range:range];
+        else [storage removeAttribute:key range:range];
+        [storage endEditing];
+    }
+}
+void style_reader_quotes(wxTextCtrl& control,std::span<const ReaderQuote> quotes,std::string_view language){
+    if(quotes.empty())return;
+    @autoreleasepool {
+        auto* view=(NSTextView*)[(NSScrollView*)control.GetHandle() documentView];
+        auto* storage=[view textStorage];
+        auto* tag=language_tag(language);
+        if(!tag)return;
+        auto* base=[NSFont systemFontOfSize:control.GetFont().GetFractionalPointSize()];
+        [storage beginEditing];
+        for(const auto& quote:quotes){
+            const auto range=NSMakeRange(quote.begin,quote.end-quote.begin);
+            auto font=CTFontCreateForStringWithLanguage((CTFontRef)base,(CFStringRef)[storage string],
+                CFRangeMake(range.location,range.length),(CFStringRef)tag);
+            [storage addAttribute:(NSString*)kCTLanguageAttributeName value:tag range:range];
+            [storage addAttribute:NSFontAttributeName value:font?(NSFont*)font:base range:range];
+            if(font)CFRelease(font);
+        }
+        [storage endEditing];
+    }
+}
+bool update_readonly_text(wxTextCtrl& control,const std::string& before,const std::string& after,bool reset,
+                          std::string_view language){
     @autoreleasepool {
         auto* scroll=(NSScrollView*)control.GetHandle();
         auto* text=(NSTextView*)[scroll documentView];
-        if(![text isKindOfClass:[NSTextView class]])return;
+        if(![text isKindOfClass:[NSTextView class]])return false;
         NSString* suffix=nil;
         std::size_t at=0,length=0;
         const auto tail=reset?std::string_view{}:appended_utf8_suffix(before,after);
@@ -19,14 +64,14 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
             if(const auto units=utf16_units(before)){
                 suffix=[[[NSString alloc] initWithBytes:tail.data() length:tail.size()
                     encoding:NSUTF8StringEncoding] autorelease];
-                if(!suffix)return;
+                if(!suffix)return false;
                 at=*units;
                 length=at+[suffix length];
             }
         }
         if(!suffix){
             auto* value=[[[NSString alloc] initWithBytes:after.data() length:after.size() encoding:NSUTF8StringEncoding] autorelease];
-            if(!value)return;
+            if(!value)return false;
             std::size_t common=0;
             if(!reset){while(common<std::min(before.size(),after.size())&&before[common]==after[common])++common;
                 while(common<after.size()&&common>0&&(static_cast<unsigned char>(after[common])&0xc0)==0x80)--common;}
@@ -44,7 +89,8 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
         [storage replaceCharactersInRange:NSMakeRange(std::min(at,old_length),old_length-std::min(at,old_length)) withString:suffix];
         if([suffix length]){
             NSMutableDictionary* attributes=[NSMutableDictionary dictionary];
-            if([text font])attributes[NSFontAttributeName]=[text font];
+            attributes[NSFontAttributeName]=control.GetFont().OSXGetNSFont();
+            if(auto* tag=language_tag(language))attributes[(NSString*)kCTLanguageAttributeName]=tag;
             if([text textColor])attributes[NSForegroundColorAttributeName]=[text textColor];
             [storage setAttributes:attributes range:NSMakeRange(at,[suffix length])];
         }
@@ -53,6 +99,7 @@ void update_readonly_text(wxTextCtrl& control,const std::string& before,const st
         [[text layoutManager] ensureLayoutForTextContainer:[text textContainer]];
         if(follow)[text scrollRangeToVisible:NSMakeRange(length,0)];
         else {[clip scrollToPoint:reset?NSZeroPoint:origin];[scroll reflectScrolledClipView:clip];}
+        return !tail.empty();
     }
 }
 std::size_t text_logical_anchor(wxTextCtrl& control){

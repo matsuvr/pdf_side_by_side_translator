@@ -10,6 +10,7 @@
 #endif
 #include "platform/font.hpp"
 #include "platform/text_view.hpp"
+#include "platform/text_format.hpp"
 #include "platform/input_state.hpp"
 #include "inference/inference_service.hpp"
 #include "inference/delivery_inbox.hpp"
@@ -63,9 +64,6 @@
 #include <sstream>
 
 namespace opt {
-#ifdef OPT_PAGE_IMAGE_READING
-bool read_bundled_image_model(const char*,std::vector<char>*);
-#endif
 namespace {
 wxDEFINE_EVENT(PDF_WAKE,wxThreadEvent);
 wxDEFINE_EVENT(IO_WAKE,wxThreadEvent);
@@ -174,6 +172,7 @@ struct ApplicationController::Impl {
     std::uint64_t image_generation=0;
     std::shared_ptr<const PageLayout> image_layout;
     std::string_view pending_image_language;
+    std::string_view image_source_language;
 #endif
     wxTimer search_timer;
     wxTimer translate_timer,stream_timer;
@@ -223,6 +222,10 @@ struct ApplicationController::Impl {
     std::optional<ReadingPosition> last_saved_position;
     std::optional<std::pair<PageIndex,std::size_t>> pending_text_anchor;
     int text_size=14;
+    bool font_ok=false;
+    std::string document_language,shown_language="ja";
+    std::vector<ReaderQuote> shown_quotes;
+    ReaderQuoteScanner quote_scanner;
     struct ResizeAnchor {DocumentEpoch document;PageIndex page;std::size_t offset;};
     std::optional<ResizeAnchor> resize_text_anchor;
     bool resize_restore_queued=false;
@@ -413,9 +416,33 @@ struct ApplicationController::Impl {
         if(attempt&&attempt_context.page==page)return attempt.get();
         return nullptr;
     }
-    void show_translation(std::string text,bool reset=true){
-        if(text==shown_translation&&!reset)return;
-        update_readonly_text(*translation,shown_translation,text,reset);shown_translation=std::move(text);
+    std::string_view source_language()const{
+#ifdef OPT_PAGE_IMAGE_READING
+        if(image_layout)return image_source_language;
+#endif
+        return document_language;
+    }
+    void show_translation(std::string text,bool reset=true,std::string_view language="ja",
+                          const PageAttempt* translated=nullptr){
+        const bool language_changed=language!=shown_language;
+        if(text==shown_translation&&!reset&&!language_changed)return;
+        if(language_changed){
+            shown_language=language;
+            set_reader_font(*translation,text_size,font_ok,shown_language);
+        }
+        const bool appended=update_readonly_text(*translation,shown_translation,text,reset,language);
+        if(!appended||language_changed){
+            if(!shown_quotes.empty()&&!language_changed)set_reader_font(*translation,text_size,font_ok,shown_language);
+            shown_quotes.clear();
+            quote_scanner={};
+        }
+        const auto original_language=source_language();
+        if(translated&&!original_language.empty()&&original_language.substr(0,original_language.find('-'))!="ja"){
+            const auto quotes=quote_scanner.scan(text,translated->source_text());
+            style_reader_quotes(*translation,quotes,original_language);
+            shown_quotes.insert(shown_quotes.end(),quotes.begin(),quotes.end());
+        }
+        shown_translation=std::move(text);
     }
 #ifdef OPT_PAGE_IMAGE_READING
     void update_image_controls(){
@@ -452,7 +479,8 @@ struct ApplicationController::Impl {
         image_running=true;
         try{
             image_worker=std::jthread([this,pixels,dpi,lang=pending_image_language,result,wake=std::move(wake)](std::stop_token stop) mutable {
-                try{result->reading=read_page_image(pixels->bgra.data(),pixels->width,pixels->height,pixels->stride,dpi,lang,stop,read_bundled_image_model);}
+                try{result->reading=read_page_image({pixels->bgra,pixels->width,pixels->height,pixels->stride,dpi},lang,stop);}
+                catch(const ImageReadingTimeout& error){result->error=error.what();}
                 catch(const std::exception&){result->error="ページ画像から文字を読み取れませんでした。";}
                 image_running=false;
                 if(!closing)wxQueueEvent(&owner,wake.release());
@@ -476,6 +504,7 @@ struct ApplicationController::Impl {
         // No PDF character coordinates: never replace canvas/search layout.
         found->layout_version=0x80000001U;found->reading_text_utf8=std::move(result->reading.text);
         image_layout=std::move(found);
+        image_source_language=result->reading.language_tag;
         invalidate_translation();
         if(result->reading.language_uncertain)
             frame->SetStatusText(wxS("言語は特定できませんでした。読み取りが不自然な場合は言語を選び直してください。"),0);
@@ -488,7 +517,7 @@ struct ApplicationController::Impl {
         std::string text;wxString status;
 #ifdef OPT_PAGE_IMAGE_READING
         if(image_layout){
-            show_translation(image_layout->reading_text_utf8);
+            show_translation(image_layout->reading_text_utf8,true,image_source_language);
             right_heading->SetLabel(wxS("画像から読み取った文字"));right_heading->GetParent()->Layout();
             frame->SetStatusText(auto_translate&&model_state==ModelState::Ready?wxS("翻訳待ち"):wxS("読み取り結果"),2);
             return;
@@ -560,7 +589,9 @@ struct ApplicationController::Impl {
         size=std::clamp(size,min_translation_text_size,max_translation_text_size);
         const auto anchor=text_logical_anchor(*translation);
         long begin=0,end=0;translation->GetSelection(&begin,&end);
-        text_size=size;auto font=translation->GetFont();font.SetPointSize(size);translation->SetFont(font);
+        text_size=size;
+        set_reader_font(*translation,text_size,font_ok,shown_language);
+        style_reader_quotes(*translation,shown_quotes,source_language());
         translation->SetSelection(begin,end);restore_text_logical_anchor(*translation,anchor);
     }
     void capture_resize_anchor(){if(!closing&&!resize_text_anchor)resize_text_anchor=ResizeAnchor{epoch,page,text_logical_anchor(*translation)};}
@@ -594,7 +625,7 @@ struct ApplicationController::Impl {
             break;
         default:status=wxS("翻訳中");if(text.empty())text="翻訳しています…";break;
         }
-        show_translation(std::move(text),false);
+        show_translation(std::move(text),false,"ja",shown);
         if(pending_text_anchor&&pending_text_anchor->first==page&&(shown->state()==PageState::Complete||shown->state()==PageState::Partial||shown->state()==PageState::Failed||shown->state()==PageState::NoText)){
             restore_text_logical_anchor(*translation,pending_text_anchor->second);pending_text_anchor.reset();
         }
@@ -936,6 +967,7 @@ struct ApplicationController::Impl {
         switch(event.kind){
         case PdfEvent::Kind::Opened:
             document_state=DocumentState::Ready;page_count=event.page_count;page=0;
+            document_language=event.document_language;
             record(DiagnosticCode::PdfOpened);
             remember_document();
             native_document_key=provisional_file_key(event.file_signature);
@@ -1117,11 +1149,11 @@ struct ApplicationController::Impl {
     }
     void start(const wxString& initial){
         std::string error;
-        const bool font_ok=register_private_font(native_path(wxStandardPaths::Get().GetResourcesDir()),error);
+        font_ok=register_private_font(native_path(wxStandardPaths::Get().GetResourcesDir()),error);
         frame=new wxFrame(nullptr,wxID_ANY,wxString::FromUTF8(product::name));
         const auto icon_data=resources::icon_png();wxMemoryInputStream icon_stream(icon_data.data(),icon_data.size());
         wxImage icon_image(icon_stream,wxBITMAP_TYPE_PNG);if(icon_image.IsOk()){wxIcon icon;icon.CopyFromBitmap(wxBitmap(icon_image));frame->SetIcon(icon);}
-        if(font_ok){auto font=frame->GetFont();font.SetFaceName("Noto Sans CJK JP");frame->SetFont(font);}
+        if(font_ok)frame->SetFont(wxFont(wxFontInfo(frame->GetFont().GetFractionalPointSize()).FaceName("Noto Sans CJK JP")));
         auto display_index=wxDisplay::GetFromPoint(wxGetMousePosition());
         if(display_index<0||static_cast<unsigned>(display_index)>=wxDisplay::GetCount())display_index=0;
         const auto area=wxDisplay(static_cast<unsigned>(display_index)).GetClientArea();
@@ -1263,7 +1295,7 @@ struct ApplicationController::Impl {
 #endif
         translation->SetMaxLength(0);
         translation->Bind(wxEVT_MOUSEWHEEL,[touch](wxMouseEvent& e){touch();e.Skip();});translation->Bind(wxEVT_LEFT_DOWN,[touch](wxMouseEvent& e){touch();e.Skip();});
-        auto font=translation->GetFont();if(font_ok)font.SetFaceName("Noto Sans CJK JP");font.SetPointSize(14);translation->SetFont(font);rs->Add(translation,1,wxEXPAND);
+        set_reader_font(*translation,text_size,font_ok,shown_language);rs->Add(translation,1,wxEXPAND);
         welcome=new wxScrolledWindow(right,wxID_ANY);
         welcome->SetName(wxS("PLaMoについて"));
         welcome->SetBackgroundColour(translation->GetBackgroundColour());

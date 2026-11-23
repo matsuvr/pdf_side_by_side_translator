@@ -2,12 +2,19 @@
 #include "product.hpp"
 #include <wx/wx.h>
 #include <wx/imagpng.h>
+#ifdef OPT_PAGE_IMAGE_READING
+#include "ocr/image_reading.hpp"
+#include <optional>
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 class ReaderApp final : public wxApp {
     std::unique_ptr<opt::ApplicationController> controller_;
+#ifdef OPT_PAGE_IMAGE_READING
+    std::optional<int> worker_status_;
+#endif
 public:
     bool OnInit() override {
 #ifdef _WIN32
@@ -18,6 +25,12 @@ public:
         PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy{};
         policy.ProhibitDynamicCode=1;
         (void)SetProcessMitigationPolicy(ProcessDynamicCodePolicy,&policy,sizeof(policy));
+#endif
+#ifdef OPT_PAGE_IMAGE_READING
+        if(argc==3 && wxString(argv[1])==wxString::FromAscii(opt::image_worker_switch)){
+            worker_status_=opt::run_image_worker(wxString(argv[2]).ToStdString(),opt::read_bundled_image_model);
+            return true;
+        }
 #endif
         // Only the embedded PNG icon is decoded through wx. Registering every
         // image codec would pull a second, unprefixed JPEG implementation into
@@ -42,6 +55,9 @@ public:
         controller_->start(pdf);
         return true;
     }
+#ifdef OPT_PAGE_IMAGE_READING
+    int OnRun() override {return worker_status_?*worker_status_:wxApp::OnRun();}
+#endif
     int OnExit() override {controller_.reset();return 0;}
 };
 wxIMPLEMENT_APP(ReaderApp);

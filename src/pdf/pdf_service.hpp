@@ -73,6 +73,7 @@ struct PdfEvent {
     int image_dpi=0;
     std::optional<TextHit> hit;
     std::string code,message,detail;
+    std::string document_language;
 };
 struct PdfServiceStats {
     std::uint64_t page_cache_peak=0,extraction_queue_peak=0,tile_bytes_peak=0,render_slices=0,render_yields=0,text_slices=0,text_yields=0,max_render_slice_us=0;

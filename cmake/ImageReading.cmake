@@ -31,6 +31,11 @@ foreach(flag DISABLED_LEGACY_ENGINE OPENMP_BUILD BUILD_TRAINING_TOOLS BUILD_TEST
     set(${flag} OFF CACHE BOOL "" FORCE)
 endforeach()
 add_subdirectory("${OPT_DEPENDENCIES}/Tesseract" third_party/image-tess EXCLUDE_FROM_ALL)
+# Keep the upstream full-page segmentation code. Route every caller of its
+# optional disk-based zone reader to the viewer's memory-only implementation.
+set_property(SOURCE "${OPT_DEPENDENCIES}/Tesseract/src/ccstruct/blread.cpp"
+    TARGET_DIRECTORY libtesseract APPEND PROPERTY COMPILE_DEFINITIONS read_unlv_file=unused_disk_zone_reader)
+target_sources(libtesseract PRIVATE "${PROJECT_SOURCE_DIR}/src/ocr/memory_zones.cpp")
 if(MSVC)
     # Tesseract passes a char buffer to GetModuleFileName in this file.
     set_property(SOURCE "${OPT_DEPENDENCIES}/Tesseract/src/ccutil/ccutil.cpp"
@@ -40,7 +45,7 @@ if(MSVC)
         target_compile_options(libtesseract PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIintrin.h>")
     endif()
 endif()
-add_library(opt_image_reading STATIC "${CMAKE_CURRENT_LIST_DIR}/../src/ocr/image_reading.cpp")
+add_library(opt_image_reading STATIC src/ocr/image_reading.cpp src/platform/windows/image_worker.cpp)
 target_include_directories(opt_image_reading PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../src")
 target_link_libraries(opt_image_reading PRIVATE libtesseract)
 target_include_directories(opt_image_reading PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/third_party/image-tess/include")

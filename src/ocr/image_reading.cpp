@@ -19,16 +19,13 @@ bool matches_script(std::string_view languages_scripts,std::string_view script){
     const auto i=languages_scripts.find('+');
     return script==languages_scripts.substr(0,i)||(i!=languages_scripts.npos&&script==languages_scripts.substr(i+1));
 }
-struct PageImage {
-    const unsigned char* data;int w,h,stride,dpi;ImageModelReader models;
-    void set(tesseract::TessBaseAPI& engine)const{
-        engine.SetImage(data,w,h,1,stride);engine.SetSourceResolution(dpi);
-    }
-};
-std::string recognize(const PageImage& page,std::string model,std::stop_token stop,Clock::time_point deadline){
-    if(stop.stop_requested())return {};
+void set_image(tesseract::TessBaseAPI& engine,const GrayPage& page){
+    engine.SetImage(page.pixels.data(),page.width,page.height,1,page.stride);
+    engine.SetSourceResolution(page.dpi);
+}
+std::string recognize(const GrayPage& page,std::string model,ImageModelReader models,Clock::time_point deadline){
     tesseract::TessBaseAPI engine;
-    if(engine.Init(".",0,model.c_str(),tesseract::OEM_LSTM_ONLY,nullptr,0,nullptr,nullptr,false,page.models)!=0)
+    if(engine.Init(".",0,model.c_str(),tesseract::OEM_LSTM_ONLY,nullptr,0,nullptr,nullptr,false,models)!=0)
         throw std::runtime_error("画像の読み取りに必要なデータを開けませんでした。");
     std::vector<std::string> loaded;
     engine.GetLoadedLanguagesAsVector(&loaded);
@@ -39,32 +36,28 @@ std::string recognize(const PageImage& page,std::string model,std::stop_token st
             throw std::runtime_error("選択した言語の読み取りデータが見つかりません。");
         if(end==model.npos)break;
     }
-    if(stop.stop_requested())return {};
-    engine.SetPageSegMode(tesseract::PSM_AUTO);page.set(engine);
+    engine.SetPageSegMode(tesseract::PSM_AUTO);set_image(engine,page);
     tesseract::ETEXT_DESC monitor;
-    monitor.cancel_this=&stop;
-    monitor.cancel=[](void* p,int){return static_cast<std::stop_token*>(p)->stop_requested();};
     const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-Clock::now()).count();
-    if(remaining<=0)throw std::runtime_error("画像の読み取りが時間上限に達しました。");
+    if(remaining<=0)throw ImageReadingTimeout{};
     monitor.set_deadline_msecs(static_cast<int>(remaining));
     const auto result=engine.Recognize(&monitor);
-    if(stop.stop_requested())return {};
     if(result!=0)throw std::runtime_error("画像の読み取りが完了しませんでした。");
     std::unique_ptr<char[]> text(engine.GetUTF8Text());
     if(!text)return {};
-    std::string output(text.get());
-    if(output.size()>256*1024)throw std::runtime_error("読み取った文字が多すぎます。");
-    return output;
+    const auto size=std::char_traits<char>::length(text.get());
+    if(size>image_reading_max_text)throw std::runtime_error("読み取った文字が多すぎます。");
+    return std::string(text.get(),size);
 }
 std::string exact_model(const ImageLanguage& lang){
     std::string model(lang.model);
     if(lang.scripts=="Han")model+="+eng";
     return model;
 }
-std::string page_script(const PageImage& page){
+std::string page_script(const GrayPage& page,ImageModelReader models){
     tesseract::TessBaseAPI osd;
-    if(osd.Init(".",0,"osd",tesseract::OEM_TESSERACT_ONLY,nullptr,0,nullptr,nullptr,false,page.models)!=0)return {};
-    page.set(osd);
+    if(osd.Init(".",0,"osd",tesseract::OEM_TESSERACT_ONLY,nullptr,0,nullptr,nullptr,false,models)!=0)return {};
+    set_image(osd,page);
     const char* script=nullptr;int rotation=0;float orientation=0,confidence=0;
     if(!osd.DetectOrientationScript(&rotation,&orientation,&script,&confidence)||!script)return {};
     std::string name(script);
@@ -95,28 +88,29 @@ const ImageLanguage* text_language(std::string_view text,std::string_view script
 }
 }
 
-ImageReadingResult read_page_image(const unsigned char* pixels,int width,int height,int stride,int dpi,
-                                   std::string_view language_tag,std::stop_token stop,ImageModelReader models){
-    if(stop.stop_requested())return {};
-    if(!pixels||!models||width<=0||height<=0||width>image_reading_max_side||
-       height>image_reading_max_side||width*height>image_reading_max_area||stride<width||dpi<=0)
+void GrayPage::validate() const {
+    if(width<=0||height<=0||width>image_reading_max_side||height>image_reading_max_side||
+       width*height>image_reading_max_area||stride<width||dpi<=0||
+       static_cast<std::size_t>(stride)>pixels.size()/static_cast<std::size_t>(height))
         throw std::invalid_argument("画像の寸法が上限を超えています。");
-    const PageImage image{pixels,width,height,stride,dpi,models};
-    const auto limit=Clock::now()+std::chrono::seconds(20);
+}
+
+ImageReadingResult recognize_page_image(GrayPage image,std::string_view language_tag,
+                                        ImageModelReader models,Clock::time_point limit){
+    image.validate();
     if(!language_tag.empty()){
         const auto* lang=by_tag(language_tag);
         if(!lang)throw std::invalid_argument("画像の読み取りに対応していない言語です。");
-        return {recognize(image,exact_model(*lang),stop,limit),std::string(lang->label),false};
+        return {recognize(image,exact_model(*lang),models,limit),std::string(lang->label),false,lang->tag};
     }
 
-    const auto script=page_script(image);
-    if(stop.stop_requested())return {};
+    const auto script=page_script(image,models);
     const ImageLanguage* only=nullptr;
     for(auto& lang:image_languages)if(matches_script(lang.scripts,script)){
         if(only){only=nullptr;break;}
         only=&lang;
     }
-    if(only)return {recognize(image,exact_model(*only),stop,limit),std::string(only->label),false};
+    if(only)return {recognize(image,exact_model(*only),models,limit),std::string(only->label),false,only->tag};
 
     // At most one shared-script pass and one targeted pass, loaded sequentially.
     // A weak/unsupported script result falls back to Latin *without* claiming
@@ -126,17 +120,15 @@ ImageReadingResult read_page_image(const unsigned char* pixels,int width,int hei
     if(script=="Han")generic="chi_sim+chi_tra";
     else if(script=="Cyrillic"||script=="Arabic"||script=="Devanagari")generic="script/"+script;
     else{generic="script/Latin";group="Latin";}
-    auto text=recognize(image,std::move(generic),stop,limit);
-    if(stop.stop_requested())return {};
+    auto text=recognize(image,std::move(generic),models,limit);
     if(!script.empty()&&script==group)if(const auto* lang=text_language(text,group)){
         // The shared-script result is still useful if the specific model
         // cannot finish inside the shared time budget.
         try{
-            auto refined=recognize(image,exact_model(*lang),stop,limit);
-            if(!refined.empty())return {std::move(refined),std::string(lang->label),false};
-        }catch(const std::runtime_error&){if(stop.stop_requested())return {};}
+            auto refined=recognize(image,exact_model(*lang),models,limit);
+            if(!refined.empty())return {std::move(refined),std::string(lang->label),false,lang->tag};
+        }catch(const std::runtime_error&){}
     }
-    if(stop.stop_requested())return {};
     return {std::move(text),{},true};
 }
 }
