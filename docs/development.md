@@ -36,7 +36,7 @@ Windows x64 の bootstrap は、同じ公式コミットから専用の Git 作�
 
 packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
 Releaseのpackageは、指定したGGUFを固定した公式SHA-256と照合し、アプリ・GGUF・README・PLaMoライセンスを含むZIPを作ります。
-最終Mach-O / PEの通常・delay importを検査し、Macは署名後のZIPを再展開して再検査します。
+最終Mach-O / PEの通常・delay importを検査し、配布ZIPを再展開して再検査します。WindowsのRelease配布物は[署名付きパッケージ手順](distribution.md#パッケージの作成)で作成します。
 生成物とhash・依存検査・ソース識別情報は `dist/<target>/` 以下へ保存します。
 製品の起動にREADME、Python、ビルド用manifestや個別ライブラリの配布は不要です。
 

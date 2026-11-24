@@ -12,7 +12,22 @@ GitHub のリリースページには、閲覧専用ビューアーとしての�
 
 `dist/<target>/<identity>/package-manifest.json` には、版・コミット・ZIP 名・SHA-256・署名状態・依存監査の結果が入ります。配布する ZIP は、この manifest の版とコミットを確認して選びます。同じ階層に `BUILD-INFO.json`（ビルド識別情報）、`DEPENDENCIES.json`（PDFium の依存解決結果）、`SBOM.cdx.json`（ビルド時の依存一覧）を保存します。これらは配布者向けの監査資料で、利用者向け ZIP や macOS の `.app` には含めません。実行時のビルド識別情報は実行ファイルに埋め込み済みで、外部 JSON を読みません。ZIP 再展開後に実行ファイルと同梱物を再検証します。
 
-Windows では PE の通常・遅延インポート、CFG の関数表、CET 互換フラグ、静的 CRT のコンパイル設定を検査します。`--windows-cert` に署名証明書の拇印を指定すると、パッケージ内の実行ファイルに Authenticode 署名し、再展開後に検証します。証明書を指定しない開発ビルドは未署名です。
+Windows では PE の通常・遅延インポート、CFG の関数表、CET 互換フラグ、静的 CRT のコンパイル設定を検査します。配布用 Release は Windows 上で Authenticode 署名と RFC 3161 タイムスタンプを付けてから ZIP 化します。Windows SDK の `signtool.exe` を PATH に追加し、署名端末の `Cert:\CurrentUser\My` に、対応する秘密鍵を使えるコード署名証明書を用意します。個人名義の証明書は署名から証明書の Subject（発行先）を閲覧できるため、初回公開前に表示される発行先を確認してください。秘密鍵やトークンの PIN はリポジトリやコマンドに置きません。
+
+Visual Studio の開発者 PowerShell で、依存を bootstrap 済みのコミット済みソースから実行します。
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+    Select-Object Subject, Thumbprint, NotAfter
+
+.\scripts\release_windows.ps1 -ModelFile 'C:\path\to\plamo-3-translate-0.8b-Q4_K_M.gguf' `
+    -CertificateThumbprint '<証明書の Thumbprint>' `
+    -TimestampUrl '<発行元が指定する RFC 3161 タイムスタンプ URL>'
+```
+
+この手順はローカルで configure → ビルド → CTest → 署名 → ZIP 作成まで実行します。ビルド・試験済みの場合は `python scripts/package.py --target windows-x64-release --model-file ... --windows-cert ... --windows-timestamp-url ...` でパッケージ処理から実行できます。署名はビルド済み EXE のコピーに対して行い、ファイルとタイムスタンプの両方に SHA-256 を使用します。タイムスタンプ取得には署名時の通信が必要です。署名したコピーと実際の ZIP から再展開した EXE を `signtool verify /pa /tw` で検証します。署名、タイムスタンプ、ZIP 再展開後の検証のいずれかが失敗すると、新しい配布 ZIP を確定しません。
+
+配布候補は `dist/windows-x64-release/<identity>-signed-rfc3161/` に保存します。既存の候補を再利用する際も ZIP 内の EXE とタイムスタンプを検証します。ローカル試験用に未署名の Release ZIP が必要な場合は `--allow-unsigned-windows-release` を明示します。その ZIP 名には `-unsigned` が付きます。Debug は署名設定なしで未署名のまま作成できます。ここで扱う署名は EXE の発行元と改変有無の確認です。セキュリティ製品での隔離・誤検知は、対象ファイルのハッシュと検知名を添えて製品ベンダーへ別途照会します。
 
 Windows Release では ggml CPU の AVX2 オブジェクトとベースラインオブジェクトが外部関数シンボルを共有していないことも検査します。比較関数の型名を分けて、標準ライブラリが生成するソート関数にも個別の名前を持たせています。
 

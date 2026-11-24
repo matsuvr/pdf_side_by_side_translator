@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from urllib.parse import urlsplit
 
 from common import ROOT,TARGETS,lock,run,sha256
 from write_build_info import build_info
@@ -143,17 +144,67 @@ def validate_kernel_symbols(entries):
         if seen & symbols:
             raise RuntimeError('ISA variants share external functions: ' + ', '.join(sorted(seen & symbols)))
         seen.update(symbols)
+def timestamp_url(value):
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme in {'http', 'https'} and parsed.hostname and
+                parsed.username is None and parsed.password is None and not parsed.fragment and
+                not any(char.isspace() or ord(char) < 32 for char in value)):
+            return value
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError('Use an HTTP(S) RFC 3161 timestamp URL without credentials or a fragment')
+
+
+def verify_windows_signature(path):
+    # /tw reports a missing timestamp as a warning (SignTool exit code 2).
+    # run() rejects warnings as well as errors.
+    run(['signtool.exe', 'verify', '/pa', '/tw', path])
+
+
+def verify_cached_windows_zip(archive, staged_binary, companions, signed):
+    expected = {**companions, staged_binary.name: sha256(staged_binary)}
+    with tempfile.TemporaryDirectory(prefix='.verify-') as temporary, zipfile.ZipFile(archive) as source:
+        names = source.namelist()
+        if len(names) != len(expected) or set(names) != set(expected):
+            raise RuntimeError('Existing ZIP payload does not match the expected files')
+        extracted = Path(temporary)
+        source.extractall(extracted)
+        verify_companions(extracted, expected)
+        restored = extracted / staged_binary.name
+        if audit_pe(restored)['failures']:
+            raise RuntimeError('Existing ZIP executable dependency audit failed')
+        if signed:
+            verify_windows_signature(restored)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True)
     parser.add_argument('--model-file',type=Path,help='Pinned official GGUF to include in a Release ZIP')
-    parser.add_argument('--windows-cert',help='SHA-1 thumbprint of an Authenticode signing certificate')
+    parser.add_argument('--windows-cert',help='SHA-1 thumbprint of an Authenticode certificate in CurrentUser\\My')
+    parser.add_argument('--windows-timestamp-url',type=timestamp_url,help='Certificate provider RFC 3161 timestamp URL')
+    parser.add_argument('--allow-unsigned-windows-release',action='store_true',help='Build an unsigned Windows Release ZIP for local testing')
     parser.add_argument('--mac-identity',help='Developer ID Application identity in the signing keychain')
     parser.add_argument('--notary-profile',help='Submit the signed Mac app using this notarytool keychain profile')
     args=parser.parse_args()
-    target=args.target;mac=target.startswith('macos-');values=product();version=values['OPT_VERSION'];name=values['OPT_PRODUCT_NAME'];exe=values['OPT_EXECUTABLE_NAME']
-    if mac!=(platform.system()=='Darwin'):raise SystemExit('Package on the target operating system')
-    if args.windows_cert and (mac or not re.fullmatch(r'[0-9a-fA-F]{40}',args.windows_cert)):
-        parser.error('--windows-cert requires a Windows target and a certificate thumbprint')
+    target=args.target;mac=target.startswith('macos-')
+    if mac and (args.windows_cert or args.windows_timestamp_url or args.allow_unsigned_windows_release):
+        parser.error('Windows signing options require a Windows target')
+    if args.windows_cert and not re.fullmatch(r'[0-9a-fA-F]{40}',args.windows_cert):
+        parser.error('--windows-cert requires a 40-digit hexadecimal certificate thumbprint')
+    if bool(args.windows_cert) != bool(args.windows_timestamp_url):
+        parser.error('--windows-cert and --windows-timestamp-url must be supplied together')
+    if args.allow_unsigned_windows_release and (args.windows_cert or target!='windows-x64-release'):
+        parser.error('--allow-unsigned-windows-release is for unsigned Windows Release packages only')
+    if target=='windows-x64-release' and not (args.windows_cert or args.allow_unsigned_windows_release):
+        parser.error('Windows Release requires timestamped signing; use --allow-unsigned-windows-release for local testing')
+    if platform.system()!=('Darwin' if mac else 'Windows'):
+        raise SystemExit('Package on the target operating system')
+    if args.windows_cert:
+        args.windows_cert=args.windows_cert.upper()
+        if not shutil.which('signtool.exe'):
+            raise SystemExit('Add the Windows SDK directory containing signtool.exe to PATH')
+    values=product();version=values['OPT_VERSION'];name=values['OPT_PRODUCT_NAME'];exe=values['OPT_EXECUTABLE_NAME']
     if (args.mac_identity or args.notary_profile) and not mac:parser.error('Apple signing requires a macOS target')
     if args.notary_profile and not args.mac_identity:parser.error('--notary-profile requires --mac-identity')
     signature=('Developer ID' if args.mac_identity else 'ad-hoc') if mac else ('Authenticode' if args.windows_cert else 'unsigned')
@@ -172,13 +223,15 @@ def main():
     companions=companion_files(target,args.model_file)
     companion_hashes={name:sha256(path) for name,path in companions.items()}
     dist=ROOT/'dist'/target;dist.mkdir(parents=True,exist_ok=True)
-    signing_variant='-notarized' if args.notary_profile else '-signed' if args.windows_cert or args.mac_identity else ''
+    signing_variant=('-notarized' if args.notary_profile else '-signed-rfc3161' if args.windows_cert
+                     else '-signed' if args.mac_identity else '')
     unique=dist/(info['identity_sha256'][:12]+signing_variant)
     if unique.exists():
         verify_companions(unique,companion_hashes)
         manifest=json.loads((unique/'package-manifest.json').read_text())
         if (manifest.get('signing_identity')!=(args.windows_cert or args.mac_identity) or
-                manifest.get('signature')!=signature or manifest.get('notarized')!=bool(args.notary_profile)):
+                manifest.get('signature')!=signature or manifest.get('notarized')!=bool(args.notary_profile) or
+                manifest.get('windows_timestamp_url')!=args.windows_timestamp_url):
             raise SystemExit('Existing package signing identity differs from the requested identity')
         artifact=unique/manifest['artifact']
         if artifact.parent!=unique or manifest.get('identity_sha256')!=info['identity_sha256'] or sha256(artifact)!=manifest['sha256']:
@@ -187,8 +240,8 @@ def main():
             audit_bundle(unique/(name+'.app'),'arm64' if 'arm64' in target else 'x86_64')
             run(['codesign','--verify','--deep','--strict',unique/(name+'.app')])
             if args.notary_profile:run(['xcrun','stapler','validate',unique/(name+'.app')])
-        elif audit_pe(unique/(exe+'.exe'))['failures']:raise SystemExit('Existing executable dependency audit failed')
-        elif args.windows_cert:run(['signtool','verify','/pa',unique/(exe+'.exe')])
+        else:
+            verify_cached_windows_zip(artifact,unique/(exe+'.exe'),companion_hashes,bool(args.windows_cert))
         print('Verified existing package',artifact);return
     with tempfile.TemporaryDirectory(prefix='.package-',dir=dist) as temporary:
         stage=Path(temporary);payload=stage/'payload';payload.mkdir()
@@ -223,13 +276,16 @@ def main():
             validate_static_windows(build,target)
             staged_binary=payload/(exe+'.exe');shutil.copyfile(binary,staged_binary)
             if args.windows_cert:
-                run(['signtool','sign','/sha1',args.windows_cert,'/fd','SHA256',staged_binary])
+                run(['signtool.exe','sign','/s','My','/sha1',args.windows_cert,'/fd','SHA256',
+                     '/tr',args.windows_timestamp_url,'/td','SHA256',staged_binary])
+                verify_windows_signature(staged_binary)
             reports=[audit_pe(staged_binary)]
             if reports[0]['failures']:raise RuntimeError(json.dumps(reports,indent=2))
             reports[0]['file']=staged_binary.name
             write_json(evidence/'BUILD-INFO.json',info);write_json(evidence/'DEPENDENCIES.json',sanitized(pdf))
         verify_companions(payload,companion_hashes)
-        archive_name=f'{exe}-{version}-{target}.zip';archive=stage/archive_name
+        unsigned_suffix='-unsigned' if args.allow_unsigned_windows_release else ''
+        archive_name=f'{exe}-{version}-{target}{unsigned_suffix}.zip';archive=stage/archive_name
         extracted=stage/'extracted'
         if mac:
             run(['ditto','-c','-k','--sequesterRsrc',payload,archive])
@@ -243,7 +299,7 @@ def main():
             with zipfile.ZipFile(archive) as output:output.extractall(extracted)
             restored_binary=extracted/binary.name
             if audit_pe(restored_binary)['failures']:raise RuntimeError('Extracted executable dependency audit failed')
-            if args.windows_cert:run(['signtool','verify','/pa',restored_binary])
+            if args.windows_cert:verify_windows_signature(restored_binary)
         verify_companions(extracted,companion_hashes)
         packaged_binary=bundle/'Contents/MacOS'/name if mac else staged_binary
         if sha256(restored_binary)!=sha256(packaged_binary):raise RuntimeError('ZIP round-trip changed executable')
@@ -252,6 +308,7 @@ def main():
           'files':{name:{'sha256':companion_hashes[name],'size':path.stat().st_size} for name,path in companions.items()},
           'runtime_audit':reports,'model_included':target.endswith('-release'),'clean_machine_execution':'not implied by packaging',
           'signature':signature,'signing_identity':args.windows_cert or args.mac_identity,'notarized':bool(args.notary_profile)}
+        if args.windows_cert:manifest['windows_timestamp_url']=args.windows_timestamp_url
         # Only after archiving: keep build/audit evidence alongside the ZIP.
         for path in evidence.iterdir():shutil.move(str(path),str(payload/path.name))
         write_json(payload/'package-manifest.json',manifest)
