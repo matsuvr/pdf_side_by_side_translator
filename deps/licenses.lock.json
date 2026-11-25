@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "dependency_lock_sha256": "7d5f1880b6fa1dc77899e65f85ad13788aaac6fa0c7e03dd5d49ef26936bb8fe",
-  "notices_sha256": "14b8543245af4163e485d69a14896326e39b4eb4553e2a9d5b11c104b04db781",
+  "dependency_lock_sha256": "13671d518333e9c00a75b6fd9abe51efd89ab925bef4333028474ffcce95ae57",
+  "notices_sha256": "244f6a9a625100c7fc8333741645340ddb5f963405621bd538a1c685cc6c8729",
   "inputs": [
     {
       "component": "Application original source/resources",
@@ -291,20 +291,44 @@
       "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
     },
     {
-      "component": "PLaMo Community License for the bundled model",
+      "component": "Windows PLaMo Rust dependencies (locked crates)",
+      "root": "project",
+      "path": "licenses/Plamo-Rust-crates.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "4bc28c45a020d29eba5b529825ae900de3087ac2b73efb8b762893a6e9f16fa9"
+    },
+    {
+      "component": "PLaMo Community License for the macOS bundled model",
       "root": "project",
       "path": "licenses/PLaMo-Community-ja.txt",
       "encoding": "utf-8-sig",
       "sha256": "7dd74339bbf9a39fe33e271a89657aacf06f452b082fcb1273fb792b8d6b7db2"
     },
     {
-      "component": "PLaMo Community License for the bundled model",
+      "component": "PLaMo Community License for the macOS bundled model",
       "root": "project",
       "path": "licenses/PLaMo-Community-en.txt",
       "encoding": "utf-8-sig",
       "sha256": "ca0c5e90f6de6799fc2d2d4f2b2647cc088444c19f286f689e525d4ad28f9ed6"
+    },
+    {
+      "component": "PLaMo Community License for Windows derived S4 model",
+      "root": "project",
+      "path": "licenses/PLaMo-BF16-Community-ja.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "835e967f5a744c4a337e474f9f23a4cb879a6ac442fcc3e3a557df07d561c68a"
+    },
+    {
+      "component": "PLaMo Community License for Windows derived S4 model",
+      "root": "project",
+      "path": "licenses/PLaMo-BF16-Community-en.txt",
+      "encoding": "utf-8-sig",
+      "sha256": "0a91796807d0f1641a0543f2ace9a973190d3acd71a6336251988af410d6c2f7"
     }
   ],
+  "extra_notice_assets": {
+    "licenses/Rust-1.100.0-COPYRIGHT-library.html": "626556344c12679d7cab2c1aa2ce80de01937b62c2c88c62f0650a469be18799"
+  },
   "origins": {
     "pdfium": {
       "url": "https://pdfium.googlesource.com/pdfium.git",
@@ -332,6 +356,15 @@
         "LICENSE/ja",
         "LICENSE/en"
       ]
-    }
+    },
+    "windows_model_license": {
+      "repository": "pfnet/plamo-3-translate-0.8b",
+      "revision": "c5a33c561bc6a4fbac38c3460bbb384e15c0b231",
+      "paths": [
+        "LICENSE/ja",
+        "LICENSE/en"
+      ]
+    },
+    "rust_std": "Rust 1.100.0 official share/doc/rust/COPYRIGHT-library.html"
   }
 }

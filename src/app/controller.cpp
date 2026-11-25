@@ -361,8 +361,13 @@ struct ApplicationController::Impl {
         std::ostringstream out;out<<product::name<<" "<<product::version<<"\nBuild: "<<product::preset
             <<"\nSource: "<<build::revision<<(build::dirty?" (modified)":"")<<"\nBuild identity: "<<build::identity
             <<"\nOS: "<<wxGetOsDescription().ToStdString(wxConvUTF8)<<"\nPDFium: "<<product::pdfium_revision
-            <<"\nwxWidgets: "<<product::wx_revision<<"\nllama.cpp: "<<product::llama_revision
-            <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nSupported metadata: plamo3 / tokenizer plamo3 / PFML3 profile"
+            <<"\nwxWidgets: "<<product::wx_revision
+#ifdef _WIN32
+            <<"\nInference: PLaMo Rust S4 v7 (experimental)"
+#else
+            <<"\nllama.cpp: "<<product::llama_revision
+#endif
+            <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nModel format: PLaMo 3 / PFML3"
             <<"\nBackend: "<<(backend.empty()?"unloaded":backend)<<"\nContext: "<<inference_runtime.context<<"\nThreads: "<<inference_runtime.threads
             <<" / batch threads: "<<inference_runtime.batch_threads<<"\nBatch: "<<inference_runtime.batch<<" / micro batch: "<<inference_runtime.micro_batch
             <<"\nModel load seconds: "<<model_load_seconds<<"\nLast chunk seconds: "<<last_chunk_seconds
@@ -541,7 +546,7 @@ struct ApplicationController::Impl {
             else if(layout->availability==PageLayout::Availability::UnicodeUnavailable){text="文字のUnicode情報を取得できないため、このページは翻訳できません。PDFは引き続き表示できます。";status=wxS("Unicode情報なし");}
             else{text=missing_page_text;status=wxS("翻訳テキストなし");}
         }else if(model_state==ModelState::Loading)text="モデルを読み込んでいます。PDFはそのまま読めます。";
-        else if(model_state==ModelState::Failed)text="モデルを利用できません。「モデル設定」でGGUFを選び直してください。";
+        else if(model_state==ModelState::Failed)text="モデルを利用できません。「モデル設定」で翻訳モデルを選び直してください。";
         else if(model_state!=ModelState::Ready)text="翻訳モデルを設定すると、このページの訳文を表示します。";
         else if(auto_translate){text="ページの原文を準備しています…";status=wxS("翻訳待ち");}
         else{text="「翻訳」メニューで「現在ページを自動翻訳」をオンにすると、訳文を表示します。";status=wxS("自動翻訳オフ");}
@@ -728,8 +733,8 @@ struct ApplicationController::Impl {
         const auto directory=application_directory();
         if(const auto bundled=bundled_model(directory))model_path=*bundled;
         else{
-            wxFileDialog file(frame,wxS("同梱GGUFが見つかりません。モデルを選択してください"),display_path(directory),
-                wxString::FromUTF8(bundled_model_filename),wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+            wxFileDialog file(frame,wxS("同梱モデルが見つかりません。モデルを選択してください"),display_path(directory),
+                wxString::FromUTF8(bundled_model_filename),wxString::FromUTF8(bundled_model_filter),wxFD_OPEN|wxFD_FILE_MUST_EXIST);
             if(show_modal(file)!=wxID_OK||closing)return;
             model_path=native_path(file.GetPath());
         }
@@ -738,14 +743,14 @@ struct ApplicationController::Impl {
     void model_settings(){
         wxDialog dialog(frame,wxID_ANY,wxS("モデル設定"),wxDefaultPosition,frame->FromDIP(wxSize(720,250)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
         auto root=new wxBoxSizer(wxVERTICAL);const auto gap=frame->FromDIP(8);
-        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("起動時はアプリと同じフォルダーの同梱GGUFを自動で読み込みます。\nここでは別のPLaMo 3 Translate 0.8B GGUFを選択できます。利用条件は同梱のPLaMoライセンスで確認してください。"));
+        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("起動時はアプリと同じフォルダーの同梱翻訳モデルを自動で読み込みます。\nここでは対応するPLaMo 3 Translate 0.8Bモデルを選択できます。利用条件は同梱のPLaMoライセンスで確認してください。"));
         root->Add(description,0,wxALL|wxEXPAND,gap);
         if(!model_error.empty()){
             auto failure=new wxStaticText(&dialog,wxID_ANY,wxString::FromUTF8(model_error));failure->Wrap(frame->FromDIP(660));root->Add(failure,0,wxALL|wxEXPAND,gap);
         }
-        auto row=new wxBoxSizer(wxHORIZONTAL);auto path_field=new wxTextCtrl(&dialog,wxID_ANY,display_path(model_path));path_field->SetName(wxS("GGUFファイル"));row->Add(path_field,1,wxALL|wxEXPAND,gap);
+        auto row=new wxBoxSizer(wxHORIZONTAL);auto path_field=new wxTextCtrl(&dialog,wxID_ANY,display_path(model_path));path_field->SetName(wxS("翻訳モデルファイル"));row->Add(path_field,1,wxALL|wxEXPAND,gap);
         auto browse=new wxButton(&dialog,wxID_ANY,wxS("ファイルを選択…"));row->Add(browse,0,wxALL,gap);root->Add(row,0,wxEXPAND);
-        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("GGUFを選択"),{}, {},wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(show_modal(file)==wxID_OK)path_field->ChangeValue(file.GetPath());});
+        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("翻訳モデルを選択"),{}, {},wxString::FromUTF8(bundled_model_filter),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(show_modal(file)==wxID_OK)path_field->ChangeValue(file.GetPath());});
         auto* terms=new wxButton(&dialog,wxID_HELP,wxS("ライセンス・利用条件"));root->Add(terms,0,wxALL,gap);
         terms->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){text_dialog(wxS("ライセンス・利用条件"),resources::licenses());});
         root->Add(dialog.CreateButtonSizer(wxOK|wxCANCEL),0,wxALL|wxALIGN_RIGHT,gap);dialog.SetSizer(root);dialog.CentreOnParent();
@@ -1324,7 +1329,11 @@ struct ApplicationController::Impl {
         auto credit=new wxStaticText(welcome,wxID_ANY,wxS("Built with PLaMo"));
         credit->SetFont(credit->GetFont().Scaled(1.6f).Bold());
         welcome_sizer->Add(credit,0,wxALIGN_CENTER_HORIZONTAL|wxALL,frame->FromDIP(16));
+        #ifdef _WIN32
+        const wxString notice_text=wxS("このアプリは株式会社Preferred Networksが提供するPLaMo 3 Translate 0.8Bの派生量子化モデル PLaMo x86 S4 v7 を利用しています");
+#else
         const wxString notice_text=wxS("このアプリは株式会社Preferred Networksが提供するPLaMo-3-translate-0.8b-GGUFを利用しています");
+#endif
         auto notice=new wxStaticText(welcome,wxID_ANY,notice_text,
             wxDefaultPosition,wxDefaultSize,wxALIGN_CENTRE|wxST_NO_AUTORESIZE);
         notice->SetMinSize(wxSize(1,-1));

@@ -6,6 +6,8 @@
 /tmp/
 /output/
 *.gguf
+*.p4x86
+*.safetensors
 *.sqlite3
 *.sqlite3-*
 *.log
@@ -18,3 +20,5 @@ __pycache__/
 *.p12
 *.pfx
 *.key
+
+/src/platform/windows/plamo-rs/target/

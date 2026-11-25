@@ -47,7 +47,10 @@
   "patches": [
     {
       "dependency": "llama.cpp",
-      "targets": ["windows-x64-release", "windows-x64-debug"],
+      "targets": [
+        "windows-x64-release",
+        "windows-x64-debug"
+      ],
       "path": "deps/patches/windows-x64/plamo3-cpu.patch",
       "tree": "6a3721083ffad5d59a1ca2486c1cfac5c3cca42e"
     }
@@ -73,5 +76,18 @@
       "executed_os": "27.2 under Rosetta on arm64",
       "record": "docs/macos-x64.md"
     }
+  },
+  "windows_model_fixture": {
+    "repository": "pfnet/plamo-3-translate-0.8b",
+    "revision": "c5a33c561bc6a4fbac38c3460bbb384e15c0b231",
+    "filename": "plamo3-translate-0.8b-x86-s4tile-v7.p4x86",
+    "sha256": "aa290f1609fc0ad49811060a8499a773ababd088b9d21dc3e907c287f4fe2478",
+    "bytes": 516613376,
+    "source_sha256": {
+      "model.safetensors": "7c9f0066d166c075bdbe83ada3d444e08bd7a6ee3f345f47a1f3c442aa6898c5",
+      "config.json": "b825929ff52a9b94f911df21622cde1a2edf0a71c0710ab06b0dc60c83cacbd0",
+      "tokenizer.jsonl": "bdce9e430e65931b28c56de2054f52b4cf8ed59b322db125e016d724d06dbb0e"
+    },
+    "license": "PLaMo Community License (original BF16 revision); derived P4X86 v7; Built with PLaMo"
   }
 }
