@@ -5,8 +5,22 @@ use std::{ffi::c_void, panic::{catch_unwind, AssertUnwindSafe}, slice};
 
 type Read = extern "C" fn(*mut c_void, u64, *mut u8, usize) -> usize;
 type Cancel = extern "C" fn(*mut c_void) -> i32;
+type Accept = extern "C" fn(*mut c_void, *const u8, usize) -> i32;
 type Delta = extern "C" fn(*mut c_void, *const u8, usize) -> i32;
 const CONTEXT: usize = 32768;
+
+enum Output {
+    Stop,
+    Piece(Vec<u8>),
+}
+
+fn accepted_output(tokenizer: &Tokenizer, id: u32, accept: Accept, user: *mut c_void) -> Option<Output> {
+    if [1, 2, 16].contains(&id) {
+        return (accept(user, std::ptr::null(), 0) != 0).then_some(Output::Stop);
+    }
+    let piece = tokenizer.output_piece(id)?;
+    (accept(user, piece.as_ptr(), piece.len()) != 0).then_some(Output::Piece(piece))
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opt_plamo_open(size: usize, threads: usize, read: Read, user: *mut c_void) -> *mut Engine {
@@ -55,7 +69,7 @@ pub unsafe extern "C" fn opt_plamo_tokenize(engine: *const Engine, text: *const 
 // 4 invalid output, 5 decode error. Delta callback may reject a piece.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opt_plamo_generate(engine: *const Engine, tokens: *const i32, count: usize,
-    limit: usize, cancel: Cancel, delta: Delta, user: *mut c_void) -> i32 {
+    limit: usize, cancel: Cancel, accept: Accept, delta: Delta, user: *mut c_void) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         let Some(e) = (unsafe { engine.as_ref() }) else { return 5 };
         if tokens.is_null() || count == 0 || count.checked_add(limit).is_none_or(|n| n > CONTEXT) { return 3; }
@@ -76,8 +90,27 @@ pub unsafe extern "C" fn opt_plamo_generate(engine: *const Engine, tokens: *cons
         match e.pool.install(|| session.readout(true)) { Ok(t) => next = t, Err(_) => return 5 }
         for i in 0..limit {
             if cancel(user) != 0 { return 1; }
-            if [1, 2, 16].contains(&next) { return 0; }
-            let Some(piece) = e.tokenizer.output_piece(next) else { return 4; };
+            let mut output = accepted_output(&e.tokenizer, next, accept, user);
+            if output.is_none() {
+                // Score the full vocabulary when the approximate winner is rejected.
+                if e.pool.install(|| session.readout(false)).is_err() { return 5; }
+                if cancel(user) != 0 { return 1; }
+                let mut best = f32::NEG_INFINITY;
+                for (id, &score) in session.logits().iter().enumerate() {
+                    if score > best {
+                        if let Some(candidate) = accepted_output(&e.tokenizer, id as u32, accept, user) {
+                            best = score;
+                            next = id as u32;
+                            output = Some(candidate);
+                        }
+                    }
+                }
+            }
+            let piece = match output {
+                Some(Output::Stop) => return 0,
+                Some(Output::Piece(piece)) => piece,
+                None => return 4,
+            };
             if delta(user, piece.as_ptr(), piece.len()) != 0 { return 4; }
             if cancel(user) != 0 { return 1; }
             if i + 1 < limit {

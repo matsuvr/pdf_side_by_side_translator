@@ -132,6 +132,14 @@ GenerationResult Engine::generate(const PreparedInput& input,const std::function
         std::chrono::steady_clock::time_point last=std::chrono::steady_clock::now();
         FinishReason error=FinishReason::InvalidModelOutput;
         static std::int32_t cancel(void* ptr)noexcept{return static_cast<State*>(ptr)->p.cancelled.load()?1:0;}
+        static std::int32_t accept(void* ptr,const std::uint8_t* bytes,std::size_t n)noexcept{
+            const auto& decoder=static_cast<const State*>(ptr)->decoder;
+            if(!bytes)return decoder.complete();
+            try{
+                const std::string_view piece(reinterpret_cast<const char*>(bytes),n);
+                return unsupported_text_control(piece)==std::string_view::npos&&decoder.accepts(piece);
+            }catch(...){return 0;}
+        }
         static std::int32_t piece(void* ptr,const std::uint8_t* bytes,std::size_t n)noexcept{
             auto& s=*static_cast<State*>(ptr);
             try{
@@ -150,7 +158,8 @@ GenerationResult Engine::generate(const PreparedInput& input,const std::function
             catch(...){s.error=FinishReason::DecodeError;return 1;}
         }
     } state{p,result,delta};
-    switch(opt_plamo_generate(p.model,input.tokens.data(),input.tokens.size(),input.output_limit,State::cancel,State::piece,&state)){
+    switch(opt_plamo_generate(p.model,input.tokens.data(),input.tokens.size(),input.output_limit,
+                              State::cancel,State::accept,State::piece,&state)){
         case 0:result.reason=!state.decoder.complete()?FinishReason::InvalidEncoding:
             has_usable_text(result.text)?FinishReason::Completed:FinishReason::EmptyOutput;break;
         case 1:result.reason=FinishReason::Cancelled;break;

@@ -1,3 +1,4 @@
+mod attention;
 mod ffi;
 mod weights;
 mod model;
@@ -303,7 +304,7 @@ impl Engine {
             ff: vec![0.; 2 * FF],
             gated: vec![0.; FF],
             logits: vec![0.; V],
-            scores: vec![0.; self.context],
+            scores: Vec::new(),
             rope: [rotary(false), rotary(true)],
         }
     }
@@ -674,6 +675,11 @@ impl Engine {
                 rms(src, w("attn_norm.weight"), dst);
             }
             self.multiply(t("attn_qkv.weight"), &norm, &mut qkv, b);
+            let evicted = (sessions.len() == 1
+                && b >= 8
+                && b <= sessions[0].cache[i].capacity
+                && rayon::current_num_threads() > 1)
+                .then(|| attention::EvictedRows::capture(&sessions[0].cache[i], &positions));
             for (j, (row, out)) in qkv
                 .chunks_exact_mut(Q + 2 * H)
                 .zip(attn.chunks_exact_mut(Q))
@@ -692,7 +698,20 @@ impl Engine {
                 rope(k, table);
                 let cache = &mut session.cache[i];
                 cache.append(pos, k, v);
-                attention(q, cache, pos, out, &mut session.scores);
+                if evicted.is_none() {
+                    attention::single(q, cache, pos, out, &mut session.scores);
+                }
+            }
+            if let Some(evicted) = evicted {
+                let session = &mut sessions[0];
+                attention::prefill(
+                    &qkv,
+                    &session.cache[i],
+                    &positions,
+                    &evicted,
+                    &mut attn,
+                    &mut session.scores,
+                );
             }
             self.multiply(t("attn_output.weight"), &attn, &mut proj, b);
             for row in proj.chunks_exact_mut(D) {
@@ -783,59 +802,6 @@ fn rope(x: &mut [f32], coeff: &[(f32, f32, f32); H / 2]) {
 }
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn dot128_avx(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::x86_64::*;
-    unsafe {
-        let mut v0 = _mm256_setzero_ps();
-        let mut v1 = v0;
-        let mut v2 = v0;
-        let mut v3 = v0;
-        for i in (0..128).step_by(32) {
-            v0 = _mm256_add_ps(
-                v0,
-                _mm256_mul_ps(
-                    _mm256_loadu_ps(a.as_ptr().add(i)),
-                    _mm256_loadu_ps(b.as_ptr().add(i)),
-                ),
-            );
-            v1 = _mm256_add_ps(
-                v1,
-                _mm256_mul_ps(
-                    _mm256_loadu_ps(a.as_ptr().add(i + 8)),
-                    _mm256_loadu_ps(b.as_ptr().add(i + 8)),
-                ),
-            );
-            v2 = _mm256_add_ps(
-                v2,
-                _mm256_mul_ps(
-                    _mm256_loadu_ps(a.as_ptr().add(i + 16)),
-                    _mm256_loadu_ps(b.as_ptr().add(i + 16)),
-                ),
-            );
-            v3 = _mm256_add_ps(
-                v3,
-                _mm256_mul_ps(
-                    _mm256_loadu_ps(a.as_ptr().add(i + 24)),
-                    _mm256_loadu_ps(b.as_ptr().add(i + 24)),
-                ),
-            );
-        }
-        let v = _mm256_add_ps(_mm256_add_ps(v0, v1), _mm256_add_ps(v2, v3));
-        let mut tmp = [0.; 8];
-        _mm256_storeu_ps(tmp.as_mut_ptr(), v);
-        tmp.iter().sum()
-    }
-}
-#[inline]
-fn dot128(a: &[f32], b: &[f32]) -> f32 {
-    #[cfg(target_arch = "x86_64")]
-    if std::is_x86_feature_detected!("avx2") {
-        return unsafe { dot128_avx(a, b) };
-    }
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
 unsafe fn swiglu_avx(src: &[f32], dst: &mut [f32]) {
     use std::arch::x86_64::*;
     unsafe {
@@ -901,32 +867,6 @@ fn rms_inplace(x: &mut [f32], w: &[u8]) {
         .recip();
     for (x, w) in x.iter_mut().zip(w.chunks_exact(4)) {
         *x *= inv * f32::from_le_bytes(w.try_into().unwrap());
-    }
-}
-fn attention(q: &[f32], cache: &LayerCache, pos: usize, attn: &mut [f32], scratch: &mut [f32]) {
-    let len = (pos + 1).min(cache.capacity);
-    let scale = 1. / (H as f32).sqrt();
-    for (head, out) in q.chunks_exact(H).zip(attn.chunks_exact_mut(H)) {
-        let scores = &mut scratch[..len];
-        let mut max = f32::NEG_INFINITY;
-        for (idx, s) in scores.iter_mut().enumerate() {
-            let offset = ((pos + 1 - len + idx) % cache.capacity) * H;
-            *s = dot128(head, &cache.k[offset..offset + H]) * scale;
-            max = max.max(*s);
-        }
-        let mut sum = 0.;
-        for s in scores.iter_mut() {
-            *s = (*s - max).exp();
-            sum += *s;
-        }
-        out.fill(0.);
-        for (idx, s) in scores.iter().enumerate() {
-            let offset = ((pos + 1 - len + idx) % cache.capacity) * H;
-            let p = *s / sum;
-            for (o, v) in out.iter_mut().zip(&cache.v[offset..offset + H]) {
-                *o += p * v;
-            }
-        }
     }
 }
 impl Session<'_> {
@@ -1034,7 +974,7 @@ impl Session<'_> {
             rope(k, table);
             let cache = &mut self.cache[i];
             cache.append(self.pos, k, v);
-            attention(q, cache, self.pos, &mut self.attn, &mut self.scores);
+            attention::single(q, cache, self.pos, &mut self.attn, &mut self.scores);
             self.engine
                 .multiply(t("attn_output.weight"), &self.attn, &mut self.proj, 1);
             rms_inplace(&mut self.proj, w("post_attention_norm"));
