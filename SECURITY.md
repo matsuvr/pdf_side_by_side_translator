@@ -16,6 +16,11 @@ The development workflow checks direct Git revisions against OSV and SQLite's
 version against NVD on source changes and weekly. A matching advisory requires
 review against the features linked into the product. Package manifests and
 the build-time CycloneDX inventory identify the dependencies used by a release.
+Packaging also checks resolved dependency feature settings and the recorded
+PDFium build archive digests. Independent Windows verification checks the ZIP
+and Authenticode signer against separately trusted manifest and publisher
+identities (see docs/distribution.md). These checks supplement native runtime
+and clean-machine tests.
 
 Please report a problem with the app version, target, diagnostic codes and a
 small original reproduction fixture. Do not put private PDFs, generated private

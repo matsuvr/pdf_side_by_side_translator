@@ -10,9 +10,23 @@ ZIP の最上位にはアプリ、公式 GGUF、`README.md`、モデルの `PLaM
 
 GitHub のリリースページには、閲覧専用ビューアーとしての使い方、対象 OS、同梱ファイル、利用条件を記載します。ビルド・検証の詳細は開発資料で管理します。
 
-`dist/<target>/<identity>/package-manifest.json` には、版・コミット・ZIP 名・SHA-256・署名状態・依存監査の結果が入ります。配布する ZIP は、この manifest の版とコミットを確認して選びます。同じ階層に `BUILD-INFO.json`（ビルド識別情報）、`DEPENDENCIES.json`（PDFium の依存解決結果）、`SBOM.cdx.json`（ビルド時の依存一覧）を保存します。これらは配布者向けの監査資料で、利用者向け ZIP や macOS の `.app` には含めません。実行時のビルド識別情報は実行ファイルに埋め込み済みで、外部 JSON を読みません。ZIP 再展開後に実行ファイルと同梱物を再検証します。
+`dist/<target>/<identity>/package-manifest.json` には、版・コミット・ZIP 名・SHA-256・署名状態・依存監査の結果が入ります。配布する ZIP は、この manifest の版とコミットを確認して選びます。同じ階層に `BUILD-INFO.json`（ビルド識別情報）、`DEPENDENCIES.json`（PDFium の依存解決結果）、`SBOM.cdx.json`（ビルド時の依存一覧）、`BUILD-VERIFICATION.json`（有効なビルド設定の検証結果）を保存します。これらは配布者向けの監査資料で、利用者向け ZIP や macOS の `.app` には含めません。実行時のビルド識別情報は実行ファイルに埋め込み済みで、外部 JSON を読みません。ZIP 再展開後に実行ファイルと同梱物を再検証します。
 
 Windows では PE の通常・遅延インポート、CFG の関数表、CET 互換フラグ、静的 CRT のコンパイル設定を検査します。`--windows-cert` に署名証明書の拇印を指定すると、パッケージ内の実行ファイルに Authenticode 署名し、再展開後に検証します。証明書を指定しない開発ビルドは未署名です。
+
+### ビルド設定と配布物の独立検証
+
+パッケージ作成時に CMakeCache.txt、compile_commands.json、PDFium の解決済み GN 引数を確認します。PDFium の V8/XFA 無効、SQLite の拡張ロード無効・一時処理のメモリ限定、通信機能に関わる依存のビルド設定が開発方針と一致することを検証します。PDFium のリンク用アーカイブは生成時に SHA-256 を記録し、パッケージ作成時に再照合します。旧形式の PDFium マニフェストでビルド済みの場合は、`scripts/build_pdfium.py` を再実行してからアプリを再ビルドしてください。
+
+`package-manifest.json` は ZIP、実行ファイル、同梱物、各監査 JSON の SHA-256 とサイズを記録します。別途入手した信頼できるマニフェスト SHA-256 と発行者証明書の拇印を用いると、Windows SDK の SignTool がある Windows 上で、配布物を実行せずに独立検証できます。
+
+```powershell
+python scripts/verify_package.py dist/windows-x64-release/<identity> `
+  --expected-manifest-sha256 <trusted-manifest-sha256> `
+  --expected-thumbprint <trusted-publisher-thumbprint>
+```
+
+発行者の認証情報とマニフェストのハッシュは、ZIP と同じ未認証のファイル一式とは独立した信頼できる経路で確認してください。検証では ZIP 内の全ファイルの内容を照合し、実行ファイルを一時フォルダーに取り出して Authenticode の信頼性と署名者証明書を確認します。一時ファイルは開発・検証用で、ビューアーの利用時には生成しません。署名の信頼性確認には Windows の証明書失効確認ポリシーが適用されます。検証資料はビルド設定・配布物の整合性を示すものであり、実行時の挙動やビルド環境そのものの信頼性は、別途実機試験・ビルド環境の管理が必要です。
 
 Windows Release では ggml CPU の AVX2 オブジェクトとベースラインオブジェクトが外部関数シンボルを共有していないことも検査します。比較関数の型名を分けて、標準ライブラリが生成するソート関数にも個別の名前を持たせています。
 

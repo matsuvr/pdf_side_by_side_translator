@@ -21,6 +21,8 @@ from write_build_info import build_info
 from audit_dependencies import audit_macho,audit_pe
 from bootstrap_image_reading import SOURCES as OCR_SOURCES, REVISION as TESSDATA_REVISION
 from image_reading_assets import catalog
+from verify_build import verify_build
+from verify_package import file_record, verify_evidence, verify_package
 
 MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
 
@@ -48,7 +50,7 @@ def product():
 def sanitized(value):
     if isinstance(value,str):return value.replace(str(ROOT),'${SOURCE_ROOT}')
     if isinstance(value,list):return [sanitized(x) for x in value]
-    if isinstance(value,dict):return {k:sanitized(v) for k,v in value.items()}
+    if isinstance(value,dict):return {sanitized(k):sanitized(v) for k,v in value.items()}
     return value
 def audit_bundle(bundle,arch):
     reports=[]
@@ -166,6 +168,7 @@ def main():
         raise SystemExit('Build identity is stale. Run cmake --build --preset '+target)
     pdf=json.loads((ROOT/'.work/pdfium'/target/'pdfium-build-manifest.json').read_text())
     if pdf['revision']!=lock()['dependencies']['PDFium']['revision'] or pdf['target']!=target:raise SystemExit('PDFium manifest differs from lock/target')
+    build_verification=verify_build(build,target,pdf,info.get('image_reading',False))
     run([os.sys.executable,ROOT/'scripts/collect_notices.py','--check'])
     binary=build/(name+'.app')/'Contents/MacOS'/name if mac else build/(exe+'.exe')
     if ('OPT_BUILD_INFO:'+info['identity_sha256']).encode() not in binary.read_bytes():raise SystemExit('Executable does not contain the matching build identity')
@@ -177,6 +180,9 @@ def main():
     if unique.exists():
         verify_companions(unique,companion_hashes)
         manifest=json.loads((unique/'package-manifest.json').read_text())
+        verify_evidence(unique,manifest)
+        if json.loads((unique/'BUILD-VERIFICATION.json').read_text())!=build_verification:
+            raise SystemExit('Existing package build verification differs from the current build')
         if (manifest.get('signing_identity')!=(args.windows_cert or args.mac_identity) or
                 manifest.get('signature')!=signature or manifest.get('notarized')!=bool(args.notary_profile)):
             raise SystemExit('Existing package signing identity differs from the requested identity')
@@ -187,8 +193,10 @@ def main():
             audit_bundle(unique/(name+'.app'),'arm64' if 'arm64' in target else 'x86_64')
             run(['codesign','--verify','--deep','--strict',unique/(name+'.app')])
             if args.notary_profile:run(['xcrun','stapler','validate',unique/(name+'.app')])
-        elif audit_pe(unique/(exe+'.exe'))['failures']:raise SystemExit('Existing executable dependency audit failed')
-        elif args.windows_cert:run(['signtool','verify','/pa',unique/(exe+'.exe')])
+        else:
+            verify_package(unique,expected_thumbprint=args.windows_cert)
+            if file_record(unique/(exe+'.exe'))!= {k:manifest['executable'][k] for k in ('sha256','size')}:
+                raise SystemExit('Existing staged executable differs from the verified ZIP')
         print('Verified existing package',artifact);return
     with tempfile.TemporaryDirectory(prefix='.package-',dir=dist) as temporary:
         stage=Path(temporary);payload=stage/'payload';payload.mkdir()
@@ -197,6 +205,7 @@ def main():
         for filename,path in companions.items():shutil.copyfile(path,payload/filename)
         sbom=source_sbom(info,pdf)
         write_json(evidence/'SBOM.cdx.json',sbom)
+        write_json(evidence/'BUILD-VERIFICATION.json',build_verification)
         if mac:
             bundle=payload/(name+'.app');shutil.copytree(build/(name+'.app'),bundle)
             resources=bundle/'Contents/Resources'
@@ -250,11 +259,16 @@ def main():
         shutil.move(str(archive),str(payload/archive_name));artifact=payload/archive_name
         manifest={**info,'artifact':artifact.name,'size':artifact.stat().st_size,'sha256':sha256(artifact),
           'files':{name:{'sha256':companion_hashes[name],'size':path.stat().st_size} for name,path in companions.items()},
+          'executable':{'name':str(packaged_binary.relative_to(payload)).replace(os.sep,'/'),**file_record(packaged_binary)},
+          'evidence':{path.name:file_record(path) for path in evidence.iterdir()},
           'runtime_audit':reports,'model_included':target.endswith('-release'),'clean_machine_execution':'not implied by packaging',
           'signature':signature,'signing_identity':args.windows_cert or args.mac_identity,'notarized':bool(args.notary_profile)}
         # Only after archiving: keep build/audit evidence alongside the ZIP.
         for path in evidence.iterdir():shutil.move(str(path),str(payload/path.name))
         write_json(payload/'package-manifest.json',manifest)
+        (payload/'package-manifest.json.sha256').write_text(sha256(payload/'package-manifest.json')+'  package-manifest.json\n')
+        if not mac:verify_package(payload,expected_thumbprint=args.windows_cert)
+        else:verify_evidence(payload,manifest)
         (payload/(artifact.name+'.sha256')).write_text(manifest['sha256']+'  '+artifact.name+'\n')
         shutil.move(str(payload),str(unique))
     print('Created',unique/manifest['artifact']);print('SHA-256',manifest['sha256'])

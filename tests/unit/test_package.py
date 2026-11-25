@@ -14,8 +14,9 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import package
+import verify_package
 
-EVIDENCE = {'BUILD-INFO.json', 'DEPENDENCIES.json', 'SBOM.cdx.json'}
+EVIDENCE = {'BUILD-INFO.json', 'DEPENDENCIES.json', 'SBOM.cdx.json', 'BUILD-VERIFICATION.json'}
 
 
 class PackageTest(unittest.TestCase):
@@ -84,9 +85,11 @@ class PackageTest(unittest.TestCase):
                                     ('companion_files', lambda *a: companions),
                                     ('source_sbom', lambda *a: sbom), ('run', fake_run),
                                     ('validate_static_windows', lambda *a: None),
+                                    ('verify_build', lambda *a: {'schema': 1, 'target': target}),
                                     ('audit_pe', lambda *a: {'failures': []}),
                                     ('audit_bundle', lambda *a: [{'failures': []}])]:
                     stack.enter_context(patch.object(package, name, value))
+                stack.enter_context(patch.object(verify_package, 'audit_pe', return_value={'failures': []}))
                 stack.enter_context(patch.object(package.platform, 'system', return_value='Darwin' if mac else 'Windows'))
                 stack.enter_context(patch.object(sys, 'argv', ['package.py', '--target', target]))
                 package.main()
@@ -108,10 +111,20 @@ class PackageTest(unittest.TestCase):
                 recorded = json.loads((output / 'package-manifest.json').read_text())
                 self.assertEqual(recorded['sha256'], package.sha256(archive))
                 self.assertEqual(recorded['model_included'], target.endswith('-release'))
+                self.assertEqual(set(recorded['evidence']), EVIDENCE)
+                self.assertEqual(recorded['executable']['sha256'], package.sha256(binary))
+                for filename in EVIDENCE:
+                    self.assertEqual(recorded['evidence'][filename], verify_package.file_record(output / filename))
+                self.assertEqual((output/'package-manifest.json.sha256').read_text().split()[0],
+                                 package.sha256(output/'package-manifest.json'))
                 # Reusing a verified package still works with evidence outside ZIP.
                 package.main()
                 if mac:
                     self.assertTrue(signed)
+                # A changed publisher evidence file cannot silently be reused.
+                (output/'SBOM.cdx.json').write_text('{}')
+                with self.assertRaisesRegex(RuntimeError, 'Integrity mismatch'):
+                    package.main()
 
     def test_windows_release(self):
         self.package_fixture('windows-x64-release')
