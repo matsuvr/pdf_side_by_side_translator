@@ -44,6 +44,25 @@ std::shared_ptr<const FileSnapshot> FileSnapshot::open(const std::filesystem::pa
     impl->original=impl->initial_status.signature();
     return std::shared_ptr<const FileSnapshot>(new FileSnapshot(std::move(impl)));
 }
+#ifdef _WIN32
+std::intptr_t FileSnapshot::duplicate_read_handle(bool inheritable) const{
+    HANDLE handle=nullptr;
+    if(!DuplicateHandle(GetCurrentProcess(),impl_->file,GetCurrentProcess(),&handle,
+        0,inheritable?TRUE:FALSE,DUPLICATE_SAME_ACCESS))
+        throw std::system_error(GetLastError(),std::system_category(),"Duplicate read-only PDF handle");
+    return reinterpret_cast<std::intptr_t>(handle);
+}
+std::shared_ptr<const FileSnapshot> FileSnapshot::take_read_handle(std::intptr_t native){
+    auto impl=std::make_unique<Impl>();
+    impl->file=reinterpret_cast<HANDLE>(native);
+    if(!impl->file||impl->file==INVALID_HANDLE_VALUE||GetFileType(impl->file)!=FILE_TYPE_DISK)
+        throw std::runtime_error("Invalid inherited PDF file handle");
+    if(!SetHandleInformation(impl->file,HANDLE_FLAG_INHERIT,0))
+        throw std::system_error(GetLastError(),std::system_category(),"Restrict PDF handle inheritance");
+    impl->initial_status=open_file_status(impl->file);impl->original=impl->initial_status.signature();
+    return std::shared_ptr<const FileSnapshot>(new FileSnapshot(std::move(impl)));
+}
+#endif
 std::shared_ptr<const FileSnapshot> FileSnapshot::duplicate(std::intptr_t native,const OpenFileStatus& status,FileSignature original){
     auto impl=std::make_unique<Impl>();
 #ifdef _WIN32

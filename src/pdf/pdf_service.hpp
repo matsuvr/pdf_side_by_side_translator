@@ -86,6 +86,7 @@ public:
     PdfService(const PdfService&)=delete;
     PdfService& operator=(const PdfService&)=delete;
     void open(DocumentEpoch epoch,const std::filesystem::path& path,std::string_view password={});
+    void open_snapshot(DocumentEpoch epoch,std::shared_ptr<const FileSnapshot> snapshot,std::string_view password={});
     void close(DocumentEpoch epoch);
     void page_info(DocumentEpoch epoch,PageIndex page);
     void viewport(ViewRequest request);

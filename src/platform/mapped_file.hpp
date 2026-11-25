@@ -13,6 +13,9 @@ class FileSnapshot;
 class MappedFile {
 public:
     explicit MappedFile(const std::filesystem::path& path);
+#ifdef _WIN32
+    explicit MappedFile(std::shared_ptr<const FileSnapshot> snapshot);
+#endif
     ~MappedFile();
     MappedFile(const MappedFile&)=delete;
     MappedFile& operator=(const MappedFile&)=delete;

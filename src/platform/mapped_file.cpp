@@ -53,6 +53,20 @@ MappedFile::MappedFile(const std::filesystem::path& path):impl_(std::make_unique
     p.data=static_cast<const std::byte*>(result);
 #endif
 }
+#ifdef _WIN32
+MappedFile::MappedFile(std::shared_ptr<const FileSnapshot> snapshot):impl_(std::make_unique<Impl>()){
+    auto& p=*impl_;
+    p.file=reinterpret_cast<HANDLE>(snapshot->duplicate_read_handle(false));
+    p.initial_status=open_file_status(p.file);p.original=p.initial_status.signature();
+    if(p.original!=snapshot->initial_signature()||!p.original.size||p.original.size>std::numeric_limits<std::size_t>::max())
+        throw std::runtime_error("PDF changed or exceeds mapping size");
+    p.size=static_cast<std::size_t>(p.original.size);
+    p.mapping=CreateFileMappingW(p.file,nullptr,PAGE_READONLY,0,0,nullptr);
+    if(!p.mapping)throw std::system_error(GetLastError(),std::system_category(),"Create PDF mapping");
+    p.data=static_cast<const std::byte*>(MapViewOfFile(p.mapping,FILE_MAP_READ,0,0,0));
+    if(!p.data)throw std::system_error(GetLastError(),std::system_category(),"Map PDF file");
+}
+#endif
 MappedFile::~MappedFile()=default;
 std::span<const std::byte> MappedFile::bytes() const noexcept{return {impl_->data,impl_->size};}
 FileSignature MappedFile::signature() const{return open_file_status(impl_->file).signature();}

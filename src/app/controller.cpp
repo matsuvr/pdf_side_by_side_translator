@@ -1,7 +1,7 @@
 #include "app/controller.hpp"
 #include "app/bundled_files.hpp"
 #include "app/resources.hpp"
-#include "pdf/pdf_service.hpp"
+#include "pdf/restricted_pdf_service.hpp"
 #include "pdf/delivery_inbox.hpp"
 #ifdef OPT_PAGE_IMAGE_READING
 #include "ocr/image_reading.hpp"
@@ -130,7 +130,7 @@ class PdfPasswordDialog final : public wxPasswordEntryDialog {
 public:
     using wxPasswordEntryDialog::wxPasswordEntryDialog;
     ~PdfPasswordDialog() override {wxSecretValue::WipeString(m_value);}
-    void submit(PdfService& pdf,DocumentEpoch epoch,const std::filesystem::path& path){
+    void submit(ApplicationPdfService& pdf,DocumentEpoch epoch,const std::filesystem::path& path){
         auto bytes=wxConvUTF8.cWC2MB(m_value.wc_str());
         struct WipeBuffer {
             wxCharBuffer& bytes;
@@ -206,7 +206,7 @@ struct ApplicationController::Impl {
     IoInbox io_inbox;
     std::atomic<DocumentEpoch> wanted_epoch{0};
     std::atomic<ModelEpoch> wanted_model{0};
-    std::unique_ptr<PdfService> pdf;
+    std::unique_ptr<ApplicationPdfService> pdf;
     std::unique_ptr<InferenceService> inference;
     std::unique_ptr<IoService> io;
     std::unique_ptr<NativeShortcutMonitor> native_shortcuts;
@@ -295,7 +295,7 @@ struct ApplicationController::Impl {
             }else translation_dots.reset();
             canvas->advance_loading();
         },activity_timer.GetId());
-        pdf=std::make_unique<PdfService>([this](auto event){
+        pdf=std::make_unique<ApplicationPdfService>([this](auto event){
             if(closing||event->document!=wanted_epoch.load())return;
             if(inbox.push(std::move(event)))wxQueueEvent(&owner,new wxThreadEvent(PDF_WAKE));
         },native_path(wxStandardPaths::Get().GetResourcesDir()));

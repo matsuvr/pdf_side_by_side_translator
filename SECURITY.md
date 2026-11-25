@@ -6,11 +6,22 @@ validation. The app does not provide a network listener or remote inference API.
 
 The memory-only viewer starts at version 0.1.2. Earlier releases stored state,
 translations and logs on disk. Fixes are developed against the current source.
-PDFium and llama.cpp run with the application's OS privileges in the same
-process as the viewer. A parser failure can terminate the viewer, and a native
-code defect can affect the entire process. The per-page and per-output limits
-do not bound all decoder allocations or the operating system's swap and dumps.
-On Windows, the viewer requests dynamic code prohibition before starting workers; if the host policy does not permit it, the viewer continues with the other process mitigations instead of refusing to start.
+On Windows the application sends read-only PDF handles to a separate
+low-integrity, privilege-restricted PDFium process. The UI only receives
+bounded, validated metadata, image and text records. A process job limits the
+parser's committed memory, child creation and UI operations, and terminates it
+when the document is closed or replaced. Failure to establish the restricted
+worker is a document-open error. The worker establishes dynamic code
+prohibition before initializing PDFium. See [Windows PDF worker](docs/windows-pdf-worker.md)
+for the process boundary and release acceptance tests.
+
+This is an initial process and write containment layer, not a confidentiality
+sandbox: a low-integrity token does not remove all user-level read or network
+access. On macOS PDFium remains in the viewer process; llama.cpp remains in
+the viewer process on both platforms. Native parser defects, OS swap and
+crash dumps remain part of the threat model. The Windows worker and viewer
+must not be described as a complete sandbox.
+
 
 The development workflow checks direct Git revisions against OSV and SQLite's
 version against NVD on source changes and weekly. A matching advisory requires

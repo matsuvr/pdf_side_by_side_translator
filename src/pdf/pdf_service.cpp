@@ -122,8 +122,11 @@ struct PdfService::Impl {
         DocumentEpoch epoch;
         std::filesystem::path path;
         std::string password;
+        std::shared_ptr<const FileSnapshot> snapshot;
         OpenRequest(DocumentEpoch e,const std::filesystem::path& p,std::string_view secret)
             :epoch(e),path(p),password(secret){}
+        OpenRequest(DocumentEpoch e,std::shared_ptr<const FileSnapshot> f,std::string_view secret)
+            :epoch(e),password(secret),snapshot(std::move(f)){}
         ~OpenRequest(){clear_secret(password);}
     };
     Delivery delivery;
@@ -234,8 +237,8 @@ struct PdfService::Impl {
                 try {
                     if(open){
                         release();epoch=open->epoch;
-                        if(open->path.empty()){PdfEvent e;e.kind=PdfEvent::Kind::Closed;e.document=epoch;emit(std::move(e));continue;}
-                        auto snapshot=FileSnapshot::open(open->path);
+                        if(open->path.empty()&&!open->snapshot){PdfEvent e;e.kind=PdfEvent::Kind::Closed;e.document=epoch;emit(std::move(e));continue;}
+                        auto snapshot=open->snapshot?open->snapshot:FileSnapshot::open(open->path);
                         if(!snapshot->initial_signature().size)throw std::runtime_error("空のファイルです。");
                         // A synchronous PDFium parse has no cancellation API.
                         // Finish that call, then discard stale work; deliberate
@@ -243,9 +246,8 @@ struct PdfService::Impl {
                         file=std::make_unique<PdfFileReader>(snapshot);
 #ifdef _WIN32
                         if(snapshot->initial_signature().size>std::numeric_limits<unsigned long>::max()){
-                            large_windows_file=std::make_unique<MappedFile>(open->path);
+                            large_windows_file=std::make_unique<MappedFile>(snapshot);
                             if(large_windows_file->initial_signature()!=snapshot->initial_signature())throw std::runtime_error("PDFが外部で変更されました。再度開いてください。");
-                            file=std::make_unique<PdfFileReader>(large_windows_file->snapshot());
                             const auto bytes=large_windows_file->bytes();
                             document=FPDF_LoadMemDocument64(bytes.data(),bytes.size(),open->password.empty()?nullptr:open->password.c_str());
                         }else
@@ -513,6 +515,13 @@ void PdfService::open(DocumentEpoch epoch,const std::filesystem::path& path,std:
     std::lock_guard lock(impl_->mutex);impl_->opening=std::make_unique<Impl::OpenRequest>(epoch,path,password);
     impl_->requested_document=epoch;
     impl_->displayed_page=0;
+    impl_->requested_view.reset();impl_->requested_image.reset();impl_->requested_page.reset();impl_->extraction.clear();impl_->searching.reset();
+    ++impl_->request_generation;impl_->cv.notify_one();
+}
+void PdfService::open_snapshot(DocumentEpoch epoch,std::shared_ptr<const FileSnapshot> snapshot,std::string_view password){
+    if(!snapshot)throw std::invalid_argument("Missing PDF snapshot");
+    std::lock_guard lock(impl_->mutex);impl_->opening=std::make_unique<Impl::OpenRequest>(epoch,std::move(snapshot),password);
+    impl_->requested_document=epoch;impl_->displayed_page=0;
     impl_->requested_view.reset();impl_->requested_image.reset();impl_->requested_page.reset();impl_->extraction.clear();impl_->searching.reset();
     ++impl_->request_generation;impl_->cv.notify_one();
 }

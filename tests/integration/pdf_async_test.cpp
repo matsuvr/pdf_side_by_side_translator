@@ -1,4 +1,6 @@
 #include "pdf/pdf_service.hpp"
+#include "pdf/worker_protocol.hpp"
+#include "platform/file_snapshot.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -11,7 +13,14 @@
 
 using namespace std::chrono_literals;
 int main(int argc,char** argv){
-    if(argc!=2)return 2;
+    const bool wire=argc==3&&std::string_view(argv[2])=="--wire";
+    if(argc!=2&&!wire)return 2;
+    auto transfer=[&](auto event){
+        if(!wire)return event;
+        auto copy=opt::pdf_wire::decode_event(opt::pdf_wire::encode(*event));
+        copy.file_snapshot=event->file_snapshot;copy.file_signature=event->file_signature;
+        return std::make_shared<const opt::PdfEvent>(std::move(copy));
+    };
     try {
         std::mutex mutex;std::condition_variable cv;
         std::deque<std::shared_ptr<const opt::PdfEvent>> events;
@@ -20,7 +29,7 @@ int main(int argc,char** argv){
         opt::PdfService service([&](auto event){
             std::lock_guard lock(mutex);
             if(std::this_thread::get_id()==main_thread)wrong_thread=true;
-            events.push_back(event);cv.notify_one();
+            events.push_back(transfer(event));cv.notify_one();
         });
         auto wait=[&](opt::PdfEvent::Kind kind,opt::DocumentEpoch epoch){
             const auto limit=std::chrono::steady_clock::now()+10s;
@@ -34,7 +43,8 @@ int main(int argc,char** argv){
                 if(cv.wait_until(lock,limit)==std::cv_status::timeout)throw std::runtime_error("Timed out waiting for PDF worker");
             }
         };
-        service.open(1,std::filesystem::u8path(argv[1]));
+        if(wire)service.open_snapshot(1,opt::FileSnapshot::open(std::filesystem::u8path(argv[1])));
+        else service.open(1,std::filesystem::u8path(argv[1]));
         auto opened=wait(opt::PdfEvent::Kind::Opened,1);
         if(opened->page_count!=3||opened->info.width_points!=612)throw std::runtime_error("Wrong PDF metadata");
         service.viewport({1,0,1224,1584,0,{{0,0},{512,0}}});
@@ -109,7 +119,7 @@ int main(int argc,char** argv){
         service.stop();service.join();
         if(!service.done()||wrong_thread)throw std::runtime_error("PDF thread ownership or shutdown failed");
         opt::LayoutOptions small;small.output_bytes=1024;
-        opt::PdfService constrained([&](auto event){std::lock_guard lock(mutex);events.push_back(std::move(event));cv.notify_one();},{},small);
+        opt::PdfService constrained([&](auto event){std::lock_guard lock(mutex);events.push_back(transfer(std::move(event)));cv.notify_one();},{},small);
         constrained.open(6,std::filesystem::u8path(argv[1]));wait(opt::PdfEvent::Kind::Opened,6);
         constrained.extract(6,0);auto limited=wait(opt::PdfEvent::Kind::Extracted,6);
         if(!limited->layout||limited->layout->availability!=opt::PageLayout::Availability::ResourceLimited||!limited->layout->glyphs.empty())throw std::runtime_error("Over-budget text did not produce a small, editable result");

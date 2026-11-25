@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/file_signature.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -13,6 +14,12 @@ struct OpenFileStatus;
 class FileSnapshot {
 public:
     static std::shared_ptr<const FileSnapshot> open(const std::filesystem::path& path);
+#ifdef _WIN32
+    // IPC hands the parser an already-open file, never a pathname. The
+    // returned handle is an independently owned, read-only duplicate.
+    std::intptr_t duplicate_read_handle(bool inheritable) const;
+    static std::shared_ptr<const FileSnapshot> take_read_handle(std::intptr_t handle);
+#endif
     ~FileSnapshot();
     FileSnapshot(const FileSnapshot&)=delete;
     FileSnapshot& operator=(const FileSnapshot&)=delete;

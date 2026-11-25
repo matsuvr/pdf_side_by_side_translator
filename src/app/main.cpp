@@ -8,6 +8,8 @@
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
+#include "pdf/restricted_pdf_service.hpp"
 #endif
 
 class ReaderApp final : public wxApp {
@@ -67,6 +69,24 @@ int main(int argc,char** argv){
     if(argc==3 && std::string_view(argv[1])==opt::image_worker_switch)
         return opt::run_image_worker(argv[2],opt::read_bundled_image_model);
     return wxEntry(argc,argv);
+}
+#elif defined(_WIN32)
+wxIMPLEMENT_APP_NO_MAIN(ReaderApp);
+extern "C" int WINAPI WinMain(HINSTANCE instance,HINSTANCE previous,LPSTR command,int show){
+    // Parser process never initializes wxWidgets or the main controller.
+    int count=0;auto argv=CommandLineToArgvW(GetCommandLineW(),&count);
+    if(!argv)return 1;
+    {
+        if(count>=2&&std::wstring_view(argv[1])==L"--internal-pdf-worker"){
+            if(count!=5){LocalFree(argv);return 1;}
+            auto ascii=[](const wchar_t* s){std::wstring_view v(s);return std::string(v.begin(),v.end());};
+            auto input=ascii(argv[2]),output=ascii(argv[3]),file=ascii(argv[4]);LocalFree(argv);
+            return opt::run_pdf_worker(input,output,file);
+        }
+        LocalFree(argv);
+    }
+    wxDISABLE_DEBUG_SUPPORT();
+    return wxEntry(instance,previous,command,show);
 }
 #else
 wxIMPLEMENT_APP(ReaderApp);
