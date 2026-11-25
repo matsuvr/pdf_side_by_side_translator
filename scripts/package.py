@@ -68,6 +68,8 @@ def source_sbom(info, pdf):
     spec = lock()
     components = []
     for name, entry in spec['dependencies'].items():
+        if info['target'].startswith('windows-') and name == 'llama.cpp':
+            continue
         component = {'type': 'file' if name.startswith('Noto') else 'library', 'name': name,
                      'version': entry.get('version') or entry['revision'],
                      'externalReferences': [{'type': 'distribution', 'url': entry['url']}]}
@@ -79,6 +81,14 @@ def source_sbom(info, pdf):
             if patch['dependency'] == name and info['target'] in patch['targets']:
                 component['properties'].append({'name': 'git:patched-tree', 'value': patch['tree']})
         components.append(component)
+    if info['target'].startswith('windows-'):
+        import tomllib
+        cargo_lock = ROOT / 'src/platform/windows/plamo-rs/Cargo.lock'
+        for crate in tomllib.loads(cargo_lock.read_text(encoding='utf-8'))['package']:
+            component = {'type': 'library', 'name': crate['name'], 'version': crate['version']}
+            if 'checksum' in crate:
+                component['hashes'] = [{'alg': 'SHA-256', 'content': crate['checksum']}]
+            components.append(component)
     if info.get('image_reading'):
         for name,(url,revision) in OCR_SOURCES.items():
             components.append({'type':'library','name':name,'version':revision,

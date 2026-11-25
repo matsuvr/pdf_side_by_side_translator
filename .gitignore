@@ -18,3 +18,5 @@ __pycache__/
 *.p12
 *.pfx
 *.key
+
+/src/platform/windows/plamo-rs/target/

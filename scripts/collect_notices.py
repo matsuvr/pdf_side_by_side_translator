@@ -54,6 +54,7 @@ PLAN=[
  ('Page OCR / Leptonica','project',['licenses/Leptonica.txt']),
  ('Page OCR / CLD2','project',['licenses/CLD2-Apache-2.0.txt']),
  ('Noto Sans CJK JP Regular font','resources',['NotoSansCJK-LICENSE.txt']),
+ ('Windows PLaMo Rust dependencies (Rayon and transitive crates)','project',['licenses/Plamo-Rust-crates.txt']),
  ('PLaMo Community License for the bundled model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
 ]
 
@@ -85,8 +86,8 @@ The following documents are reproduced verbatim from the recorded inputs.
 Optional alternatives are explicitly identified in the section names.
 Pinned source revisions are recorded in deps/third_party.lock.json; PDFium's
 transitive commits follow that revision's DEPS. Complete input hashes and
-source paths are recorded in deps/licenses.lock.json. Windows builds apply
-the PLaMo CPU optimizations listed in deps/third_party.lock.json to llama.cpp.
+source paths are recorded in deps/licenses.lock.json. Windows uses the
+PLaMo Rust engine; macOS uses upstream llama.cpp with Metal.
 '''
     records=[];text=[heading]
     for component,root,files in PLAN:

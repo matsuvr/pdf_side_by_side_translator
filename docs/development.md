@@ -32,7 +32,7 @@ presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除
 依存revision、モデルfixture、フォントhashは[dependency lock](deps/third_party.lock.json)にあります。
 macOS は `.work/src/llama.cpp` の公式コミットをそのまま使い、llama.cpp 標準の Metal バックエンドとシェーダーを実行ファイルに組み込みます。Apple Silicon では Metal を優先し、利用できない場合は上流の CPU バックエンドを使います。
 
-Windows x64 の bootstrap は、同じ公式コミットから専用の Git 作業ツリー `.work/src/windows-x64/llama.cpp` を作り、そこに PLaMo 向け CPU パッチを適用します。どちらのターゲットを先に準備しても両方のソースを保持できます。CMake はビルド前に、macOS では公式コミット、Windows ではパッチの適用元と適用後の Git ツリーを lock と照合します。PDFium を構築済みなら `python scripts/bootstrap.py --target windows-x64-release --skip-pdfium` で Windows 用ソースを更新できます。[Windows CPU 翻訳の検証記録](plamo-cpu.md)
+Windows x64 の実験ブランチでは PLaMo 専用 Rust 0.3.0 を静的リンクします。Rust 1.100.0（MSVC x64）をインストールし、従来どおり bootstrap を実行してください。bootstrap は Cargo.lock に固定された依存を開発時に取得します。CMake は `cargo build --locked --offline --lib` を実行し、モデル推論のための別プロセスやDLLを追加しません。macOS の CMake は従来の llama.cpp のみを使います。詳細は [Windows Rust 実験](plamo-rust-experiment.md) を参照してください。
 
 packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
 Releaseのpackageは、指定したGGUFを固定した公式SHA-256と照合し、アプリ・GGUF・README・PLaMoライセンスを含むZIPを作ります。

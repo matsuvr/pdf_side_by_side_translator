@@ -361,7 +361,12 @@ struct ApplicationController::Impl {
         std::ostringstream out;out<<product::name<<" "<<product::version<<"\nBuild: "<<product::preset
             <<"\nSource: "<<build::revision<<(build::dirty?" (modified)":"")<<"\nBuild identity: "<<build::identity
             <<"\nOS: "<<wxGetOsDescription().ToStdString(wxConvUTF8)<<"\nPDFium: "<<product::pdfium_revision
-            <<"\nwxWidgets: "<<product::wx_revision<<"\nllama.cpp: "<<product::llama_revision
+            <<"\nwxWidgets: "<<product::wx_revision
+#ifdef _WIN32
+            <<"\nInference: PLaMo Rust 0.3.0 (experimental)"
+#else
+            <<"\nllama.cpp: "<<product::llama_revision
+#endif
             <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nSupported metadata: plamo3 / tokenizer plamo3 / PFML3 profile"
             <<"\nBackend: "<<(backend.empty()?"unloaded":backend)<<"\nContext: "<<inference_runtime.context<<"\nThreads: "<<inference_runtime.threads
             <<" / batch threads: "<<inference_runtime.batch_threads<<"\nBatch: "<<inference_runtime.batch<<" / micro batch: "<<inference_runtime.micro_batch
