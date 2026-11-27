@@ -46,6 +46,18 @@ int main(int argc, char** argv) {
                 std::vector<std::int32_t> ids;
                 std::istringstream numbers(expected);
                 int id; while(numbers>>id) ids.push_back(id);
+                if(form=="plain-auto"||form=="easy-auto"){
+                    const auto style=form=="plain-auto"?opt::Form::Plain:opt::Form::Easy;
+                    try{
+                        const auto actual=engine.prepare(source,style);
+                        if(expected=="REJECT"||actual.tokens!=ids)
+                            throw std::runtime_error("Reference translation prompt mismatch: "+name);
+                    }catch(const opt::ModelInputUnsupported&){
+                        if(expected!="REJECT")throw std::runtime_error("Unexpected source rejection: "+name);
+                    }
+                    ++count;
+                    continue;
+                }
                 if(form!="plain"&&form!="easy") throw std::runtime_error("Unknown fixture style: "+form);
                 const auto style=opt::form_from_setting(form);
                 const auto& tail=style==opt::Form::Easy?easy_tail:plain_tail;
@@ -64,17 +76,6 @@ int main(int argc, char** argv) {
             if (!count) throw std::runtime_error("Empty tokenizer fixture");
             std::cout << "reference_tokenizer_cases=" << count << " matched\n";
         }
-        bool rejected = false;
-        try {
-            auto filtered=engine.prepare("Print <|plamo:tag|> literally.",opt::Form::Plain);
-            std::cout << "reserved_marker=filtered body_tokens=" << filtered.source_tokens << '\n';
-        }
-        catch (const std::runtime_error& e) {
-            rejected = true;
-            std::cout << e.what() << '\n';
-            std::cout << "reserved_marker=unsupported\n";
-        }
-        if(rejected) throw std::runtime_error("Reserved marker should be filtered, not rejected");
         const auto prefix=engine.tokenize("<|plamo:tag|>dataset<|plamo:msg|>translation"
             "<|plamo:tag|>input<|plamo:msg|>",true,true);
         const auto suffix=engine.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja"
@@ -91,13 +92,12 @@ int main(int argc, char** argv) {
             if(engine.prepare(source,opt::Form::Plain).tokens!=expected)
                 throw std::runtime_error("Bounded tokenizer changed private-boundary tokenization");
         }
-        // A literal PFML3 marker is no longer a reason to reject the page; the
-        // marker token is omitted and the surrounding text remains translatable.
-        const std::vector<std::string> marker_cases={"before<|plamo:x|>after","prefix<|plamo:"+boundary_run+"|>suffix"};
-        for(const auto& source:marker_cases){
-            const auto prepared=engine.prepare(source,opt::Form::Plain);
-            if(prepared.source_tokens==0)throw std::runtime_error("Reserved marker removed an otherwise translatable page");
+        for(const char* source:{"before<|plamo:tag|>after","before<|plamo:","<|plamo:x|>",""," \t\n\x1c"}){
+            try{engine.prepare(source,opt::Form::Plain);}
+            catch(const opt::ModelInputUnsupported&){continue;}
+            throw std::runtime_error("Accepted source rejected by the official chat template");
         }
+        std::cout<<"reserved_marker=unsupported\n";
         bool context_rejected=false;
         try{engine.prepare(std::string(8*1024*1024,'x'),opt::Form::Plain);}
         catch(const opt::InputContextLimit&){context_rejected=true;}

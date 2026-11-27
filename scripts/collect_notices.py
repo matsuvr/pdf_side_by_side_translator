@@ -6,7 +6,7 @@
 The set follows the PDFium GN closure and the wx core/base + llama static link
 closure, rather than every downloaded build tool. Some platform-conditional
 components are included for both distribution targets. Model terms accompany
-the official GGUF bundled in Release packages.
+the target-specific model bundled in Release packages.
 """
 import argparse
 import hashlib
@@ -54,7 +54,9 @@ PLAN=[
  ('Optional Windows page OCR / Leptonica','project',['licenses/Leptonica.txt']),
  ('Optional Windows page OCR / CLD2','project',['licenses/CLD2-Apache-2.0.txt']),
  ('Noto Sans CJK JP Regular font','resources',['NotoSansCJK-LICENSE.txt']),
- ('PLaMo Community License for the bundled model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
+ ('Windows PLaMo Rust dependencies (locked crates)','project',['licenses/Plamo-Rust-crates.txt']),
+ ('PLaMo Community License for the macOS bundled model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
+ ('PLaMo Community License for Windows derived S4 model','project',['licenses/PLaMo-BF16-Community-ja.txt','licenses/PLaMo-BF16-Community-en.txt']),
 ]
 
 def read_lf(path):
@@ -69,7 +71,10 @@ Third-party components retain their own licenses. Release ZIPs include PLaMo
 model weights under the PLaMo Community License reproduced below.
 
 Built with PLaMo
-Bundled model: PLaMo 3 Translate 0.8B Q4_K_M (pfnet).
+Bundled models: PLaMo 3 Translate 0.8B Q4_K_M (pfnet, macOS) and
+PLaMo 3 Translate 0.8B x86 S4 v7 (derived from pfnet BF16, Windows).
+The Windows ZIP also includes Rust-1.100.0-COPYRIGHT-library.html, the Rust
+standard library copyright notices from the pinned compiler distribution.
 Model use and publication/provision of model outputs are subject to the PLaMo
 Community License reproduced at the end for offline reference. In particular,
 models trained using outputs are subject to that agreement. Consult the full
@@ -85,8 +90,8 @@ The following documents are reproduced verbatim from the recorded inputs.
 Optional alternatives are explicitly identified in the section names.
 Pinned source revisions are recorded in deps/third_party.lock.json; PDFium's
 transitive commits follow that revision's DEPS. Complete input hashes and
-source paths are recorded in deps/licenses.lock.json. Windows builds apply
-the PLaMo CPU optimizations listed in deps/third_party.lock.json to llama.cpp.
+source paths are recorded in deps/licenses.lock.json. Windows uses the
+PLaMo Rust engine; macOS uses upstream llama.cpp with Metal.
 '''
     records=[];text=[heading]
     for component,root,files in PLAN:
@@ -100,10 +105,13 @@ the PLaMo CPU optimizations listed in deps/third_party.lock.json to llama.cpp.
     notice=''.join(text).encode('utf-8')
     manifest={'schema':1,'dependency_lock_sha256':hashlib.sha256(read_lf(ROOT/'deps/third_party.lock.json')).hexdigest(),
       'notices_sha256':hashlib.sha256(notice).hexdigest(),'inputs':records,
+      'extra_notice_assets':{'licenses/Rust-1.100.0-COPYRIGHT-library.html':hashlib.sha256(read_lf(ROOT/'licenses/Rust-1.100.0-COPYRIGHT-library.html')).hexdigest()},
       'origins':{'pdfium':lock['dependencies']['PDFium'],'wx':lock['dependencies']['wxWidgets'],'llama':lock['dependencies']['llama.cpp'],
        'LLVM-compiler-rt':'https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT',
        'Chromium-BSD':'https://chromium.googlesource.com/chromium/src/+/refs/heads/main/LICENSE (text SHA-256 fixed in inputs)',
-       'model_license':{'repository':lock['model_fixture']['repository'],'revision':lock['model_fixture']['revision'],'paths':['LICENSE/ja','LICENSE/en']}}}
+       'model_license':{'repository':lock['model_fixture']['repository'],'revision':lock['model_fixture']['revision'],'paths':['LICENSE/ja','LICENSE/en']},
+       'windows_model_license':{'repository':lock['windows_model_fixture']['repository'],'revision':lock['windows_model_fixture']['revision'],'paths':['LICENSE/ja','LICENSE/en']},
+       'rust_std':'Rust 1.100.0 official share/doc/rust/COPYRIGHT-library.html'}}
     return notice,(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode('utf-8')
 
 def main():

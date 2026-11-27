@@ -172,6 +172,8 @@ struct ApplicationController::Impl {
 #ifdef OPT_PAGE_IMAGE_READING
     ImageReadingBar* image_bar=nullptr;
     bool image_enabled=false;
+    std::optional<std::string_view> recovery_language;
+    bool reading_image()const{return image_enabled||recovery_language.has_value();}
     const ImageLanguage* manual_language=nullptr;
     std::jthread image_worker;
     std::optional<std::uint64_t> pending_image;
@@ -361,8 +363,13 @@ struct ApplicationController::Impl {
         std::ostringstream out;out<<product::name<<" "<<product::version<<"\nBuild: "<<product::preset
             <<"\nSource: "<<build::revision<<(build::dirty?" (modified)":"")<<"\nBuild identity: "<<build::identity
             <<"\nOS: "<<wxGetOsDescription().ToStdString(wxConvUTF8)<<"\nPDFium: "<<product::pdfium_revision
-            <<"\nwxWidgets: "<<product::wx_revision<<"\nllama.cpp: "<<product::llama_revision
-            <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nSupported metadata: plamo3 / tokenizer plamo3 / PFML3 profile"
+            <<"\nwxWidgets: "<<product::wx_revision
+#ifdef _WIN32
+            <<"\nInference: PLaMo Rust S4 v7"
+#else
+            <<"\nllama.cpp: "<<product::llama_revision
+#endif
+            <<"\nSQLite: "<<product::sqlite_version<<"\nModel profile: "<<model_profile.id<<"\nModel format: PLaMo 3 / PFML3"
             <<"\nBackend: "<<(backend.empty()?"unloaded":backend)<<"\nContext: "<<inference_runtime.context<<"\nThreads: "<<inference_runtime.threads
             <<" / batch threads: "<<inference_runtime.batch_threads<<"\nBatch: "<<inference_runtime.batch<<" / micro batch: "<<inference_runtime.micro_batch
             <<"\nModel load seconds: "<<model_load_seconds<<"\nLast chunk seconds: "<<last_chunk_seconds
@@ -456,6 +463,7 @@ struct ApplicationController::Impl {
         right_heading->GetParent()->Layout();
     }
     void clear_page_reading(){
+        recovery_language.reset();
         pending_image.reset();++image_generation;image_layout.reset();image_worker.request_stop();
         image_result={};image_error.clear();
     }
@@ -471,6 +479,7 @@ struct ApplicationController::Impl {
     }
     void fail_image_reading(std::string error){
         pending_image.reset();image_error=std::move(error);
+        pending_source_command.reset();
         update_image_controls();
         show_waiting_translation();
     }
@@ -489,8 +498,8 @@ struct ApplicationController::Impl {
         auto wake=std::make_unique<wxThreadEvent>(PAGE_IMAGE_RESULT);
         wake->SetPayload(result);
         try{
-            image_worker=std::jthread([this,pixels,dpi,language=manual_language,result,wake=std::move(wake)](std::stop_token stop) mutable {
-                const auto tag=language?language->tag:std::string_view{};
+            const auto tag=recovery_language.value_or(manual_language?manual_language->tag:std::string_view{});
+            image_worker=std::jthread([this,pixels,dpi,tag,result,wake=std::move(wake)](std::stop_token stop) mutable {
                 try{result->reading=read_page_image({pixels->bgra,pixels->width,pixels->height,pixels->stride,dpi},tag,stop);}
                 catch(const ImageReadingTimeout& error){result->error=error.what();}
                 catch(const std::exception&){result->error="ページ画像から文字を読み取れませんでした。";}
@@ -505,18 +514,16 @@ struct ApplicationController::Impl {
         pending_image.reset();
         image_result=std::move(result->reading);
         if(!result->error.empty()){fail_image_reading(result->error);return;}
-        if(!image_result.language){
-            fail_image_reading("言語の自動判定に失敗。言語を選択すれば翻訳できる可能性があります。");
-            return;
-        }
-        if(!has_usable_text(image_result.text)){
-            fail_image_reading("ページ画像から文字を見つけられませんでした。");return;
-        }
+        const auto error=image_source_error(image_result);
+        if(!error.empty()){fail_image_reading(std::string(error));return;}
         auto found=std::make_shared<PageLayout>();
         found->page=page;found->availability=PageLayout::Availability::TextAvailable;
         // No PDF character coordinates: never replace canvas/search layout.
         found->layout_version=0x80000001U;found->reading_text_utf8=std::move(image_result.text);
         image_layout=std::move(found);
+        if(pending_source_command&&pending_source_command->first==page){
+            const auto command=pending_source_command->second;pending_source_command.reset();execute(command);
+        }
         update_image_controls();show_waiting_translation();schedule_translation();
     }
 #endif
@@ -524,7 +531,7 @@ struct ApplicationController::Impl {
         if(document_state!=DocumentState::Ready)return;
         std::string text;wxString status;
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_enabled){
+        if(reading_image()){
             if(image_layout){
                 show_translation(image_layout->reading_text_utf8,true,source_language());
                 frame->SetStatusText(auto_translate&&model_state==ModelState::Ready?wxS("翻訳待ち"):wxS("読み取り結果"),2);
@@ -541,7 +548,7 @@ struct ApplicationController::Impl {
             else if(layout->availability==PageLayout::Availability::UnicodeUnavailable){text="文字のUnicode情報を取得できないため、このページは翻訳できません。PDFは引き続き表示できます。";status=wxS("Unicode情報なし");}
             else{text=missing_page_text;status=wxS("翻訳テキストなし");}
         }else if(model_state==ModelState::Loading)text="モデルを読み込んでいます。PDFはそのまま読めます。";
-        else if(model_state==ModelState::Failed)text="モデルを利用できません。「モデル設定」でGGUFを選び直してください。";
+        else if(model_state==ModelState::Failed)text="モデルを利用できません。「モデル設定」で翻訳モデルを選び直してください。";
         else if(model_state!=ModelState::Ready)text="翻訳モデルを設定すると、このページの訳文を表示します。";
         else if(auto_translate){text="ページの原文を準備しています…";status=wxS("翻訳待ち");}
         else{text="「翻訳」メニューで「現在ページを自動翻訳」をオンにすると、訳文を表示します。";status=wxS("自動翻訳オフ");}
@@ -653,10 +660,18 @@ struct ApplicationController::Impl {
         else{translation_dots.reset();frame->SetStatusText(status,2);}
     }
     void schedule_translation(){
+        if(closing||document_state!=DocumentState::Ready)return;
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_enabled&&!image_layout)return;
+        if(!reading_image()){
+            if(auto layout=current_layout())
+                recovery_language=replacement_ocr_language(layout->reading_text_utf8);
+            if(recovery_language){
+                update_image_controls();show_waiting_translation();request_image_reading();
+            }
+        }
+        if(reading_image()&&!image_layout)return;
 #endif
-        if(closing||!auto_translate||document_state!=DocumentState::Ready||model_state!=ModelState::Ready)return;
+        if(!auto_translate||model_state!=ModelState::Ready)return;
         scheduled_page=page;translate_timer.StartOnce(150);
     }
     void pump_translation(){
@@ -672,7 +687,7 @@ struct ApplicationController::Impl {
         const auto target=page;
         std::shared_ptr<const PageLayout> layout;
 #ifdef OPT_PAGE_IMAGE_READING
-        if(image_enabled){
+        if(reading_image()){
             layout=image_layout;
             if(!layout)return;
         }else
@@ -728,8 +743,8 @@ struct ApplicationController::Impl {
         const auto directory=application_directory();
         if(const auto bundled=bundled_model(directory))model_path=*bundled;
         else{
-            wxFileDialog file(frame,wxS("同梱GGUFが見つかりません。モデルを選択してください"),display_path(directory),
-                wxString::FromUTF8(bundled_model_filename),wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+            wxFileDialog file(frame,wxS("同梱モデルが見つかりません。モデルを選択してください"),display_path(directory),
+                wxString::FromUTF8(bundled_model_filename),wxString::FromUTF8(bundled_model_filter),wxFD_OPEN|wxFD_FILE_MUST_EXIST);
             if(show_modal(file)!=wxID_OK||closing)return;
             model_path=native_path(file.GetPath());
         }
@@ -738,14 +753,14 @@ struct ApplicationController::Impl {
     void model_settings(){
         wxDialog dialog(frame,wxID_ANY,wxS("モデル設定"),wxDefaultPosition,frame->FromDIP(wxSize(720,250)),wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER);
         auto root=new wxBoxSizer(wxVERTICAL);const auto gap=frame->FromDIP(8);
-        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("起動時はアプリと同じフォルダーの同梱GGUFを自動で読み込みます。\nここでは別のPLaMo 3 Translate 0.8B GGUFを選択できます。利用条件は同梱のPLaMoライセンスで確認してください。"));
+        auto description=new wxStaticText(&dialog,wxID_ANY,wxS("起動時はアプリと同じフォルダーの同梱翻訳モデルを自動で読み込みます。\nここでは対応するPLaMo 3 Translate 0.8Bモデルを選択できます。利用条件は同梱のPLaMoライセンスで確認してください。"));
         root->Add(description,0,wxALL|wxEXPAND,gap);
         if(!model_error.empty()){
             auto failure=new wxStaticText(&dialog,wxID_ANY,wxString::FromUTF8(model_error));failure->Wrap(frame->FromDIP(660));root->Add(failure,0,wxALL|wxEXPAND,gap);
         }
-        auto row=new wxBoxSizer(wxHORIZONTAL);auto path_field=new wxTextCtrl(&dialog,wxID_ANY,display_path(model_path));path_field->SetName(wxS("GGUFファイル"));row->Add(path_field,1,wxALL|wxEXPAND,gap);
+        auto row=new wxBoxSizer(wxHORIZONTAL);auto path_field=new wxTextCtrl(&dialog,wxID_ANY,display_path(model_path));path_field->SetName(wxS("翻訳モデルファイル"));row->Add(path_field,1,wxALL|wxEXPAND,gap);
         auto browse=new wxButton(&dialog,wxID_ANY,wxS("ファイルを選択…"));row->Add(browse,0,wxALL,gap);root->Add(row,0,wxEXPAND);
-        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("GGUFを選択"),{}, {},wxS("GGUF (*.gguf)|*.gguf|すべてのファイル|*"),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(show_modal(file)==wxID_OK)path_field->ChangeValue(file.GetPath());});
+        browse->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){wxFileDialog file(&dialog,wxS("翻訳モデルを選択"),{}, {},wxString::FromUTF8(bundled_model_filter),wxFD_OPEN|wxFD_FILE_MUST_EXIST);if(show_modal(file)==wxID_OK)path_field->ChangeValue(file.GetPath());});
         auto* terms=new wxButton(&dialog,wxID_HELP,wxS("ライセンス・利用条件"));root->Add(terms,0,wxALL,gap);
         terms->Bind(wxEVT_BUTTON,[&](wxCommandEvent&){text_dialog(wxS("ライセンス・利用条件"),resources::licenses());});
         root->Add(dialog.CreateButtonSizer(wxOK|wxCANCEL),0,wxALL|wxALIGN_RIGHT,gap);dialog.SetSizer(root);dialog.CentreOnParent();
@@ -1029,7 +1044,7 @@ struct ApplicationController::Impl {
                 if(event.page==page){
                     canvas->set_layout(event.layout);
 #ifdef OPT_PAGE_IMAGE_READING
-                    if(!image_enabled){
+                    if(!reading_image()){
 #endif
                     if(!current_attempt()&&(event.layout->availability==PageLayout::Availability::NoTextLayer||
                        event.layout->availability==PageLayout::Availability::NoTranslatableText||
@@ -1039,8 +1054,8 @@ struct ApplicationController::Impl {
 #ifdef OPT_PAGE_IMAGE_READING
                     }
 #endif
-                    if(pending_source_command&&pending_source_command->first==page){const auto command=pending_source_command->second;pending_source_command.reset();execute(command);}
                     schedule_translation();
+                    if(pending_source_command&&pending_source_command->first==page){const auto command=pending_source_command->second;pending_source_command.reset();execute(command);}
                 }
                 if(scheduled_page&&*scheduled_page==event.page)translate_timer.StartOnce(1);
             }
@@ -1131,6 +1146,7 @@ struct ApplicationController::Impl {
             canvas->rotate(command==Command::Left?-1:1);
 #ifdef OPT_PAGE_IMAGE_READING
             if(image_enabled)change_reading(true,manual_language);
+            else if(recovery_language){clear_page_reading();invalidate_translation();schedule_translation();}
 #endif
             break;
         case Command::Equal:split->SetSashPosition(split->GetClientSize().x/2);break;
@@ -1144,6 +1160,14 @@ struct ApplicationController::Impl {
             else if(wxWindow::FindFocus()==canvas){if(command==Command::Copy)canvas->copy_selection();else canvas->select_all();}
             break;
         case Command::CopySource:
+#ifdef OPT_PAGE_IMAGE_READING
+            if(recovery_language){
+                if(image_layout){
+                    if(!copy_text(image_layout->reading_text_utf8))frame->SetStatusText(wxS("クリップボードを開けません。もう一度お試しください。"),0);
+                }else if(pending_image)pending_source_command=std::pair{page,command};
+                break;
+            }
+#endif
             if(auto layout=current_layout()){
                 if(!copy_text(layout->reading_text_utf8))frame->SetStatusText(wxS("クリップボードを開けません。もう一度お試しください。"),0);
             }else{pending_source_command=std::pair{page,command};request_layout(page);frame->SetStatusText(wxS("原文を抽出しています…"),0);}
@@ -1324,7 +1348,11 @@ struct ApplicationController::Impl {
         auto credit=new wxStaticText(welcome,wxID_ANY,wxS("Built with PLaMo"));
         credit->SetFont(credit->GetFont().Scaled(1.6f).Bold());
         welcome_sizer->Add(credit,0,wxALIGN_CENTER_HORIZONTAL|wxALL,frame->FromDIP(16));
+        #ifdef _WIN32
+        const wxString notice_text=wxS("このアプリは株式会社Preferred Networksが提供するPLaMo 3 Translate 0.8Bの派生量子化モデル PLaMo x86 S4 v7 を利用しています");
+#else
         const wxString notice_text=wxS("このアプリは株式会社Preferred Networksが提供するPLaMo-3-translate-0.8b-GGUFを利用しています");
+#endif
         auto notice=new wxStaticText(welcome,wxID_ANY,notice_text,
             wxDefaultPosition,wxDefaultSize,wxALIGN_CENTRE|wxST_NO_AUTORESIZE);
         notice->SetMinSize(wxSize(1,-1));

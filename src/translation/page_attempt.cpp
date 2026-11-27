@@ -11,7 +11,8 @@ bool matches_page(const AttemptSnapshot& saved,const AttemptSnapshot& fresh,std:
     if(saved.chunks.empty())return true;
     const auto& c=saved.chunks.front();
     if(c.id.empty()||c.block_id!=fresh.chunks.front().block_id||c.begin!=0||c.end!=source.size()||
-       c.state==LeafState::Replaced||c.state==LeafState::SourceOnly)return false;
+       c.state==LeafState::Replaced)return false;
+    if(c.state==LeafState::SourceOnly)return saved.state==PageState::NoText&&c.text.empty()&&c.source_digest==sha256(source);
     if(c.state!=LeafState::Complete)return true;
     try{
         return c.reason==FinishReason::Completed&&valid_translation(c.text)&&c.source_digest==sha256(source);
@@ -60,8 +61,9 @@ std::optional<ChunkRequest> PageAttempt::next_request(){
 bool PageAttempt::prepared(std::shared_ptr<const PreparedChunk> p){
     if(!p||!accepts(p->stamp))return false;
     auto& c=data_.chunks.front();
-    if(p->block_id!=c.block_id||p->source_begin!=0||p->source_end!=source_->size()||p->source_only)return false;
+    if(p->block_id!=c.block_id||p->source_begin!=0||p->source_end!=source_->size())return false;
     c.id=p->chunk_id;c.source_digest=p->source_digest;
+    if(p->source_only){c.state=LeafState::SourceOnly;active_=false;settle();return true;}
     c.prompt_digest=p->prompt_ids_digest;c.plan_digest=p->plan_digest;c.source_tokens=p->input.source_tokens;
     c.prompt_tokens=static_cast<std::uint32_t>(p->input.tokens.size());c.output_limit=p->input.output_limit;c.state=LeafState::Running;
     prepared_=std::move(p);
@@ -104,7 +106,7 @@ void PageAttempt::resume(){
     active_=false;prepared_.reset();
     if(!data_.chunks.empty()){
         auto& page=data_.chunks.front();
-        if(page.state!=LeafState::Complete){
+        if(page.state!=LeafState::Complete&&page.state!=LeafState::SourceOnly){
             // Restoring an attempt also restarts its job counter. Keep callbacks
             // from the interrupted generation distinct from the next full-page run.
             ++data_.plan;
@@ -120,6 +122,7 @@ void PageAttempt::settle(){
         return;
     }
     switch(data_.chunks.front().state){
+    case LeafState::SourceOnly:data_.state=PageState::NoText;break;
     case LeafState::Complete:data_.state=PageState::Complete;break;
     case LeafState::Failed:data_.state=PageState::Failed;break;
     case LeafState::Partial:data_.state=PageState::Partial;break;

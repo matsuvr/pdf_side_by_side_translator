@@ -113,6 +113,28 @@ class PackageTest(unittest.TestCase):
                 if mac:
                     self.assertTrue(signed)
 
+    def test_platform_specific_model(self):
+        spec=package.lock()
+        self.assertEqual(package.model_for_target('windows-x64-release')['filename'],
+                         'plamo3-translate-0.8b-x86-s4tile-v7.p4x86')
+        self.assertEqual(package.model_for_target('macos-arm64-release'),spec['model_fixture'])
+        with tempfile.TemporaryDirectory() as temp:
+            f=Path(temp)/'fixture'
+            f.write_bytes(b'fixture')
+            patched={**spec,'windows_model_fixture':{**spec['windows_model_fixture'],'sha256':package.sha256(f)}}
+            with patch.object(package,'lock',return_value=patched):
+                win=package.companion_files('windows-x64-release',f)
+                self.assertIn(spec['windows_model_fixture']['filename'],win)
+                self.assertEqual(win['PLaMo-Community-ja.txt'],package.WINDOWS_MODEL_LICENSE)
+                self.assertIn('Rust-1.100.0-COPYRIGHT-library.html',win)
+                with self.assertRaises(RuntimeError):
+                    package.companion_files('macos-arm64-release',f)
+            with self.assertRaises(RuntimeError):
+                package.companion_files('windows-x64-release',f)
+        win_components=package.source_sbom({'target':'windows-x64-release','product':'Reader','version':'1'}, {'resolved_dependencies':''})['components']
+        self.assertIn(spec['windows_model_fixture']['filename'],{c['name'] for c in win_components})
+        self.assertNotIn('llama.cpp',{c['name'] for c in win_components})
+
     def test_windows_release(self):
         self.package_fixture('windows-x64-release')
 

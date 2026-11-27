@@ -7,7 +7,7 @@
 
 void check(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
 opt::PreparedInput fake_prompt(std::string_view source,opt::Form form){
-    if(source.find("<|plamo:tag|>")!=std::string_view::npos)throw opt::ModelInputUnsupported("reserved marker");
+    opt::validate_plamo3_source(source,[]{});
     opt::PreparedInput out;out.tokens={1,form==opt::Form::Plain?2:3};out.stop_ids={99};out.output_limit=4;
     const auto scalars=opt::utf8_scalars(source);out.source_tokens=static_cast<std::uint32_t>(scalars.size());
     for(auto scalar:scalars)out.tokens.push_back(static_cast<std::int32_t>(scalar.value));out.tokens.push_back(4);return out;
@@ -37,9 +37,25 @@ int main(){
         check(too_long.input.tokens.empty()&&too_long.input.tokens.capacity()==0,"Rejected token buffer was retained");
         const auto rejected=opt::ChunkPlanner::prepare(request,8192,[](std::string_view,opt::Form)->opt::PreparedInput{throw opt::InputContextLimit();});
         check(rejected.failure==opt::FinishReason::ContextLimit&&rejected.source_end==source->size(),"Bounded tokenizer overflow was not reported");
-        request.source=std::make_shared<const std::string>("A literal <|plamo:tag|> marker.");
-        const auto reserved=opt::ChunkPlanner::prepare(request,8192,fake_prompt);
-        check(reserved.failure==opt::FinishReason::ModelInputUnsupported,"Reserved input was accepted");
+        const auto check_recovery=[&](const std::string& original,const std::string& expected){
+            request.source=std::make_shared<const std::string>(original);
+            const auto page=opt::ChunkPlanner::prepare(request,8192,fake_prompt);
+            check(!page.failure&&!page.source_only&&page.input.tokens==fake_prompt(expected,request.form).tokens,
+                  "Reserved marker recovery changed surrounding text");
+            check(page.source_digest==opt::sha256(original)&&page.source_end==original.size(),"Original page identity changed");
+        };
+        check_recovery("<|plamo:bos|>पहले<|plamo:tag|><|plamo:未知|>बाद\n次。<|plamo:","पहलेबाद\n次。");
+        check_recovery("a:plamo|>b <|plamo:unfinished\nNext |>", "a:plamo|>b unfinished\nNext |>");
+        check_recovery("a<|plamo:x　y|>b<|plamo:|>c","ax　y|>bc");
+        check_recovery("a<|plamo:broken<|plamo:msg|>tail", "abrokentail");
+        check_recovery("<|pla<|plamo:msg|>mo:tag|> end","<|pla mo:tag|> end");
+        std::string name64;for(unsigned i=0;i<64;++i)name64+="語";
+        check_recovery("a<|plamo:"+name64+"|>b","ab");
+        check_recovery("a<|plamo:"+name64+"語|>b","a"+name64+"語|>b");
+        const auto other_error=opt::ChunkPlanner::prepare(request,8192,[](std::string_view,opt::Form)->opt::PreparedInput{
+            throw opt::ModelInputUnsupported("unrelated rejection");
+        });
+        check(other_error.failure==opt::FinishReason::ModelInputUnsupported,"Unrelated model rejection was suppressed");
         request.source=std::make_shared<const std::string>(" \t　� ");
         const auto no_text=opt::ChunkPlanner::prepare(request,3,prompt);
         check(no_text.source_only&&!no_text.failure&&no_text.input.tokens.empty(),"Whitespace/replacement-only input was sent to the model");

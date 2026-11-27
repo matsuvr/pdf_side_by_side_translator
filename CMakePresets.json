@@ -27,6 +27,7 @@
       "binaryDir": "${sourceDir}/build/windows-x64-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "OPT_PAGE_IMAGE_READING": true,
         "OPT_TARGET": "windows-x64-release"
       },
       "toolchainFile": "${sourceDir}/cmake/toolchains/windows.cmake",

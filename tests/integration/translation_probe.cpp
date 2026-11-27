@@ -1,6 +1,9 @@
 #include "translation/page_attempt.hpp"
 #include "inference/inference_service.hpp"
 #include "pdf/pdf_service.hpp"
+#ifdef OPT_PAGE_IMAGE_READING
+#include "ocr/image_reading.hpp"
+#endif
 #include <chrono>
 #include <charconv>
 #include <condition_variable>
@@ -34,6 +37,10 @@ public:
     std::shared_ptr<const FileSnapshot> file_snapshot()const override{return engine_.file_snapshot();}
 };
 int main(int argc,char** argv){
+#ifdef OPT_PAGE_IMAGE_READING
+    if(argc==3&&std::string_view(argv[1])==image_worker_switch)
+        return run_image_worker(argv[2],read_bundled_image_model);
+#endif
     if(argc<4||argc>6){std::cerr<<"usage: translation_probe model.gguf cpu|auto fixture.pdf [fail-after-metal] [--page=N]\n";return 2;}
     try{
         PageIndex page=0;bool fail_metal=false;
@@ -60,6 +67,7 @@ int main(int argc,char** argv){
             auto e=pdf_events.take();
             if(e->kind==PdfEvent::Kind::Opened){
                 if(page>=e->page_count)throw std::runtime_error("Page number exceeds document length");
+                pdf.page_info(1,page);
                 pdf.extract(1,page);
             }
             if(e->kind==PdfEvent::Kind::Extracted)layout=e->layout;
@@ -68,6 +76,25 @@ int main(int argc,char** argv){
         for(;;){auto e=inference_events.take();if(e->kind==InferenceEvent::Kind::ModelReady){std::cout<<"backend="<<e->backend<<" context="<<e->context_capacity<<" load_seconds="<<e->seconds<<'\n';
                 if(fail_metal){if(!injected->load()||e->backend!="CPU")throw std::runtime_error("Real Metal failure / CPU rebuild was not exercised");std::cout<<"real_metal_context_then_cpu_fallback=passed\n";}break;}
             if(e->kind==InferenceEvent::Kind::ModelFailed)throw std::runtime_error(e->detail);}
+#ifdef OPT_PAGE_IMAGE_READING
+        if(const auto tag=replacement_ocr_language(layout->reading_text_utf8)){
+            if(!pdf.render_page_image(1,page,0,1))throw std::runtime_error("Page image request failed");
+            for(;;){
+                const auto e=pdf_events.take();
+                if(e->kind==PdfEvent::Kind::Failed)throw std::runtime_error(e->message);
+                if(e->kind!=PdfEvent::Kind::PageImage)continue;
+                if(!e->pixels)throw std::runtime_error("Missing page image: "+e->message);
+                const auto& p=*e->pixels;
+                auto result=read_page_image({p.bgra,p.width,p.height,p.stride,e->image_dpi},*tag,{});
+                const auto error=image_source_error(result);
+                if(!error.empty())throw std::runtime_error(std::string(error));
+                auto recovered=std::make_shared<PageLayout>();
+                recovered->page=page;recovered->availability=PageLayout::Availability::TextAvailable;
+                recovered->layout_version=0x80000001U;recovered->reading_text_utf8=std::move(result.text);layout=std::move(recovered);
+                std::cout<<"source_recovered_from_image=1\n";break;
+            }
+        }
+#endif
         std::cout<<"source:\n"<<layout->reading_text_utf8<<"\ntranslation:\n";
         PageAttempt attempt({1,page,1,1,1},"probe-condition",PageAttempt::source(*layout),Form::Plain);
         auto pump=[&]{if(auto request=attempt.next_request())if(!inference.plan(*request))throw std::runtime_error("Plan rejected");};
@@ -82,6 +109,7 @@ int main(int argc,char** argv){
                 attempt.finished(e->stamp,e->result);
                 std::cout<<"\nchunk reason="<<static_cast<int>(e->result.reason)<<" seconds="<<e->seconds
                          <<" input_tokens="<<e->chunk->input.tokens.size()<<" output_tokens="<<e->result.output_tokens<<'\n';
+                std::cout<<"prompt_ids_sha256="<<e->chunk->prompt_ids_digest<<'\n';
                 pump();break;
             case InferenceEvent::Kind::PreparationFailed:throw std::runtime_error(e->detail);
             default:break;

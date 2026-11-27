@@ -24,7 +24,7 @@ def forbidden_path(name):
     p=Path(name);parts={x.lower() for x in p.parts};suffix=p.suffix.lower()
     if parts&{'.work','.tools','build','dist','.aws','.ssh','__pycache__'}:return True
     if p.name.lower().startswith('.env') and p.name!='.env.example':return True
-    if suffix in {'.gguf','.sqlite3','.pem','.p12','.pfx','.key','.log','.pyc'} or '.sqlite3-' in p.name.lower():return True
+    if suffix in {'.gguf','.p4x86','.safetensors','.sqlite3','.pem','.p12','.pfx','.key','.log','.pyc'} or '.sqlite3-' in p.name.lower():return True
     return suffix=='.pdf' and not name.startswith('tests/fixtures/')
 def content_findings(data):
     result=[]

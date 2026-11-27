@@ -32,7 +32,14 @@ def main():
     spec = lock()
     deps = spec["dependencies"]
     checkout(deps["wxWidgets"], WORK / "src/wxWidgets")
-    prepare_llama(spec, WORK / "src", args.target)
+    # Keep the official checkout for the common license audit, but the Windows
+    # app no longer builds the patched llama.cpp worktree.
+    if args.target.startswith("windows-"):
+        checkout(deps["llama.cpp"], WORK / "src/llama.cpp")
+        run(["cargo", "+1.100.0", "fetch", "--locked", "--target", "x86_64-pc-windows-msvc"],
+            cwd=ROOT / "src/platform/windows/plamo-rs")
+    else:
+        prepare_llama(spec, WORK / "src", args.target)
 
     sqlite = deps["SQLite"]
     archive = WORK / "downloads/sqlite.zip"

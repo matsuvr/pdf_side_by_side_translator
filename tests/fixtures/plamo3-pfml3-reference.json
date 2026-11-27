@@ -8,6 +8,6 @@
     "special_tokens_map.json": "1004b03ad5c184693765d25d8d682e831727b43b84e321fc9dc14d9ef3d1466a",
     "chat_template.jinja": "633ae24b5166d2c958d9b0a39523f2cc5bd6832752ec2ab0285793cab6415323"
   },
-  "generated_cases": 14,
-  "fixture_sha256": "f39e07c752eed112a5a0bddd2fbbc0224955c2e579fe9c84562bb5c1496f0f80"
+  "generated_cases": 28,
+  "fixture_sha256": "0873224afb6a422f0f79924ced66464daff60abb4b3a71ec05f79badfa0cbf6e"
 }

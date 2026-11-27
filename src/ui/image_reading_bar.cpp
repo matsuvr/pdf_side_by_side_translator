@@ -68,8 +68,8 @@ ImageReadingBar::ImageReadingBar(wxWindow* parent,std::function<void(bool)> togg
 void ImageReadingBar::update(bool enabled,const ImageLanguage* manual,const ImageReadingResult& result,bool failed){
     ++revision_;
     manual_=manual;current_=result.language;alternatives_=result.alternatives;
-    const bool read=enabled&&!failed&&current_;
-    const bool select=enabled&&failed&&(result.script_reader||current_||manual_);
+    const bool read=!failed&&current_;
+    const bool select=failed;
     if(read){
         const auto label=display(current_->label);
         word_->SetLabel(label);word_->SetName(label+wxS("、別の言語で読み直す"));
@@ -111,7 +111,7 @@ void ImageReadingBar::arrange(){
 }
 
 void ImageReadingBar::choose_language(){
-    if(!word_->IsShown()||!toggle_->GetValue())return;
+    if(!word_->IsShown())return;
     const auto revision=revision_;
     wxMenu menu;
     menu.Append(wxID_ANY,wxS("別の言語で読み直す"))->Enable(false);

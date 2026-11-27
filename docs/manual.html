@@ -27,13 +27,14 @@
 <pre class="file-tree" aria-label="展開したフォルダーの構成">展開したフォルダー/
 ├─ offline-pdf-translator.exe（Windows）
 │  または Offline PDF Translator.app（Mac）
-├─ plamo-3-translate-0.8b-Q4_K_M.gguf
+├─ plamo3-translate-0.8b-x86-s4tile-v7.p4x86（Windows版）
+│  または plamo-3-translate-0.8b-Q4_K_M.gguf（Mac）
 ├─ PLaMo-Community-ja.txt
 ├─ LICENSE
 ├─ THIRD_PARTY_NOTICES.txt
 └─ README.md</pre>
 <h3>基本の立ち上げ手順</h3>
-<p>プログラムを実行すると、同じフォルダーにあるGGUFファイルを自動で読み込みます。続けて画面上の「PDFを開く」ボタン、あるいはメニューバーの「ファイル」から「PDFを開く…」へ進んだうえで、一覧から対象の文書を指定して「開く」を押してください。</p>
+<p>プログラムを実行すると、同じフォルダーにある対応する翻訳モデルを自動で読み込みます。続けて画面上の「PDFを開く」ボタン、あるいはメニューバーの「ファイル」から「PDFを開く…」へ進んだうえで、一覧から対象の文書を指定して「開く」を押してください。</p>
 <h3>契約条項への同意</h3>
 <p>初めて起動する際は画面に<a href="#licenses">翻訳モデルの利用規約</a>が現れるため、内容をよくお読みください。</p>
 <h3 id="mac-first-launch">macOSにおける実行許可</h3>
@@ -72,7 +73,7 @@
 </section>
 <section class="manual-section" id="model">
 <h2>モデル設定</h2>
-<p>標準構成のままで運用できますが、別のファイルへ差し替える際は「モデル設定」メニューの「モデルを選択…」から「ファイルを選択…」と進み、対象のGGUFを指定して「OK」を押してください。読み込みが終わるまで待つと利用可能になります。なお、本アプリが扱えるのはPLaMo 3 Translate 0.8B系列のファイルです。</p>
+<p>標準構成のままで運用できますが、別のファイルへ差し替える際は「モデル設定」メニューの「モデルを選択…」から「ファイルを選択…」と進み、対象OSの翻訳モデルを指定して「OK」を押してください。読み込みが終わるまで待つと利用可能になります。なお、本アプリが扱えるのはPLaMo 3 Translate 0.8B系列のファイルです。</p>
 </section>
 <section class="manual-section" id="shortcuts">
 <h2>ショートカット</h2>
@@ -93,7 +94,7 @@
 <h3>翻訳結果の調整</h3>
 <p>出力に関する各種の切り替えは「<a href="#translation">翻訳の設定</a>」で確認できます。</p>
 <h3>翻訳が途中で止まる場合</h3>
-<p>「モデル設定」の画面に現れるエラーメッセージを確かめたうえで、規定のPLaMo 3 Translate 0.8B GGUFを指定し直してください。また、分量が多いページでは入出力の許容量や空きメモリが上限へ届くことがあるため、動作中の他アプリを閉じて余力を確保すると改善する場合があります。</p>
+<p>「モデル設定」の画面に現れるエラーメッセージを確かめたうえで、規定のPLaMo 3 Translate 0.8Bモデルを指定し直してください。また、分量が多いページでは入出力の許容量や空きメモリが上限へ届くことがあるため、動作中の他アプリを閉じて余力を確保すると改善する場合があります。</p>
 <h3>ファイルを開く際に支障が生じた場合</h3>
 <p>保護用の暗号がかけられた文書では入力欄が現れるため、解除用のパスワードを打ち込んでください。一部のページが壊れてエラーが生じた際でも、前後の画面へ移動すると残りの箇所を閲覧できるケースがあります。</p>
 <h3>再起動後の閲覧</h3>
@@ -110,7 +111,7 @@
 <li>アプリ：<a href="https://github.com/matsuvr/pdf_side_by_side_translator/blob/main/LICENSE">MITライセンス</a></li>
 <li>モデル：同梱の「PLaMo-Community-ja.txt」（PLaMoコミュニティライセンス契約）</li>
 <li>依存ライブラリとフォントの権利文書：同梱の「THIRD_PARTY_NOTICES.txt」</li>
-<li>公式配布案内：<a href="https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF">Preferred Networksの公式配布ページ</a></li>
+<li>公式GGUF配布案内：<a href="https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF">Preferred Networksの公式配布ページ</a></li>
 <li>アプリ内での閲覧方法：「ヘルプ」メニューの「ライセンス…」から各文書を呼び出せます。</li>
 </ul>
 </section>

@@ -23,15 +23,22 @@ from bootstrap_image_reading import SOURCES as OCR_SOURCES, REVISION as TESSDATA
 from image_reading_assets import catalog
 
 MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
+WINDOWS_MODEL_LICENSE=ROOT/'licenses/PLaMo-BF16-Community-ja.txt'
+
+def model_for_target(target, spec=None):
+    spec=lock() if spec is None else spec
+    return spec['windows_model_fixture' if target.startswith('windows-') else 'model_fixture']
 
 def companion_files(target,model_file):
-    files={MODEL_LICENSE.name:MODEL_LICENSE,'README.md':ROOT/'README.md',
+    files={MODEL_LICENSE.name:(WINDOWS_MODEL_LICENSE if target.startswith('windows-') else MODEL_LICENSE),'README.md':ROOT/'README.md',
            'LICENSE':ROOT/'LICENSE','THIRD_PARTY_NOTICES.txt':ROOT/'THIRD_PARTY_NOTICES.txt'}
+    if target.startswith('windows-'):
+        files['Rust-1.100.0-COPYRIGHT-library.html']=ROOT/'licenses/Rust-1.100.0-COPYRIGHT-library.html'
     if target.endswith('-release'):
-        model=lock()['model_fixture']
+        model=model_for_target(target)
         path=model_file or ROOT/model['filename']
         if not path.is_file() or sha256(path)!=model['sha256']:
-            raise RuntimeError('Supply the pinned official GGUF with --model-file: '+str(path))
+            raise RuntimeError('Supply the pinned model for the chosen target with --model-file: '+str(path))
         files[model['filename']]=path
     return files
 
@@ -55,7 +62,7 @@ def audit_bundle(bundle,arch):
     for path in sorted(bundle.rglob('*')):
         if path.is_symlink():raise RuntimeError('Unexpected bundle symlink: '+str(path.relative_to(bundle)))
         if not path.is_file():continue
-        if path.suffix.lower() in {'.gguf','.py','.dll','.dylib','.metallib'}:raise RuntimeError('Unexpected runtime sidecar: '+path.name)
+        if path.suffix.lower() in {'.gguf','.p4x86','.safetensors','.py','.dll','.dylib','.metallib'}:raise RuntimeError('Unexpected runtime sidecar: '+path.name)
         magic=path.read_bytes()[:4]
         if magic in (b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca'):
             report=audit_macho(path,arch,'14.0');report['file']=str(path.relative_to(bundle));reports.append(report)
@@ -68,6 +75,8 @@ def source_sbom(info, pdf):
     spec = lock()
     components = []
     for name, entry in spec['dependencies'].items():
+        if info['target'].startswith('windows-') and name == 'llama.cpp':
+            continue
         component = {'type': 'file' if name.startswith('Noto') else 'library', 'name': name,
                      'version': entry.get('version') or entry['revision'],
                      'externalReferences': [{'type': 'distribution', 'url': entry['url']}]}
@@ -79,6 +88,14 @@ def source_sbom(info, pdf):
             if patch['dependency'] == name and info['target'] in patch['targets']:
                 component['properties'].append({'name': 'git:patched-tree', 'value': patch['tree']})
         components.append(component)
+    if info['target'].startswith('windows-'):
+        import tomllib
+        cargo_lock = ROOT / 'src/platform/windows/plamo-rs/Cargo.lock'
+        for crate in tomllib.loads(cargo_lock.read_text(encoding='utf-8'))['package']:
+            component = {'type': 'library', 'name': crate['name'], 'version': crate['version']}
+            if 'checksum' in crate:
+                component['hashes'] = [{'alg': 'SHA-256', 'content': crate['checksum']}]
+            components.append(component)
     if info.get('image_reading'):
         for name,(url,revision) in OCR_SOURCES.items():
             components.append({'type':'library','name':name,'version':revision,
@@ -94,7 +111,7 @@ def source_sbom(info, pdf):
         components.append({'type': 'library', 'name': path, 'version': revision,
                            'externalReferences': [{'type': 'vcs', 'url': url}]})
     if info['target'].endswith('-release'):
-        model = spec['model_fixture']
+        model = model_for_target(info['target'],spec)
         components.append({'type': 'machine-learning-model', 'name': model['filename'],
                            'version': model['revision'], 'hashes': [{'alg': 'SHA-256', 'content': model['sha256']}]})
     return {'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
@@ -110,42 +127,21 @@ def validate_static_windows(build,target):
         if flags!=[expected]:raise RuntimeError('Unexpected CRT flags for '+Path(entry['file']).name+': '+str(flags))
         count+=1
     if not count:raise RuntimeError('No CRT compile evidence')
-    if target.endswith('-release'):
-        validate_kernel_symbols(entries)
+    archive=build/'plamo-rust/x86_64-pc-windows-msvc/release/plamo3_translate_rs.lib'
+    if not archive.is_file():
+        raise RuntimeError('Missing Rust inference archive')
+    with archive.open('rb') as f:
+        if f.read(8)!=b'!<arch>\n':
+            raise RuntimeError('Invalid Rust static archive')
+    table=subprocess.check_output(['dumpbin','/nologo','/linkermember:1',str(archive)],text=True,errors='replace')
+    for name in ('opt_plamo_open','opt_plamo_close','opt_plamo_tokenize','opt_plamo_generate'):
+        if not re.search(r'\b'+name+r'\b',table):
+            raise RuntimeError('Incomplete Rust C ABI archive: '+name)
 
 
-def validate_kernel_symbols(entries):
-    # COFF COMDAT selection may pick either definition of a template. The
-    # portable ggml-cpu objects must not share function names with the AVX2 ones.
-    groups = {'baseline': [], 'AVX2': [], 'AVX-VNNI': []}
-    for entry in entries:
-        output = Path(entry['output'])
-        if 'ggml-cpu.dir' in output.parts:
-            if not output.is_absolute():
-                output = Path(entry['directory']) / output
-            isa = ('AVX-VNNI' if '-mavxvnni' in entry['command'] else
-                   'AVX2' if '-mavx2' in entry['command'] else 'baseline')
-            groups[isa].append(output)
-    if not all(groups.values()):
-        raise RuntimeError('Missing baseline, AVX2 or AVX-VNNI kernel objects')
-    def functions(paths):
-        symbols = set()
-        for path in paths:
-            table = subprocess.check_output(['dumpbin', '/nologo', '/symbols', path],
-                                            text=True, errors='replace', env={**os.environ, 'VSLANG': '1033'})
-            symbols.update(re.findall(r'\bSECT[\dA-F]+\s+notype\s+\(\)\s+External\s+\| (\S+)', table))
-        if not symbols:
-            raise RuntimeError('Cannot identify external COFF functions')
-        return symbols
-    seen = set()
-    for paths in groups.values():
-        symbols = functions(paths)
-        if seen & symbols:
-            raise RuntimeError('ISA variants share external functions: ' + ', '.join(sorted(seen & symbols)))
-        seen.update(symbols)
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True)
-    parser.add_argument('--model-file',type=Path,help='Pinned official GGUF to include in a Release ZIP')
+    parser.add_argument('--model-file',type=Path,help='Pinned model for the chosen OS to include in a Release ZIP')
     parser.add_argument('--windows-cert',help='SHA-1 thumbprint of an Authenticode signing certificate')
     parser.add_argument('--mac-identity',help='Developer ID Application identity in the signing keychain')
     parser.add_argument('--notary-profile',help='Submit the signed Mac app using this notarytool keychain profile')
