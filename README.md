@@ -17,8 +17,8 @@ Built with PLaMo
 | | Windows x64 | macOS 14以降・Apple Silicon |
 | --- | --- | --- |
 | UI | WinUI 3 / C# | SwiftUI / AppKit |
-| 翻訳 | Rust製CPU推論 | Rustからllama.cppのC APIを呼び出すMetal / CPU推論 |
-| 同梱モデル | `plamo3-translate-0.8b-x86-s4tile-v7.p4x86` | `plamo-3-translate-0.8b-Q4_K_M.gguf` |
+| 翻訳 | Rust製CPU推論 | Apple Silicon向けのRust製Metal推論 |
+| 同梱モデル | `plamo3-translate-0.8b-x86-s4tile-v7.p4x86` | `plamo3-translate-0.8b-metal-q4.safetensors` |
 
 モデルはWindowsでは実行ファイル、Macではアプリバンドルの隣に置きます。アプリはモデルを読み取り専用で開きます。PDF・原文・訳文・閲覧位置・キャッシュはセッション中だけ使用します。
 

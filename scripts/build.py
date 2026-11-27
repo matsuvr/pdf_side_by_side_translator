@@ -46,7 +46,7 @@ def stage_reader_files(output):
     for filename in ["README.md", "LICENSE"]:
         shutil.copy2(ROOT / filename, output)
     for language in ["en", "ja"]:
-        prefix = "PLaMo-Community-" if MAC else "PLaMo-BF16-Community-"
+        prefix = "PLaMo-BF16-Community-"
         shutil.copy2(ROOT / "licenses" / (prefix + language + ".txt"), output)
     shutil.copy2(ROOT / "licenses/Rust-1.100.0-COPYRIGHT-library.html", output)
     (output / "THIRD_PARTY_NOTICES.txt").write_text(collect(), encoding="utf-8")
@@ -56,8 +56,6 @@ def build(output=OUTPUT):
     if MAC:
         if platform.machine() != "arm64":
             raise RuntimeError("Build the macOS viewer on Apple Silicon.")
-        from prepare_llama import prepare
-        prepare()
         env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET="14.0")
         run(["cargo", "build", "--release", "--locked", "-p", "pdf-reader"], env=env)
         contents = output / (PRODUCT + ".app") / "Contents"

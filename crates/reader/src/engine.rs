@@ -1,15 +1,13 @@
-use sha2::{Digest, Sha256};
 #[cfg(windows)]
-use std::io::Read;
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::{fs::File, io::Read};
 
 #[cfg(windows)]
 pub const MODEL: &str = "plamo3-translate-0.8b-x86-s4tile-v7.p4x86";
 #[cfg(target_os = "macos")]
-pub const MODEL: &str = "plamo-3-translate-0.8b-Q4_K_M.gguf";
+pub const MODEL: &str = plamo_metal_q4::MODEL_FILENAME;
 
 pub fn bundled_model() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -61,7 +59,25 @@ impl Translator {
 }
 
 #[cfg(target_os = "macos")]
-#[path = "llama.rs"]
-mod llama;
+pub struct Translator(plamo_metal_q4::Engine);
+
 #[cfg(target_os = "macos")]
-pub use llama::Translator;
+impl Translator {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        plamo_metal_q4::Engine::open(path).map(Self).map_err(|e| {
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                format!("アプリと同じフォルダーに {MODEL} を置いてください。")
+            } else {
+                e.to_string()
+            }
+        })
+    }
+    pub fn translate(&self, source: &str, cancelled: impl Fn() -> bool) -> Result<String, String> {
+        self.0
+            .translate(source, cancelled)
+            .map(|r| r.text)
+            .map_err(|e| e.to_string())
+    }
+}

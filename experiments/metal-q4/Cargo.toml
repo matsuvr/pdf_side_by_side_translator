@@ -1,0 +1,45 @@
+[package]
+name = "plamo-metal-q4"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bytemuck = "1"
+half = { version = "2", features = ["bytemuck"] }
+safetensors = "0.7"
+sha2 = "0.10"
+rayon = "1"
+anyhow = "1"
+plamo3-translate-rs = { path = "../../crates/plamo" }
+tempfile = "3"
+
+[features]
+reference = ["dep:bindgen","dep:libc"]
+
+[dependencies.libc]
+version = "0.2"
+optional = true
+
+[build-dependencies.bindgen]
+version = "0.72"
+optional = true
+
+[build-dependencies]
+cubecl = { package = "cubecl-core", version = "=0.11.4", default-features = false, features = ["std"] }
+cubecl-cpp = { version = "=0.11.4", default-features = false, features = ["std","metal"] }
+half = "2"
+
+[dependencies.objc2]
+version = "0.6"
+[dependencies.objc2-metal]
+version = "0.3.2"
+default-features = false
+features = ["std", "MTLAllocation", "MTLBuffer", "MTLResource", "MTLDevice", "MTLLibrary", "MTLCommandQueue", "MTLCommandBuffer", "MTLComputePipeline", "MTLComputeCommandEncoder", "MTLCommandEncoder", "MTLTypes", "MTLGPUAddress", "dispatch2"]
+[dependencies.objc2-foundation]
+version = "0.3"
+features = ["NSString", "NSError"]
+[dependencies.dispatch2]
+version = "0.3"

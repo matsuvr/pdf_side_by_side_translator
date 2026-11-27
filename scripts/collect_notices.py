@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import subprocess
 from build import ROOT, MAC
-from prepare_llama import REV
 
 def license_files(directory):
     names = ("license", "licence", "copying", "notice", "thirdpartynotices", "copyright")
@@ -35,11 +34,7 @@ def collect():
         if label not in selected: continue
         inventory.append(label + "  " + str(p["license"]))
         add(label, license_files(Path(p["manifest_path"]).parent))
-    if MAC:
-        upstream = ROOT / ".work" / ("llama-" + REV)
-        add("llama.cpp / ggml " + REV, [upstream / "LICENSE", *license_files(upstream / "licenses")])
-        add("Apple clang compiler-rt", [ROOT / "licenses/LLVM-compiler-rt.txt"])
-    else:
+    if not MAC:
         assets = json.loads((ROOT / "apps/windows/obj/project.assets.json").read_text(encoding="utf-8-sig"))
         folders = [Path(p) for p in assets["packageFolders"]]
         for label, pkg in sorted(assets["libraries"].items()):
