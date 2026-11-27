@@ -25,3 +25,4 @@ __pycache__/
 /target/
 /apps/windows/bin/
 /apps/windows/obj/
+/formal/node_modules/

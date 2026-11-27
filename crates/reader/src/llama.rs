@@ -174,7 +174,7 @@ impl Translator {
         let n_vocab = unsafe { sys::llama_vocab_n_tokens(vocab) } as usize;
         let mut result = Vec::new();
         let mut valid = 0;
-        for _ in 0..limit {
+        for generated in 0..=limit {
             if cancelled() {
                 return Err("cancelled".into());
             }
@@ -235,6 +235,9 @@ impl Translator {
             let (token, bytes) = winner.ok_or("訳文の文字を復号できません。")?;
             if bytes.is_empty() {
                 return String::from_utf8(result).map_err(|e| e.to_string());
+            }
+            if generated == limit {
+                break;
             }
             result.extend(bytes);
             valid +=

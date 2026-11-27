@@ -34,7 +34,7 @@ impl Engine {
         let mut next = session.readout(true)?;
         let mut text = String::new();
         let mut tail = Vec::new();
-        for _ in 0..limit {
+        for generated in 0..=limit {
             if cancelled() {
                 return Err(err("cancelled"));
             }
@@ -77,6 +77,10 @@ impl Engine {
             };
             if bytes.is_empty() {
                 return Ok(text);
+            }
+            // The logits after the last content token can still select EOS.
+            if generated == limit {
+                break;
             }
             let valid =
                 std::str::from_utf8(&bytes).map_or_else(|e| e.valid_up_to(), |_| bytes.len());

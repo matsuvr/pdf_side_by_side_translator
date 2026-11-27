@@ -42,33 +42,98 @@ pub struct View {
     pub message: Arc<str>,
 }
 
+#[derive(Default)]
+enum Search {
+    #[default]
+    Idle,
+    Pending(u64),
+    Notice(Arc<str>),
+}
+
+#[derive(Default)]
+struct State {
+    view: View,
+    search: Search,
+}
+
+fn with_notice(notice: &str, message: &str) -> Arc<str> {
+    if message.is_empty() {
+        notice.into()
+    } else {
+        format!("{notice} {message}").into()
+    }
+}
+
+#[derive(Default)]
 struct Shared {
     generation: AtomicU64,
-    view: Mutex<View>,
+    state: Mutex<State>,
 }
 impl Shared {
     fn active(&self, id: u64) -> bool {
         self.generation.load(Ordering::Acquire) == id
     }
     fn update(&self, id: u64, change: impl FnOnce(&mut View)) {
-        let mut v = self.view.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         if self.active(id) {
-            change(&mut v);
-            v.revision += 1;
+            change(&mut state.view);
+            state.view.revision += 1;
         }
     }
+    // Page work stays current during a search until a different page is selected.
+    fn load_page(&self, state: &mut State, id: u64, page: u32, count: u32) {
+        self.generation.store(id, Ordering::Release);
+        state.search = Search::Idle;
+        state.view = View {
+            revision: state.view.revision + 1,
+            page,
+            count,
+            phase: Phase::Loading,
+            ..View::default()
+        };
+    }
+    fn search_page(&self, id: u64) -> Option<u32> {
+        let state = self.state.lock().unwrap();
+        matches!(state.search, Search::Pending(current) if current == id).then_some(state.view.page)
+    }
+    fn finish_search(&self, id: u64, found: Option<u32>) -> Option<u32> {
+        let mut state = self.state.lock().unwrap();
+        if !matches!(state.search, Search::Pending(current) if current == id) {
+            return None;
+        }
+        if let Some(page) = found
+            && page != state.view.page
+        {
+            let count = state.view.count;
+            self.load_page(&mut state, id, page, count);
+            return Some(page);
+        }
+        state.search = if found.is_none() {
+            Search::Notice("一致する本文がありません。".into())
+        } else {
+            Search::Idle
+        };
+        state.view.revision += 1;
+        None
+    }
     fn fail(&self, id: u64, reason: String) {
-        self.update(id, |v| {
-            v.phase = Phase::Error;
-            v.message = reason.into();
-        });
+        let mut state = self.state.lock().unwrap();
+        if self.active(id) {
+            state.view.phase = Phase::Error;
+            state.view.message = with_notice(&reason, &state.view.message);
+        } else if matches!(state.search, Search::Pending(current) if current == id) {
+            state.search = Search::Notice(reason.into());
+        } else {
+            return;
+        }
+        state.view.revision += 1;
     }
 }
 
 enum Action {
     Open(PathBuf, String),
     Page(u32),
-    Find(String, u32),
+    Find(String),
 }
 struct Request {
     id: u64,
@@ -87,10 +152,7 @@ pub struct Reader {
 
 impl Reader {
     pub fn new(model: PathBuf) -> std::io::Result<Self> {
-        let shared = Arc::new(Shared {
-            generation: AtomicU64::new(0),
-            view: Mutex::new(View::default()),
-        });
+        let shared = Arc::new(Shared::default());
         let (tx, rx) = mpsc::channel();
         let (infer, inputs) = mpsc::channel();
         let s = shared.clone();
@@ -108,38 +170,21 @@ impl Reader {
         })
     }
     fn submit(&self, action: Action) {
-        let mut view = self.shared.view.lock().unwrap();
-        if let Action::Page(page) = action
-            && (page == 0 || page > view.count || page == view.page)
-        {
-            return;
-        }
-        let id = self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let revision = view.revision + 1;
+        let mut state = self.shared.state.lock().unwrap();
+        let id = state.view.revision + 1;
+        let count = state.view.count;
         match &action {
-            Action::Open(..) => {
-                *view = View {
-                    revision,
-                    phase: Phase::Loading,
-                    ..View::default()
-                }
+            Action::Open(..) => self.shared.load_page(&mut state, id, 0, 0),
+            Action::Page(page) if *page > 0 && *page <= count && *page != state.view.page => {
+                self.shared.load_page(&mut state, id, *page, count);
             }
-            Action::Page(page) => {
-                *view = View {
-                    revision,
-                    phase: Phase::Loading,
-                    page: *page,
-                    count: view.count,
-                    ..View::default()
-                }
+            Action::Find(_) if state.view.page > 0 => {
+                state.search = Search::Pending(id);
+                state.view.revision = id;
             }
-            Action::Find(..) => {
-                view.phase = Phase::Loading;
-                view.message = "検索中…".into();
-                view.revision = revision;
-            }
+            _ => return,
         }
-        drop(view);
+        drop(state);
         if self
             .tx
             .as_ref()
@@ -157,19 +202,33 @@ impl Reader {
         self.submit(Action::Page(page));
     }
     pub fn find(&self, query: String) {
-        let page = self.shared.view.lock().unwrap().page;
-        if page > 0 && !query.trim().is_empty() {
-            self.submit(Action::Find(query.to_lowercase(), page));
+        if !query.trim().is_empty() {
+            self.submit(Action::Find(query.to_lowercase()));
         }
     }
     pub fn view(&self, after: u64) -> Option<View> {
-        let v = self.shared.view.lock().unwrap();
-        (v.revision != after).then(|| v.clone())
+        let state = self.shared.state.lock().unwrap();
+        (state.view.revision != after).then(|| {
+            let mut view = state.view.clone();
+            match &state.search {
+                Search::Pending(_) => {
+                    view.phase = Phase::Loading;
+                    view.message = "検索中…".into();
+                }
+                Search::Notice(note) => view.message = with_notice(note, &view.message),
+                Search::Idle => {}
+            }
+            view
+        })
     }
 }
 impl Drop for Reader {
     fn drop(&mut self) {
-        self.shared.generation.fetch_add(1, Ordering::AcqRel);
+        {
+            let mut state = self.shared.state.lock().unwrap();
+            state.search = Search::Idle;
+            self.shared.generation.store(0, Ordering::Release);
+        }
         self.tx.take();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
@@ -177,25 +236,89 @@ impl Drop for Reader {
     }
 }
 
+struct CachedPage {
+    page: u32,
+    png: Arc<[u8]>,
+    source: Arc<str>,
+    warning: Arc<str>,
+}
+impl CachedPage {
+    fn bytes(&self) -> usize {
+        self.png.len() + self.source.len() + self.warning.len()
+    }
+}
+
+fn readable(text: &str) -> bool {
+    text.chars().any(|c| !c.is_whitespace() && c != '�')
+}
+
+fn read_page(shared: &Shared, id: u64, doc: &Document, page: u32) -> Result<CachedPage, String> {
+    let index = (page - 1) as usize;
+    let image = doc.image(index)?;
+    if !shared.active(id) {
+        return Err("cancelled".into());
+    }
+    shared.update(id, |v| {
+        v.png = image.png.clone();
+        v.image_id = id;
+    });
+    let mut source: Arc<str> = doc.text(index)?.into();
+    let mut warning = Arc::default();
+    if source.trim().is_empty() || source.contains('�') {
+        if !shared.active(id) {
+            return Err("cancelled".into());
+        }
+        if !readable(&source) {
+            source = Arc::default();
+        }
+        shared.update(id, |v| {
+            v.phase = Phase::ReadingImage;
+            if source.len() <= SOURCE_LIMIT {
+                v.source = source.clone();
+            }
+        });
+        match ocr::recognize(&image) {
+            Ok(text) if readable(&text) => source = text.into(),
+            Ok(_) => {}
+            Err(e) if source.is_empty() => return Err(e),
+            Err(e) => warning = format!("{e} PDFの埋め込み本文を使用します。").into(),
+        }
+    }
+    if source.len() > SOURCE_LIMIT {
+        return Err("本文が長すぎるため、このページの翻訳を省略しました。".into());
+    }
+    Ok(CachedPage {
+        page,
+        png: image.png,
+        source,
+        warning,
+    })
+}
+
 fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslate>) {
     let mut document = None;
     // Nearby pages keep their raster and effective source, including OCR.
     // Only complete reads enter this document-local cache.
-    let mut recent: VecDeque<(u32, Arc<[u8]>, Arc<str>)> = VecDeque::new();
+    let mut recent: VecDeque<CachedPage> = VecDeque::new();
     for Request { id, action } in rx {
-        if !shared.active(id) {
+        if !matches!(action, Action::Find(_)) && !shared.active(id) {
             continue;
         }
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
-                let mut note = String::new();
                 let page = match action {
                     Action::Open(path, password) => {
                         document = None;
                         recent.clear();
                         match Document::open(&path, &password) {
                             Ok(doc) => {
+                                let count = u32::try_from(doc.count())
+                                    .map_err(|_| "ページ数が上限を超えています。")?;
                                 document = Some(doc);
+                                shared.update(id, |v| {
+                                    v.page = 1;
+                                    v.count = count;
+                                });
                                 1
                             }
                             Err(OpenError::Password) => {
@@ -206,11 +329,14 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
                         }
                     }
                     Action::Page(page) => page,
-                    Action::Find(query, start) => {
+                    Action::Find(query) => {
+                        let Some(start) = shared.search_page(id) else {
+                            return Ok(());
+                        };
                         let doc = document.as_ref().ok_or("PDFが開かれていません。")?;
                         let mut found = None;
                         for offset in 0..doc.count() {
-                            if !shared.active(id) {
+                            if shared.search_page(id).is_none() {
                                 return Ok(());
                             }
                             let index = (start as usize + offset) % doc.count();
@@ -222,83 +348,46 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
                                 break;
                             }
                         }
-                        if found.is_none() {
-                            note = "一致する本文がありません。".into();
-                        }
-                        found.unwrap_or(start)
+                        let Some(page) = shared.finish_search(id, found) else {
+                            return Ok(());
+                        };
+                        page
                     }
                 };
                 let doc = document.as_ref().ok_or("PDFが開かれていません。")?;
                 if !shared.active(id) {
                     return Ok(());
                 }
-                let count =
-                    u32::try_from(doc.count()).map_err(|_| "ページ数が上限を超えています。")?;
+                let cached = match recent
+                    .iter()
+                    .position(|entry| entry.page == page)
+                    .and_then(|i| recent.remove(i))
+                {
+                    Some(hit) => hit,
+                    None => read_page(&shared, id, doc, page)?,
+                };
+                let source = cached.source.clone();
                 shared.update(id, |v| {
-                    *v = View {
-                        revision: v.revision,
-                        page,
-                        count,
-                        phase: Phase::Loading,
-                        message: note.into(),
-                        ..View::default()
+                    v.png = cached.png.clone();
+                    v.image_id = id;
+                    v.source = source.clone();
+                    v.message = cached.warning.clone();
+                    v.phase = if source.is_empty() {
+                        Phase::Empty
+                    } else {
+                        Phase::Translating
                     };
                 });
-                let cached = recent
-                    .iter()
-                    .position(|(p, _, _)| *p == page)
-                    .and_then(|i| recent.remove(i));
-                let (png, source) = if let Some((_, png, text)) = cached {
-                    shared.update(id, |v| {
-                        v.png = png.clone();
-                        v.image_id = id;
-                    });
-                    (png, text)
-                } else {
-                    let index = (page - 1) as usize;
-                    let image = doc.image(index)?;
-                    if !shared.active(id) {
-                        return Ok(());
+                const PAGE_CACHE_LIMIT: usize = 24 * 1024 * 1024;
+                if cached.bytes() <= PAGE_CACHE_LIMIT {
+                    recent.push_front(cached);
+                    while recent.len() > 8
+                        || recent.iter().map(CachedPage::bytes).sum::<usize>() > PAGE_CACHE_LIMIT
+                    {
+                        recent.pop_back();
                     }
-                    shared.update(id, |v| {
-                        v.png = image.png.clone();
-                        v.image_id = id;
-                    });
-                    let mut text = doc.text(index)?;
-                    if !shared.active(id) {
-                        return Ok(());
-                    }
-                    if text.trim().is_empty() || text.contains('�') {
-                        shared.update(id, |v| v.phase = Phase::ReadingImage);
-                        let recognized = ocr::recognize(&image)?;
-                        if !recognized.trim().is_empty() {
-                            text = recognized;
-                        }
-                    }
-                    if text.len() > SOURCE_LIMIT {
-                        return Err("本文が長すぎるため、このページの翻訳を省略しました。".into());
-                    }
-                    (image.png, Arc::<str>::from(text))
-                };
-                recent.push_front((page, png, source.clone()));
-                while recent.len() > 8
-                    || recent
-                        .iter()
-                        .map(|(_, p, s)| p.len() + s.len())
-                        .sum::<usize>()
-                        > 24 * 1024 * 1024
-                {
-                    recent.pop_back();
                 }
-                if source.trim().is_empty() {
-                    shared.update(id, |v| v.phase = Phase::Empty);
-                    return Ok(());
-                }
-                shared.update(id, |v| {
-                    v.source = source.clone();
-                    v.phase = Phase::Translating;
-                });
-                if shared.active(id) {
+                if !source.is_empty() && shared.active(id) {
                     tasks
                         .send(ToTranslate { id, source })
                         .map_err(|_| "翻訳処理が停止しました。")?;

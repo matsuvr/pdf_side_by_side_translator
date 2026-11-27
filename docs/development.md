@@ -2,6 +2,19 @@
 
 開発時に依存パッケージを取得します。実行時のPDF処理・OCR・推論はオフラインです。ビルドは各OSでリポジトリのルートから行います。Python 3.9以降、Git、rustupが必要です。Rustは `rust-toolchain.toml` に固定しています。
 
+## Quintによる形式検証
+
+Node.js 18以降、npm、JDK 21を用意し、リポジトリのルートで実行します。初回はQuintの開発依存とモデル検査器を取得します。macOSでは下記のllama.cppの準備を先に行い、Pythonのコマンドには `python3` を使います。
+
+```sh
+npm ci --prefix formal
+python scripts/verify_quint.py
+```
+
+このコマンドは仕様の型検査、シナリオテスト、固定シードによるシミュレーション、TLCでの全到達状態の検査を行います。続いて生成した操作列をRustのC ABIに渡し、Cargoのワークスペーステストを実行します。形式モデルだけを調べる場合は `--models-only` を付けます。検証範囲と反例の読み方は[形式仕様](../formal/README.md)を参照してください。
+
+Windowsの実モデルで生成上限も照合する場合は、下記の `OPT_P4X86_TEST_MODEL` を設定してから一括検証を実行します。入力PDF・OCRの応答を制御するセッションテストはモデルなしでも実行できます。
+
 ## Windows x64
 
 Visual StudioのMSVC x64ビルドツール、Windows SDK、.NET 8以降のSDKを使用します。WinUIと.NETランタイムはビルド時に配布フォルダーへ配置します。

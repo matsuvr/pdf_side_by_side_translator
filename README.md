@@ -24,4 +24,4 @@ Built with PLaMo
 
 このREADMEはリポジトリのネイティブUI版を対象としています。公開済みの旧版の操作は、対応するリリースとマニュアルに記載しています。[リリース](https://github.com/matsuvr/pdf_side_by_side_translator/releases) · [公開版のマニュアル](https://matsuvr.github.io/pdf_side_by_side_translator/manual.html)
 
-[ビルドとテスト](docs/development.md) · [設計](DESIGN.md) · [ライセンス](LICENSE) · [第三者通知](THIRD_PARTY_NOTICES.txt)
+[ビルドとテスト](docs/development.md) · [Quintによる形式検証](formal/README.md) · [設計](DESIGN.md) · [ライセンス](LICENSE) · [第三者通知](THIRD_PARTY_NOTICES.txt)

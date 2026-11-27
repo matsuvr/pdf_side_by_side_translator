@@ -1,0 +1,7 @@
+{
+  "name": "pdf-reader-formal-verification",
+  "private": true,
+  "devDependencies": {
+    "@informalsystems/quint": "0.34.0"
+  }
+}
