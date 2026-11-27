@@ -1,5 +1,6 @@
 #include "ocr/image_reading.hpp"
 #include "image_reading_assets.hpp"
+#include "core/utf8.hpp"
 #include <public/compact_lang_det.h>
 #include <tesseract/baseapi.h>
 #include <tesseract/ocrclass.h>
@@ -77,7 +78,7 @@ const ImageLanguage* detector_language(CLD2::Language language,std::string_view 
     if(tag=="iw")tag="he";
     if(tag=="in")tag="id";
     const auto* lang=by_tag(tag);
-    return lang&&matches_script(lang->scripts,script)?lang:nullptr;
+    return lang&&(script.empty()||matches_script(lang->scripts,script))?lang:nullptr;
 }
 struct Detection {
     const ImageLanguage* language=nullptr;
@@ -125,6 +126,26 @@ ImageReadingResult reading_result(std::string text,const ImageLanguage* language
     for(const auto& candidate:image_languages)if(same_script(candidate))add(&candidate);
     return result;
 }
+}
+
+static bool contains_replacement(std::string_view text){
+    return text.find("\xef\xbf\xbd")!=text.npos;
+}
+std::optional<std::string_view> replacement_ocr_language(std::string_view native_text){
+    if(!contains_replacement(native_text))return std::nullopt;
+    // A PDF may encode U+FFFD even in /ActualText. Use the surviving text as
+    // a language hint; the missing characters must come from the page image.
+    const auto sample=native_text.substr(0,64*1024);
+    const auto detected=detect_languages(sample.substr(0,complete_utf8_prefix(sample)),{});
+    return detected.language?detected.language->tag:std::string_view{};
+}
+
+std::string_view image_source_error(const ImageReadingResult& result){
+    if(!result.language)return "言語の自動判定に失敗。言語を選択すれば翻訳できる可能性があります。";
+    if(contains_replacement(result.text))
+        return "ページ画像から欠落した文字を読み取れませんでした。";
+    if(!has_usable_text(result.text))return "ページ画像から文字を見つけられませんでした。";
+    return {};
 }
 
 void GrayPage::validate() const {

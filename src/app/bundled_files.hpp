@@ -4,7 +4,13 @@
 
 namespace opt {
 enum class ExecutableLayout { Standalone, MacAppBundle };
+#ifdef _WIN32
+inline constexpr auto bundled_model_filename="plamo3-translate-0.8b-x86-s4tile-v7.p4x86";
+inline constexpr auto bundled_model_filter="PLaMo S4 (*.p4x86)|*.p4x86|すべてのファイル|*";
+#else
 inline constexpr auto bundled_model_filename="plamo-3-translate-0.8b-Q4_K_M.gguf";
+inline constexpr auto bundled_model_filter="GGUF (*.gguf)|*.gguf|すべてのファイル|*";
+#endif
 
 inline std::filesystem::path distribution_directory(const std::filesystem::path& executable,ExecutableLayout layout){
     auto directory=executable.parent_path();

@@ -220,32 +220,18 @@ PreparedInput Engine::prepare(std::string_view source, Form form) const {
     const auto checkpoint=[&]{if(p.cancelled.load())throw PreparationCancelled();};
     checkpoint();
     if(!p.context||!p.vocab)throw std::runtime_error("Model unavailable");
+    validate_plamo3_source(source,checkpoint);
     PreparedInput prepared;
     prepared.stop_ids=p.stops;
     const auto& tail = form == Form::Easy ? p.easy_suffix : p.plain_suffix;
     const auto overhead=p.prompt_prefix.size()+tail.size();
     if(overhead>=capacity())throw InputContextLimit();
     const auto body_limit=capacity()-overhead-1; // Keep at least one output token.
-    auto raw_body=tokenize_plamo3_bounded(source,body_limit,p.max_token_bytes,
+    const auto body=tokenize_plamo3_bounded(source,body_limit,p.max_token_bytes,
         [&](std::string_view part,std::span<std::int32_t> output){
             return llama_tokenize(p.vocab,part.data(),static_cast<int>(part.size()),output.data(),
                                   static_cast<int>(output.size()),false,false);
         },checkpoint);
-    // A PDF can contain literal PFML3 markers or binary control characters.
-    // They cannot be represented as ordinary text in this profile; omit only
-    // those tokens and translate the rest of the page instead of rejecting it.
-    std::vector<std::int32_t> body;
-    body.reserve(raw_body.size());
-    for (auto token : raw_body) {
-        checkpoint();
-        if ((llama_vocab_get_attr(p.vocab, token) & LLAMA_TOKEN_ATTR_CONTROL) ||
-            llama_vocab_is_eog(p.vocab, token) ||
-            std::find(p.protocol.begin(), p.protocol.end(), token) != p.protocol.end())
-            continue;
-        body.push_back(token);
-    }
-    if (body.empty() && !raw_body.empty())
-        throw ModelInputUnsupported("ModelInputUnsupported: 本文をモデル入力として表現できません。");
     prepared.tokens.reserve(p.prompt_prefix.size() + body.size() + tail.size());
     prepared.tokens.insert(prepared.tokens.end(), p.prompt_prefix.begin(), p.prompt_prefix.end());
     prepared.tokens.insert(prepared.tokens.end(), body.begin(), body.end());

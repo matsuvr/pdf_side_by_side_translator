@@ -132,6 +132,15 @@ int main(int argc,char** argv){
     using namespace opt;
     using namespace std::chrono_literals;
     try{
+        if(replacement_ocr_language("स्टेशन का कार्यालय सुबह नौ बजे खुलता है।"))
+            throw std::runtime_error("Healthy native text requested OCR");
+        const auto unknown=replacement_ocr_language("\xef\xbf\xbd");
+        if(!unknown||!unknown->empty())throw std::runtime_error("Missing glyph guessed a language");
+        const auto hindi=replacement_ocr_language("निवास कार्ड मुख्य रूप से निम्नलिखित समय पर जारी किया जाता है। "
+            "निवास कार्ड के लिए आवेदन करते समय कृपया अपना पहचान पत्र अपने साथ लाएँ। \xef\xbf\xbd");
+        if(!hindi||*hindi!="hi")throw std::runtime_error("Usable Hindi text did not guide OCR");
+        ImageReadingResult damaged{"a\xef\xbf\xbd",&image_languages[0]};
+        if(image_source_error(damaged).empty())throw std::runtime_error("Damaged recovery accepted");
         auto zone=std::filesystem::u8path(argv[1]).parent_path()/"ocr-zone";
         if(!std::filesystem::is_regular_file(zone.string()+".uzn"))throw std::runtime_error("Missing zone fixture");
         auto zone_name=zone.string();

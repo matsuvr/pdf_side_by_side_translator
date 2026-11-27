@@ -20,25 +20,45 @@ ctest --preset macos-arm64-release
 python scripts/package.py --target macos-arm64-release --model-file /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
 ```
 
-Windowsではtargetを `windows-x64-release` に変更します。
+Windowsではtargetを `windows-x64-release` に変更し、下記の専用モデルを用意します。
 WindowsとMacの通常ビルドではOCRを有効にします。既存の依存にOCR用のソースとモデルを追加するには `python scripts/bootstrap_image_reading.py` を実行します。
 他に `windows-x64-debug`、`macos-arm64-debug` があります。
 Debugには対応するDebug依存を別に構築します。
 
 bootstrapは公式の固定ソースとOCRモデルを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
-wxWidgets・llama.cpp・SQLiteとアプリはCMakeで静的に構築します。
+wxWidgets・SQLiteとアプリを静的に構築します。Macのllama.cpp/MetalもCMakeで構築します。Windowsの推論はRust staticlibです。
 通常のCMake configure/buildはネットへ依存を取りに行きません。PDFiumと同じ固定LLVM compiler/linkerを使います。
 presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除外します。
 依存revision、モデルfixture、フォントhashは[dependency lock](deps/third_party.lock.json)にあります。
 macOS は `.work/src/llama.cpp` の公式コミットをそのまま使い、llama.cpp 標準の Metal バックエンドとシェーダーを実行ファイルに組み込みます。Apple Silicon では Metal を優先し、利用できない場合は上流の CPU バックエンドを使います。
 
-Windows x64 の bootstrap は、同じ公式コミットから専用の Git 作業ツリー `.work/src/windows-x64/llama.cpp` を作り、そこに PLaMo 向け CPU パッチを適用します。どちらのターゲットを先に準備しても両方のソースを保持できます。CMake はビルド前に、macOS では公式コミット、Windows ではパッチの適用元と適用後の Git ツリーを lock と照合します。PDFium を構築済みなら `python scripts/bootstrap.py --target windows-x64-release --skip-pdfium` で Windows 用ソースを更新できます。[Windows CPU 翻訳の検証記録](plamo-cpu.md)
+Windows x64 では PLaMo x86 S4 v7 専用 Rust 0.4.0 を静的リンクします。Rust 1.100.0（MSVC x64）をインストールし、従来どおり bootstrap を実行してください。bootstrap は Cargo.lock に固定された依存を開発時に取得します。CMake は `cargo build --locked --offline --lib` を実行し、モデル推論のための別プロセスやDLLを追加しません。macOS の CMake は従来の llama.cpp のみを使います。[Windows版の推論エンジン](windows-rust-engine.md)
 
 packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
-Releaseのpackageは、指定したGGUFを固定した公式SHA-256と照合し、アプリ・GGUF・README・PLaMoライセンスを含むZIPを作ります。
+Releaseのpackageは、選択したOS用のモデルを固定SHA-256と照合し、アプリ・モデル・README・PLaMoライセンスを含むZIPを作ります。
 最終Mach-O / PEの通常・delay importを検査し、Macは署名後のZIPを再展開して再検査します。
 生成物とhash・依存検査・ソース識別情報は `dist/<target>/` 以下へ保存します。
 製品の起動にREADME、Python、ビルド用manifestや個別ライブラリの配布は不要です。
+
+## Windows S4 v7 のモデル準備
+
+配布された v7 ファイルを利用するか、[固定の元モデル](https://huggingface.co/pfnet/plamo-3-translate-0.8b/tree/c5a33c561bc6a4fbac38c3460bbb384e15c0b231)の
+`model.safetensors`、`config.json`、`tokenizer.jsonl`を開発用フォルダーに置き、bootstrap後に変換します。
+入力3ファイルと変換結果をそれぞれ固定SHA-256で検証します。変換は開発時だけ実行し、モデルファイルをGitへコミットしません。
+
+```powershell
+rustup toolchain install 1.100.0 --profile minimal
+rustup target add --toolchain 1.100.0 x86_64-pc-windows-msvc
+python scripts/bootstrap.py --target windows-x64-release
+python scripts/convert_windows_model.py --source-dir C:/models/pfnet-bf16 --output C:/models/plamo3-translate-0.8b-x86-s4tile-v7.p4x86
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release
+ctest --preset windows-x64-release
+python scripts/package.py --target windows-x64-release --model-file C:/models/plamo3-translate-0.8b-x86-s4tile-v7.p4x86
+```
+
+モデルのファイル名・SHA-256・ライセンスは `deps/third_party.lock.json` の `windows_model_fixture` で管理します。
+macOS向けには従来どおり `model_fixture` の公式GGUFを使用します。配布は元モデルの利用条件に従います。
 
 ## 試験と構造
 
@@ -50,13 +70,13 @@ build/macos-arm64-release/native_text_test.app/Contents/MacOS/native_text_test
 ```
 
 このネイティブ試験は、フォーカスを持てるデスクトップsessionで実行します。
-`OPT_BUILD_GUI_PROBE=ON` のときはネイティブ試験をCTestにも登録します。実モデル試験には別途ローカルGGUFを指定します。
+`OPT_BUILD_GUI_PROBE=ON` のときはネイティブ試験をCTestにも登録します。実モデル試験には別途OS用のローカルモデルを指定します。
 fixtureはこのプロジェクトのために新規作成したPDFです。フォント内蔵のUnicode fixtureの再生成だけは
 `deps/fixture-test-tools.txt` の開発用依存を使います。
 公式tokenizer比較fixtureの生成手順と固定版は[翻訳の記録](docs/translation.md)を参照してください。
 
 - `src/pdf/`: PDFium専用worker、段階的tile描画、layoutと原文mapping
-- `src/inference/`: llama専用worker、PFML3、実token長に基づく分割
+- `src/inference/`: 推論専用worker、PFML3、実token長に基づく分割
 - `src/translation/`: page attempt、再開・ページ単位の翻訳
 - `src/storage/`: I/O専用worker、メモリ内state/cache、同一open objectのhash。ディスクへの書込は行わない
 - `src/platform/`: native path・font・IME・text viewportの小さなOS差分
@@ -76,17 +96,17 @@ fixtureはこのプロジェクトのために新規作成したPDFです。フ�
 
 layoutと安全なファイルreadの単体試験はPDFiumなしでも構築できます。
 PDFiumを使う統合試験は、固定版の依存を用意した通常のpresetで実行してください。
-実モデル試験は `inference_probe` にlockと一致するGGUFを渡して行い（準備処理のみは末尾に `--prepare-only` を追加）、長大入力の容量判定・キャンセルとPFML3の参照token列も確認します。
+実モデル試験は `inference_probe` にlockと一致するOS用モデルを渡して行い（準備処理のみは末尾に `--prepare-only` を追加）、長大入力の容量判定・キャンセルとPFML3の参照token列も確認します。
 推論スレッド数は既定で `min(8, hw - 1)` です。検証目的で `OPT_INFERENCE_THREADS` を1以上の値に設定すると、利用可能な論理CPU数の範囲で上書きできます。設定ファイルや保存データは作りません。
 
-生成中のGGUF変更は、次の専用試験で確認します。
+生成中のモデル変更は、次の専用試験で確認します。
 
 ```sh
 build/macos-arm64-release/model_input_change_test /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
-# Windows: build/windows-x64-release/model_input_change_test.exe <GGUFの絶対パス>
+# Windows: build/windows-x64-release/model_input_change_test.exe <P4X86の絶対パス>
 ```
 
-この試験は専用の一時ディレクトリへGGUFをコピーし、最初の差分配信時にそのコピーだけを切り詰めようとします。
+この試験は専用の一時ディレクトリへモデルをコピーし、最初の差分配信時にそのコピーだけを切り詰めようとします。
 Windowsでは書き込みが拒否されて翻訳が続き、モデルを閉じた後に書き込めることを確認します。macOSでは変更を検出して部分訳を保持し、変更済みモデルの再利用を拒否することを検査します。
 製品アプリにモデルのコピー処理を追加するものではありません。
 

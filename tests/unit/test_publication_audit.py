@@ -21,6 +21,8 @@ class PublicationAuditTest(unittest.TestCase):
             self.assertNotIn(token,str(report))
     def test_runtime_artifacts_and_original_fixtures_are_distinct(self):
         self.assertTrue(audit.forbidden_path('private.GGUF'))
+        self.assertTrue(audit.forbidden_path('private.P4X86'))
+        self.assertTrue(audit.forbidden_path('model.safetensors'))
         self.assertTrue(audit.forbidden_path('backup/state.sqlite3-wal'))
         self.assertTrue(audit.forbidden_path('personal.pdf'))
         self.assertFalse(audit.forbidden_path('tests/fixtures/P01-simple.pdf'))

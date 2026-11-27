@@ -2,6 +2,7 @@
 #include <array>
 #include <chrono>
 #include <span>
+#include <optional>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -18,6 +19,9 @@ inline constexpr auto image_reading_timeout = std::chrono::seconds(20);
 struct ImageReadingTimeout : std::runtime_error {
     ImageReadingTimeout():std::runtime_error("画像の読み取りが時間上限に達しました。"){}
 };
+// No value keeps the native text. An empty tag asks the image worker to detect
+// the script; a reliable native-language hint selects its exact OCR model.
+std::optional<std::string_view> replacement_ocr_language(std::string_view native_text);
 struct GrayPage {
     std::span<const unsigned char> pixels;
     int width,height,stride,dpi;
@@ -39,6 +43,7 @@ struct ImageReadingResult {
     const ImageScriptReader* script_reader=nullptr;
     ImageAlternatives alternatives{};
 };
+std::string_view image_source_error(const ImageReadingResult& result);
 ImageReadingResult read_page_image(GrayPage page,std::string_view language_tag,std::stop_token stop,
     std::chrono::steady_clock::time_point deadline=std::chrono::steady_clock::now()+image_reading_timeout);
 

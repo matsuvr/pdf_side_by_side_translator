@@ -43,6 +43,14 @@ int main(){try{
     PageLayout blank;blank.reading_text_utf8=" \n";
     PageAttempt empty(stamp,"none",PageAttempt::source(blank),Form::Plain);
     require(empty.state()==PageState::NoText&&!empty.next_request(),"blank PDF text is not sent to inference");
+    auto markers=std::make_shared<const std::string>("<|plamo:tag|> \n<|plamo:msg|>");
+    PageAttempt only_markers(stamp,"markers",markers,Form::Plain);
+    r=only_markers.next_request();require(r.has_value(),"marker-only page never planned");
+    p=prepare(*r);require(p->source_only&&only_markers.prepared(p),"marker-only page failed to settle");
+    require(only_markers.state()==PageState::NoText&&!only_markers.active_prepared()&&!only_markers.next_request()
+            &&only_markers.source_text()==*markers,"marker-only page lost its original text or queued inference");
+    PageAttempt revisit(stamp,"markers",markers,Form::Plain,only_markers.snapshot());
+    require(revisit.state()==PageState::NoText&&!revisit.next_request(),"marker-only page was requeued on revisit");
     PageAttempt completed(stamp,"conditions",source,Form::Plain,resumed.snapshot());
     require(completed.state()==PageState::Complete&&!completed.next_request()&&completed.display_text()=="完訳","revisiting a completed page reuses its translation");
     PageAttempt control(stamp,"control",source,Form::Plain);

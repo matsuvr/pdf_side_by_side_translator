@@ -1,11 +1,26 @@
 #pragma once
 #include "inference/engine.hpp"
+#include "core/utf8.hpp"
 #include <algorithm>
 #include <climits>
 #include <limits>
 #include <span>
 
 namespace opt {
+// PFN's chat template rejects this prefix even without a closing delimiter.
+// Its trim check uses Python whitespace, which includes U+001C..1F but not BOM.
+template<class Checkpoint>
+void validate_plamo3_source(std::string_view source,Checkpoint&& checkpoint){
+    if(source.find("<|plamo:")!=source.npos)
+        throw ModelInputUnsupported("原文にPLaMoの予約表記 <|plamo: が含まれています。");
+    bool has_content=false;
+    visit_utf8(source,[&](const Utf8Scalar& scalar){
+        const auto c=scalar.value;
+        if(c==0xfeff||(!unicode_space(c)&&!(c>=0x1c&&c<=0x1f)))has_content=true;
+    },checkpoint);
+    if(!has_content)throw ModelInputUnsupported("PLaMoの翻訳原文が空か空白のみです。");
+}
+
 // PLaMo 3 preserves input bytes except U+EE00, which separates segments and
 // emits no token. Each nonempty segment needs at least one token, and N tokens
 // cover at most N * max_token_bytes other bytes. The loaded vocabulary is
