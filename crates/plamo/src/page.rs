@@ -7,10 +7,20 @@ impl Engine {
     }
 
     pub fn translate_page(&self, text: &str, cancelled: impl Fn() -> bool) -> Result<String> {
+        self.translate_page_stream(text, false, cancelled, |_| {})
+    }
+
+    pub fn translate_page_stream(
+        &self,
+        text: &str,
+        easy: bool,
+        cancelled: impl Fn() -> bool,
+        mut publish: impl FnMut(&str),
+    ) -> Result<String> {
         let request = TranslationRequest {
             text,
-            target: "ja",
-            form: Some("plain"),
+            target: if easy { "ja-easy" } else { "ja" },
+            form: (!easy).then_some("plain"),
             ..Default::default()
         };
         let ids = self.tokenizer.encode(&request.prompt()?);
@@ -84,7 +94,11 @@ impl Engine {
             }
             let valid =
                 std::str::from_utf8(&bytes).map_or_else(|e| e.valid_up_to(), |_| bytes.len());
-            text.push_str(std::str::from_utf8(&bytes[..valid])?);
+            let chunk = std::str::from_utf8(&bytes[..valid])?;
+            text.push_str(chunk);
+            if !chunk.is_empty() {
+                publish(chunk);
+            }
             tail = bytes[valid..].to_vec();
             next = session
                 .forward(next, true, true)?

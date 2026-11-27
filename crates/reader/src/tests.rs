@@ -137,8 +137,11 @@ fn real_translation_and_navigation() {
     let reader = Reader::new(model.into()).unwrap();
     reader.open(fixtures().join("P01-simple.pdf"), String::new());
     let finish = |v: &View| matches!(v.phase, Phase::Ready | Phase::Error);
+    let progress = wait(&reader, |v| finish(v) || !v.translation.is_empty());
+    assert_eq!(progress.phase, Phase::Translating, "{}", progress.message);
     let first = wait(&reader, finish);
     assert_eq!(first.phase, Phase::Ready, "{}", first.message);
+    assert!(first.translation.starts_with(progress.translation.as_ref()));
     assert!(
         first.translation.contains('3')
             && first
@@ -158,4 +161,20 @@ fn real_translation_and_navigation() {
         std::sync::Arc::ptr_eq(&first.translation, &again.translation),
         "cache miss"
     );
+    reader.translation_options(false, false);
+    reader.page(2);
+    assert!(
+        wait(&reader, |v| v.phase == Phase::Paused)
+            .translation
+            .is_empty()
+    );
+    reader.translation_options(true, false);
+    assert!(std::sync::Arc::ptr_eq(
+        &second.translation,
+        &wait(&reader, finish).translation
+    ));
+    reader.close();
+    let closed = reader.view(u64::MAX).unwrap();
+    assert_eq!(closed.phase, Phase::Idle);
+    assert!(closed.page == 0 && closed.translation.is_empty());
 }

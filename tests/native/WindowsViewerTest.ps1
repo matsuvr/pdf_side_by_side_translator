@@ -11,12 +11,17 @@ function Control([string]$id) {
 }
 function WaitText([string]$expected) {
     $until = (Get-Date).AddMinutes(2)
+    $ready = -join ([char]0x5B8C, [char]0x4E86)
     do {
         $process.Refresh()
         if ($process.HasExited) { throw "Viewer exited with code $($process.ExitCode)" }
         if ($process.MainWindowHandle -ne 0) {
             $translated = Control 'Translation'
-            if ($translated -and $translated.Current.Name -match $expected) { return $translated.Current.Name }
+            $status = Control 'TranslationStatus'
+            if ($translated -and $status -and $status.Current.Name -eq $ready) {
+                $text = $translated.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
+                if ($text -match $expected) { return $text.TrimEnd() }
+            }
         }
         Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $until)
@@ -36,21 +41,16 @@ try {
     $null = WaitText '12'
     Click 'Previous'
     if ((WaitText '3') -ne $first) { throw 'Revisited page differs' }
-    (Control 'SourceMode').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    $deadline = (Get-Date).AddSeconds(5)
-    do {
-        $source = Control 'Source'
-        if ($source -and $source.Current.Name -match '3 sensors') { break }
-        Start-Sleep -Milliseconds 50
-    } while ((Get-Date) -lt $deadline)
-    if (!$source -or $source.Current.Name -notmatch '3 sensors') { throw 'Selectable source text is missing' }
-    foreach ($id in @('Translation', 'Source')) {
-        $control = Control $id
-        $value = $null
-        if ($control.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$value) -and !$value.Current.IsReadOnly) { throw "Editable body: $id" }
-        $null = $control.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+    $viewer = Control 'Translation'
+    $value = $viewer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    if (!$value.Current.IsReadOnly) { throw 'Translation is editable' }
+    if (Control 'SourceMode') { throw 'Unexpected source toggle' }
+    $zoom = (Control 'ZoomPercent').Current.BoundingRectangle
+    $pageNumber = (Control 'PageNumber').Current.BoundingRectangle
+    if ($zoom.Left -le $pageNumber.Right -or [Math]::Abs($zoom.Top - $pageNumber.Top) -gt 10) {
+        throw 'Zoom and page number are in different rows'
     }
-    Write-Output 'WinUI displayed both translations and read-only source text.'
+    Write-Output 'WinUI displayed both read-only translations and placed the zoom alongside the page number.'
 } finally {
     if (!$process.HasExited) { $null = $process.CloseMainWindow(); $null = $process.WaitForExit(10000) }
 }

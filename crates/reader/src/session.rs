@@ -13,6 +13,7 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 #[repr(u32)]
@@ -27,6 +28,7 @@ pub enum Phase {
     Empty,
     Error,
     Password,
+    Paused,
 }
 
 #[derive(Default, Clone)]
@@ -34,6 +36,7 @@ pub struct View {
     pub revision: u64,
     pub image_id: u64,
     pub png: Arc<[u8]>,
+    pub page_size: (f64, f64),
     pub page: u32, // one-based; zero before a document has opened
     pub count: u32,
     pub phase: Phase,
@@ -50,10 +53,41 @@ enum Search {
     Notice(Arc<str>),
 }
 
-#[derive(Default)]
 struct State {
     view: View,
     search: Search,
+    automatic: bool,
+    easy: bool,
+    model: Option<PathBuf>,
+}
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            view: View::default(),
+            search: Search::Idle,
+            automatic: true,
+            easy: false,
+            model: None,
+        }
+    }
+}
+impl State {
+    fn translation_task(&mut self, id: u64) -> Option<ToTranslate> {
+        self.view.translation = Arc::default();
+        self.view.phase = if self.view.source.is_empty() {
+            Phase::Empty
+        } else if self.automatic {
+            Phase::Translating
+        } else {
+            Phase::Paused
+        };
+        (self.view.phase == Phase::Translating).then(|| ToTranslate {
+            id,
+            source: self.view.source.clone(),
+            easy: self.easy,
+            model: self.model.clone(),
+        })
+    }
 }
 
 fn with_notice(notice: &str, message: &str) -> Arc<str> {
@@ -119,6 +153,9 @@ impl Shared {
     fn fail(&self, id: u64, reason: String) {
         let mut state = self.state.lock().unwrap();
         if self.active(id) {
+            if state.view.phase == Phase::Translating {
+                state.view.translation = Arc::default();
+            }
             state.view.phase = Phase::Error;
             state.view.message = with_notice(&reason, &state.view.message);
         } else if matches!(state.search, Search::Pending(current) if current == id) {
@@ -132,8 +169,14 @@ impl Shared {
 
 enum Action {
     Open(PathBuf, String),
+    Close,
     Page(u32),
-    Find(String),
+    Find {
+        query: String,
+        backwards: bool,
+        match_case: bool,
+    },
+    Translate(ToTranslate),
 }
 struct Request {
     id: u64,
@@ -142,6 +185,8 @@ struct Request {
 struct ToTranslate {
     id: u64,
     source: Arc<str>,
+    easy: bool,
+    model: Option<PathBuf>,
 }
 
 pub struct Reader {
@@ -175,16 +220,23 @@ impl Reader {
         let count = state.view.count;
         match &action {
             Action::Open(..) => self.shared.load_page(&mut state, id, 0, 0),
+            Action::Close => {
+                self.shared.load_page(&mut state, id, 0, 0);
+                state.view.phase = Phase::Idle;
+            }
             Action::Page(page) if *page > 0 && *page <= count && *page != state.view.page => {
                 self.shared.load_page(&mut state, id, *page, count);
             }
-            Action::Find(_) if state.view.page > 0 => {
+            Action::Find { .. } if state.view.page > 0 => {
                 state.search = Search::Pending(id);
                 state.view.revision = id;
             }
             _ => return,
         }
         drop(state);
+        self.send(id, action);
+    }
+    fn send(&self, id: u64, action: Action) {
         if self
             .tx
             .as_ref()
@@ -198,12 +250,78 @@ impl Reader {
     pub fn open(&self, path: PathBuf, password: String) {
         self.submit(Action::Open(path, password));
     }
+    pub fn close(&self) {
+        self.submit(Action::Close);
+    }
     pub fn page(&self, page: u32) {
         self.submit(Action::Page(page));
     }
     pub fn find(&self, query: String) {
+        self.find_matching(query, false, false);
+    }
+    pub fn find_matching(&self, query: String, backwards: bool, match_case: bool) {
         if !query.trim().is_empty() {
-            self.submit(Action::Find(query.to_lowercase()));
+            let query = if match_case {
+                query
+            } else {
+                query.to_lowercase()
+            };
+            self.submit(Action::Find {
+                query,
+                backwards,
+                match_case,
+            });
+        }
+    }
+    pub fn cancel_find(&self) {
+        let mut state = self.shared.state.lock().unwrap();
+        if !matches!(state.search, Search::Idle) {
+            state.search = Search::Idle;
+            state.view.revision += 1;
+        }
+    }
+    pub fn translation_options(&self, automatic: bool, easy: bool) {
+        let mut state = self.shared.state.lock().unwrap();
+        if state.automatic == automatic && state.easy == easy {
+            return;
+        }
+        let same_style = state.easy == easy;
+        state.automatic = automatic;
+        state.easy = easy;
+        if same_style && state.view.phase == Phase::Ready {
+            return;
+        }
+        self.refresh_translation(state);
+    }
+    pub fn select_model(&self, path: PathBuf) {
+        let mut state = self.shared.state.lock().unwrap();
+        if state.model.as_ref() == Some(&path) && state.view.phase != Phase::Error {
+            return;
+        }
+        state.model = Some(path);
+        if state.view.phase != Phase::Ready {
+            self.refresh_translation(state);
+        }
+    }
+    fn refresh_translation(&self, mut state: std::sync::MutexGuard<'_, State>) {
+        if state.view.source.is_empty()
+            || !matches!(
+                state.view.phase,
+                Phase::Translating | Phase::Ready | Phase::Paused | Phase::Error
+            )
+        {
+            return;
+        }
+        let id = state.view.revision + 1;
+        self.shared.generation.store(id, Ordering::Release);
+        state.view.revision = id;
+        if state.view.phase == Phase::Error {
+            state.view.message = Arc::default();
+        }
+        let task = state.translation_task(id);
+        drop(state);
+        if let Some(task) = task {
+            self.send(id, Action::Translate(task));
         }
     }
     pub fn view(&self, after: u64) -> Option<View> {
@@ -239,6 +357,7 @@ impl Drop for Reader {
 struct CachedPage {
     page: u32,
     png: Arc<[u8]>,
+    size: (f64, f64),
     source: Arc<str>,
     warning: Arc<str>,
 }
@@ -261,6 +380,7 @@ fn read_page(shared: &Shared, id: u64, doc: &Document, page: u32) -> Result<Cach
     shared.update(id, |v| {
         v.png = image.png.clone();
         v.image_id = id;
+        v.page_size = image.size;
     });
     let mut source: Arc<str> = doc.text(index)?.into();
     let mut warning = Arc::default();
@@ -290,6 +410,7 @@ fn read_page(shared: &Shared, id: u64, doc: &Document, page: u32) -> Result<Cach
     Ok(CachedPage {
         page,
         png: image.png,
+        size: image.size,
         source,
         warning,
     })
@@ -301,7 +422,7 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
     // Only complete reads enter this document-local cache.
     let mut recent: VecDeque<CachedPage> = VecDeque::new();
     for Request { id, action } in rx {
-        if !matches!(action, Action::Find(_)) && !shared.active(id) {
+        if !matches!(action, Action::Find { .. }) && !shared.active(id) {
             continue;
         }
         let result =
@@ -328,8 +449,21 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
                             Err(OpenError::Message(e)) => return Err(e),
                         }
                     }
+                    Action::Close => {
+                        document = None;
+                        recent.clear();
+                        return Ok(());
+                    }
+                    Action::Translate(task) => {
+                        tasks.send(task).map_err(|_| "翻訳処理が停止しました。")?;
+                        return Ok(());
+                    }
                     Action::Page(page) => page,
-                    Action::Find(query) => {
+                    Action::Find {
+                        query,
+                        backwards,
+                        match_case,
+                    } => {
                         let Some(start) = shared.search_page(id) else {
                             return Ok(());
                         };
@@ -339,11 +473,19 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
                             if shared.search_page(id).is_none() {
                                 return Ok(());
                             }
-                            let index = (start as usize + offset) % doc.count();
-                            if doc
-                                .text(index)
-                                .is_ok_and(|text| text.to_lowercase().contains(&query))
-                            {
+                            let next = if backwards {
+                                doc.count() + start as usize - 2 - offset
+                            } else {
+                                start as usize + offset
+                            };
+                            let index = next % doc.count();
+                            if doc.text(index).is_ok_and(|text| {
+                                if match_case {
+                                    text.contains(&query)
+                                } else {
+                                    text.to_lowercase().contains(&query)
+                                }
+                            }) {
                                 found = Some(index as u32 + 1);
                                 break;
                             }
@@ -366,18 +508,19 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
                     Some(hit) => hit,
                     None => read_page(&shared, id, doc, page)?,
                 };
-                let source = cached.source.clone();
-                shared.update(id, |v| {
-                    v.png = cached.png.clone();
-                    v.image_id = id;
-                    v.source = source.clone();
-                    v.message = cached.warning.clone();
-                    v.phase = if source.is_empty() {
-                        Phase::Empty
-                    } else {
-                        Phase::Translating
-                    };
-                });
+                let task = {
+                    let mut state = shared.state.lock().unwrap();
+                    if !shared.active(id) {
+                        return Ok(());
+                    }
+                    state.view.png = cached.png.clone();
+                    state.view.image_id = id;
+                    state.view.page_size = cached.size;
+                    state.view.source = cached.source.clone();
+                    state.view.message = cached.warning.clone();
+                    state.view.revision += 1;
+                    state.translation_task(id)
+                };
                 const PAGE_CACHE_LIMIT: usize = 24 * 1024 * 1024;
                 if cached.bytes() <= PAGE_CACHE_LIMIT {
                     recent.push_front(cached);
@@ -387,10 +530,8 @@ fn pdf_loop(shared: Arc<Shared>, rx: Receiver<Request>, tasks: Sender<ToTranslat
                         recent.pop_back();
                     }
                 }
-                if !source.is_empty() && shared.active(id) {
-                    tasks
-                        .send(ToTranslate { id, source })
-                        .map_err(|_| "翻訳処理が停止しました。")?;
+                if let Some(task) = task {
+                    tasks.send(task).map_err(|_| "翻訳処理が停止しました。")?;
                 }
                 Ok(())
             }));
@@ -438,29 +579,58 @@ impl Cache {
 }
 fn translate_loop(shared: Arc<Shared>, rx: Receiver<ToTranslate>, path: PathBuf) {
     let mut model = None;
+    let mut loaded_path = None;
     let mut cache = Cache::new();
-    for ToTranslate { id, source } in rx {
+    for ToTranslate {
+        id,
+        source,
+        easy,
+        model: selected,
+    } in rx
+    {
         if !shared.active(id) {
             continue;
         }
-        // A reader has one immutable model and translation style. Identical
-        // extracted input from reopened documents can reuse the same result.
-        let key = Sha256::digest(source.as_bytes()).into();
+        // All accepted companion files have the same checksum. Translation
+        // style and extracted source determine whether a result can be reused.
+        let mut hash = Sha256::new();
+        hash.update([u8::from(easy)]);
+        hash.update(source.as_bytes());
+        let key = hash.finalize().into();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             || -> Result<Arc<str>, String> {
                 if let Some(hit) = cache.get(&key) {
                     return Ok(hit);
                 }
-                if model.is_none() {
-                    model = Some(Translator::open(&path)?);
+                let selected = selected.as_ref().unwrap_or(&path);
+                if model.is_none() || loaded_path.as_ref() != Some(selected) {
+                    model = Some(Translator::open(selected)?);
+                    loaded_path = Some(selected.clone());
                 }
                 if !shared.active(id) {
                     return Err("cancelled".into());
                 }
-                let text = model
-                    .as_mut()
-                    .unwrap()
-                    .translate(&source, || !shared.active(id))?;
+                let mut partial = String::new();
+                let mut has_text = false;
+                let mut last_publish: Option<Instant> = None;
+                let text = model.as_mut().unwrap().translate(
+                    &source,
+                    easy,
+                    || !shared.active(id),
+                    |chunk| {
+                        partial.push_str(chunk);
+                        has_text |= !chunk.trim().is_empty();
+                        let now = Instant::now();
+                        if has_text
+                            && last_publish.is_none_or(|last| {
+                                now.duration_since(last) >= Duration::from_millis(75)
+                            })
+                        {
+                            last_publish = Some(now);
+                            shared.update(id, |v| v.translation = partial.as_str().into());
+                        }
+                    },
+                )?;
                 if text.trim().is_empty() {
                     return Err("訳文を生成できませんでした。".into());
                 }

@@ -31,6 +31,8 @@ pub struct ReaderView {
     translation: Bytes,
     message: Bytes,
     png: Bytes,
+    page_width: f64,
+    page_height: f64,
 }
 unsafe fn utf8<'a>(p: *const c_char) -> Option<&'a str> {
     if p.is_null() {
@@ -64,6 +66,12 @@ pub unsafe extern "C" fn reader_open(
     }
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn reader_close(p: *const Reader) {
+    if let Some(r) = unsafe { p.as_ref() } {
+        r.close();
+    }
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn reader_page(p: *const Reader, page: u32) {
     if let Some(r) = unsafe { p.as_ref() } {
         r.page(page);
@@ -73,6 +81,35 @@ pub unsafe extern "C" fn reader_page(p: *const Reader, page: u32) {
 pub unsafe extern "C" fn reader_find(p: *const Reader, query: *const c_char) {
     if let (Some(r), Some(q)) = (unsafe { p.as_ref() }, unsafe { utf8(query) }) {
         r.find(q.into());
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn reader_find_matching(
+    p: *const Reader,
+    query: *const c_char,
+    backwards: u32,
+    match_case: u32,
+) {
+    if let (Some(r), Some(q)) = (unsafe { p.as_ref() }, unsafe { utf8(query) }) {
+        r.find_matching(q.into(), backwards != 0, match_case != 0);
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn reader_cancel_find(p: *const Reader) {
+    if let Some(r) = unsafe { p.as_ref() } {
+        r.cancel_find();
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn reader_translation_options(p: *const Reader, automatic: u32, easy: u32) {
+    if let Some(r) = unsafe { p.as_ref() } {
+        r.translation_options(automatic != 0, easy != 0);
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn reader_model(p: *const Reader, path: *const c_char) {
+    if let (Some(r), Some(path)) = (unsafe { p.as_ref() }, unsafe { utf8(path) }) {
+        r.select_model(path.into());
     }
 }
 #[unsafe(no_mangle)]
@@ -102,6 +139,8 @@ pub unsafe extern "C" fn reader_poll(
         } else {
             view.png.as_ref().into()
         },
+        page_width: view.page_size.0,
+        page_height: view.page_size.1,
     };
     Box::into_raw(Box::new(view))
 }

@@ -98,6 +98,7 @@ mod document {
     pub struct Document(String);
     pub struct Image {
         pub png: Arc<[u8]>,
+        pub size: (f64, f64),
     }
     pub enum OpenError {
         Password,
@@ -132,6 +133,7 @@ mod document {
             };
             Ok(Image {
                 png: vec![0; size].into(),
+                size: (612.0, 792.0),
             })
         }
         pub fn text(&self, page: usize) -> Result<String, String> {
@@ -155,11 +157,22 @@ mod engine {
     use std::path::Path;
     pub struct Translator;
     impl Translator {
-        pub fn open(_: &Path) -> Result<Self, String> {
-            Ok(Self)
+        pub fn open(path: &Path) -> Result<Self, String> {
+            if path.ends_with("bad-model") {
+                Err("invalid model".into())
+            } else {
+                Ok(Self)
+            }
         }
-        pub fn translate(&mut self, source: &str, _: impl Fn() -> bool) -> Result<String, String> {
-            Ok(format!("訳({source})"))
+        pub fn translate(
+            &mut self,
+            source: &str,
+            easy: bool,
+            _: impl Fn() -> bool,
+            _: impl FnMut(&str),
+        ) -> Result<String, String> {
+            let style = if easy { "やさしい訳" } else { "訳" };
+            Ok(format!("{style}({source})"))
         }
     }
 }
@@ -252,4 +265,31 @@ fn unsuccessful_search_preserves_a_completed_translation_and_image() {
         after.image_id, before.image_id,
         "search miss would reset the viewport"
     );
+}
+
+#[test]
+fn translation_settings_preserve_page_and_reuse_the_matching_style() {
+    let reader = Reader::new("model".into()).unwrap();
+    reader.open("search".into(), String::new());
+    let standard = settled(&reader);
+    reader.translation_options(true, true);
+    let easy = settled(&reader);
+    assert_eq!(&*easy.translation, "やさしい訳(PDF page 0)");
+    assert_eq!(easy.image_id, standard.image_id);
+
+    reader.select_model("bad-model".into());
+    reader.translation_options(true, false);
+    let cached = settled(&reader);
+    assert!(std::sync::Arc::ptr_eq(
+        &cached.translation,
+        &standard.translation
+    ));
+
+    reader.find("absent query".into());
+    reader.cancel_find();
+    assert!(settled(&reader).message.is_empty());
+    reader.close();
+    let view = reader.view(u64::MAX).unwrap();
+    assert_eq!(view.phase, Phase::Idle);
+    assert!(view.png.is_empty() && view.source.is_empty() && view.translation.is_empty());
 }

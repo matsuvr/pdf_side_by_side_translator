@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace OfflinePdf;
 
-internal enum Phase : uint { Idle, Loading, ReadingImage, Translating, Ready, Empty, Error, Password }
+internal enum Phase : uint { Idle, Loading, ReadingImage, Translating, Ready, Empty, Error, Password, Paused }
 
 internal static class Core
 {
@@ -27,13 +27,18 @@ internal static class Core
         public uint Page, Count;
         public Phase Phase;
         public Bytes Source, Translation, Message, Png;
+        public double PageWidth, PageHeight;
     }
     const string Dll = "pdf_reader";
     [DllImport(Dll)] internal static extern IntPtr reader_new();
     [DllImport(Dll)] internal static extern void reader_free(IntPtr reader);
     [DllImport(Dll)] internal static extern void reader_open(IntPtr reader, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string password);
+    [DllImport(Dll)] internal static extern void reader_close(IntPtr reader);
     [DllImport(Dll)] internal static extern void reader_page(IntPtr reader, uint page);
-    [DllImport(Dll)] internal static extern void reader_find(IntPtr reader, [MarshalAs(UnmanagedType.LPUTF8Str)] string query);
+    [DllImport(Dll)] internal static extern void reader_find_matching(IntPtr reader, [MarshalAs(UnmanagedType.LPUTF8Str)] string query, uint backwards, uint matchCase);
+    [DllImport(Dll)] internal static extern void reader_cancel_find(IntPtr reader);
+    [DllImport(Dll)] internal static extern void reader_translation_options(IntPtr reader, uint automatic, uint easy);
+    [DllImport(Dll)] internal static extern void reader_model(IntPtr reader, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Dll)] internal static extern IntPtr reader_poll(IntPtr reader, ulong revision, ulong image, out View view);
     [DllImport(Dll)] internal static extern void reader_snapshot_free(IntPtr snapshot);
 }

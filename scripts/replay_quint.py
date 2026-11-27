@@ -22,7 +22,8 @@ class Bytes(c.Structure):
 class View(c.Structure):
     _fields_ = [("revision", c.c_uint64), ("image_id", c.c_uint64),
                 ("page", c.c_uint32), ("count", c.c_uint32), ("phase", c.c_uint32),
-                ("source", Bytes), ("translation", Bytes), ("message", Bytes), ("png", Bytes)]
+                ("source", Bytes), ("translation", Bytes), ("message", Bytes), ("png", Bytes),
+                ("page_width", c.c_double), ("page_height", c.c_double)]
 
 
 def bind(filename):
@@ -49,6 +50,7 @@ def check_view(view, expected):
         assert not source and not translation and view.image_id == 0 and not view.png.length
     else:
         assert view.image_id and view.png.value().startswith(b"\x89PNG\r\n\x1a\n")
+        assert view.page_width > 0 and view.page_height > 0
         marker = expected["marker"]
         if marker:
             assert marker in source, (marker, source)

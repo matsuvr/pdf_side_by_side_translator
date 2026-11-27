@@ -28,13 +28,13 @@ enum MacViewerTest {
         let reader = delegate.reader
         let root = delegate.window!.contentView!
         reader.open(URL(fileURLWithPath: CommandLine.arguments[1]))
-        wait { reader.image != nil && textViews(in: root).contains {
+        wait { reader.status == "完了" && reader.image != nil && textViews(in: root).contains {
             $0.string.contains("3") && $0.string.contains("センサ") && !$0.isEditable && $0.isSelectable
                 && $0.font == NSFont.preferredFont(forTextStyle: .body)
         } }
         let first = reader.translation
         reader.go(2)
-        wait { reader.page == 2 && textViews(in: root).contains { $0.string.contains("12") } }
+        wait { reader.status == "完了" && reader.page == 2 && textViews(in: root).contains { $0.string.contains("12") } }
         reader.go(1)
         wait { reader.page == 1 && textViews(in: root).contains { $0.string == first } }
         delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))

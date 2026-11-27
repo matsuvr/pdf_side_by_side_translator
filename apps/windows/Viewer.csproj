@@ -14,6 +14,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>../../resources/app-icon.ico</ApplicationIcon>
     <AssemblyName>offline-pdf-translator</AssemblyName>
+    <Version>0.4.0</Version>
     <RootNamespace>OfflinePdf</RootNamespace>
     <Nullable>enable</Nullable>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>

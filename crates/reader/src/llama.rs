@@ -117,7 +117,9 @@ impl Translator {
     pub fn translate(
         &mut self,
         source: &str,
+        easy: bool,
         cancelled: impl Fn() -> bool,
+        mut publish: impl FnMut(&str),
     ) -> Result<String, String> {
         if source.contains("<|plamo:") {
             return Err("モデルの予約文字列が本文に含まれています。".into());
@@ -128,7 +130,12 @@ impl Translator {
             true,
         )?;
         tokens.extend(self.tokenize(source, false, false)?);
-        tokens.extend(self.tokenize("<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>",false,true)?);
+        let output = if easy {
+            "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja-easy<|plamo:msg|>"
+        } else {
+            "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>"
+        };
+        tokens.extend(self.tokenize(output, false, true)?);
         let capacity =
             unsafe { sys::llama_model_n_ctx_train(self.model.as_ptr()) }.clamp(0, 32768) as usize;
         if tokens.len() >= capacity {
@@ -240,8 +247,12 @@ impl Translator {
                 break;
             }
             result.extend(bytes);
-            valid +=
-                std::str::from_utf8(&result[valid..]).map_or_else(|e| e.valid_up_to(), |s| s.len());
+            let previous = valid;
+            valid += std::str::from_utf8(&result[previous..])
+                .map_or_else(|e| e.valid_up_to(), |s| s.len());
+            if valid != previous {
+                publish(std::str::from_utf8(&result[previous..valid]).map_err(|e| e.to_string())?);
+            }
             evaluate(&mut [token])?;
         }
         Err("ページの翻訳が生成上限に達しました。".into())

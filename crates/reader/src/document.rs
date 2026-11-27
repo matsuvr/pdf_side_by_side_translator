@@ -17,6 +17,7 @@ pub enum OpenError {
 pub struct Document(Pdf, pdf::InterpreterSettings);
 pub struct PageImage {
     pub png: Arc<[u8]>,
+    pub size: (f64, f64),
     #[cfg(any(test, windows))]
     pub width: u32,
     #[cfg(any(test, windows))]
@@ -96,6 +97,7 @@ impl Document {
         }
         Ok(PageImage {
             png: png.into(),
+            size: (w.into(), h.into()),
             #[cfg(any(test, windows))]
             width,
             #[cfg(any(test, windows))]

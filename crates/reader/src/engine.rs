@@ -53,9 +53,15 @@ impl Translator {
             .map(Self)
             .map_err(|e| e.to_string())
     }
-    pub fn translate(&self, source: &str, cancelled: impl Fn() -> bool) -> Result<String, String> {
+    pub fn translate(
+        &self,
+        source: &str,
+        easy: bool,
+        cancelled: impl Fn() -> bool,
+        publish: impl FnMut(&str),
+    ) -> Result<String, String> {
         self.0
-            .translate_page(source, cancelled)
+            .translate_page_stream(source, easy, cancelled, publish)
             .map_err(|e| e.to_string())
     }
 }
