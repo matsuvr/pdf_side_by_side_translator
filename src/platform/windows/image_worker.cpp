@@ -1,5 +1,4 @@
-#include "ocr/image_reading.hpp"
-#include "image_reading_assets.hpp"
+#include "ocr/image_worker_catalog.hpp"
 #include <windows.h>
 #include <psapi.h>
 #include <algorithm>
@@ -17,10 +16,8 @@ namespace {
 using Handle=std::unique_ptr<void,decltype(&CloseHandle)>;
 struct SharedPage {
     int width,height,dpi;
-    int language; // -1 is automatic on input, uncertain on output.
-    int script_reader;
-    std::array<int,ImageAlternatives{}.size()> alternatives;
-    std::uint32_t text_size;
+    int language;
+    ImageWorkerResult result;
     char text[image_reading_max_text];
     unsigned char pixels[image_reading_max_area];
 };
@@ -31,18 +28,6 @@ auto map_page(HANDLE mapping){
     auto* page=static_cast<SharedPage*>(MapViewOfFile(mapping,FILE_MAP_WRITE,0,0,sizeof(SharedPage)));
     check_windows(page!=nullptr,"Map OCR page");
     return std::unique_ptr<SharedPage,decltype(&UnmapViewOfFile)>(page,UnmapViewOfFile);
-}
-int language_index(std::string_view tag){
-    if(tag.empty())return -1;
-    for(std::size_t i=0;i<std::size(image_languages);++i)
-        if(image_languages[i].tag==tag)return static_cast<int>(i);
-    throw std::invalid_argument("Unsupported OCR language");
-}
-template<class T,std::size_t N>
-const T* entry_at(const T (&catalog)[N],int index){
-    if(index==-1)return nullptr;
-    if(index<0||static_cast<std::size_t>(index)>=N)throw std::invalid_argument("Invalid OCR catalog index");
-    return &catalog[index];
 }
 Handle launch_worker(HANDLE mapping,HANDLE job){
     SIZE_T bytes=0;
@@ -72,7 +57,7 @@ Handle launch_worker(HANDLE mapping,HANDLE job){
 ImageReadingResult read_page_image(GrayPage page,std::string_view language,std::stop_token stop,Clock::time_point deadline){
     page.validate();
     if(stop.stop_requested())return {};
-    const auto requested=language_index(language);
+    const auto requested=image_language_index(language);
     SECURITY_ATTRIBUTES inherit{sizeof(inherit),nullptr,TRUE};
     Handle mapping(CreateFileMappingW(INVALID_HANDLE_VALUE,&inherit,PAGE_READWRITE,0,sizeof(SharedPage),nullptr),CloseHandle);
     check_windows(bool(mapping),"Create OCR page");
@@ -102,12 +87,8 @@ ImageReadingResult read_page_image(GrayPage page,std::string_view language,std::
     check_windows(wait==WAIT_OBJECT_0+1,"Wait for OCR worker");
     DWORD status;
     check_windows(GetExitCodeProcess(process.get(),&status),"Read OCR exit status");
-    if(status!=0||shared->text_size>sizeof(shared->text))throw std::runtime_error("画像を読み取れませんでした。");
-    ImageReadingResult result{std::string(shared->text,shared->text_size),
-        entry_at(image_languages,shared->language),entry_at(image_script_readers,shared->script_reader)};
-    for(std::size_t i=0;i<result.alternatives.size();++i)
-        result.alternatives[i]=entry_at(image_languages,shared->alternatives[i]);
-    return result;
+    if(status!=0||shared->result.text_size>sizeof(shared->text))throw std::runtime_error("画像を読み取れませんでした。");
+    return shared->result.decode(std::string(shared->text,shared->result.text_size));
 }
 
 int run_image_worker(std::string_view handle,ImageModelReader models){
@@ -122,18 +103,12 @@ int run_image_worker(std::string_view handle,ImageModelReader models){
         wchar_t mapped_name[MAX_PATH];
         if(K32GetMappedFileNameW(GetCurrentProcess(),shared.get(),mapped_name,MAX_PATH)!=0 ||
            GetLastError()!=ERROR_FILE_INVALID)return 1;
-        const auto* requested=entry_at(image_languages,shared->language);
+        const auto* requested=image_entry_at(image_languages,shared->language);
         GrayPage page{shared->pixels,shared->width,shared->height,shared->width,shared->dpi};
         auto result=recognize_page_image(page,requested?requested->tag:std::string_view{},models,Clock::now()+image_reading_timeout);
         if(result.text.size()>sizeof(shared->text))return 1;
         std::memcpy(shared->text,result.text.data(),result.text.size());
-        shared->text_size=static_cast<std::uint32_t>(result.text.size());
-        shared->language=result.language?static_cast<int>(result.language-image_languages):-1;
-        shared->script_reader=result.script_reader?static_cast<int>(result.script_reader-image_script_readers):-1;
-        for(std::size_t i=0;i<result.alternatives.size();++i){
-            const auto* candidate=result.alternatives[i];
-            shared->alternatives[i]=candidate?static_cast<int>(candidate-image_languages):-1;
-        }
+        shared->result=ImageWorkerResult(result);
         return 0;
     }catch(const std::exception&){return 1;}
 }

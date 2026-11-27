@@ -3,7 +3,15 @@
 #include "pdf/pdf_service.hpp"
 #include "blread.h"
 #include "ocrblock.h"
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <signal.h>
+#include <unistd.h>
+#include <atomic>
+#include <cerrno>
+#include <cstdlib>
+#endif
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -14,6 +22,7 @@
 #include <thread>
 
 namespace {
+#ifdef _WIN32
 constexpr wchar_t delay_event_var[]=L"OPT_TEST_OSD_STARTED";
 bool test_model_reader(const char* name,std::vector<char>* data){
     wchar_t event_name[128]{};
@@ -62,6 +71,58 @@ void check_interruptible_detection(opt::GrayPage page){
        std::chrono::steady_clock::now()>deadline+2s)throw std::runtime_error("OSD exceeded its deadline");
     check_worker_exit();
 }
+#else
+constexpr char block_model_var[]="OPT_TEST_BLOCK_OCR_MODEL";
+static_assert(std::atomic<pid_t>::is_always_lock_free);
+std::atomic<pid_t> started_worker{0};
+
+bool test_model_reader(const char* name,std::vector<char>* data){
+    using namespace std::chrono_literals;
+    if(std::string_view(name).ends_with("osd.traineddata") && std::getenv(block_model_var)){
+        if(kill(getppid(),SIGUSR1)!=0)return false;
+        std::this_thread::sleep_for(30s); // Block inside model loading.
+    }
+    return opt::read_bundled_image_model(name,data);
+}
+
+void check_interruptible_detection(opt::GrayPage page){
+    using namespace std::chrono_literals;
+    using Clock=std::chrono::steady_clock;
+    struct sigaction handler{},original{};
+    handler.sa_sigaction=[](int,siginfo_t* info,void*){started_worker.store(info->si_pid);};
+    handler.sa_flags=SA_SIGINFO;
+    sigemptyset(&handler.sa_mask);
+    if(sigaction(SIGUSR1,&handler,&original)!=0||setenv(block_model_var,"1",1)!=0)
+        throw std::runtime_error("OSD test setup failed");
+    const auto check_worker_exit=[]{
+        const auto pid=started_worker.exchange(0);
+        if(pid<=0||kill(pid,0)==0||errno!=ESRCH)
+            throw std::runtime_error("Blocked OCR worker did not start or was not reaped");
+    };
+    std::stop_source stop;
+    std::jthread cancel([&]{
+        const auto deadline=Clock::now()+5s;
+        while(!started_worker.load()&&Clock::now()<deadline)std::this_thread::sleep_for(10ms);
+        stop.request_stop();
+    });
+    const auto first=Clock::now();
+    const auto canceled=opt::read_page_image(page,"",stop.get_token());
+    cancel.join();
+    if(!canceled.text.empty()||Clock::now()-first>6s)
+        throw std::runtime_error("Could not cancel active script detection");
+    check_worker_exit();
+
+    const auto deadline=Clock::now()+4s;
+    bool timed_out=false;
+    try{opt::read_page_image(page,"",{},deadline);}
+    catch(const opt::ImageReadingTimeout&){timed_out=true;}
+    unsetenv(block_model_var);
+    sigaction(SIGUSR1,&original,nullptr);
+    if(!timed_out||Clock::now()>deadline+2s)
+        throw std::runtime_error("OSD exceeded its deadline");
+    check_worker_exit();
+}
+#endif
 }
 
 int main(int argc,char** argv){
@@ -139,7 +200,7 @@ int main(int argc,char** argv){
             throw std::runtime_error("Automatic reading must identify exactly one language or script model");
         if(std::size(image_languages)!=53)
             throw std::runtime_error("PLaMo language roster is incomplete");
-        // Every Windows resource must be loadable even if this small test
+        // Every embedded model must be loadable even if this small test
         // fixture has no meaningful text in that language.
         std::vector<unsigned char> blank(256*128,255);
         for(const auto& lang:image_languages){

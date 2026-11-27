@@ -12,7 +12,7 @@
 
 class ReaderApp final : public wxApp {
     std::unique_ptr<opt::ApplicationController> controller_;
-#ifdef OPT_PAGE_IMAGE_READING
+#if defined(OPT_PAGE_IMAGE_READING) && defined(_WIN32)
     std::optional<int> worker_status_;
 #endif
 public:
@@ -26,7 +26,7 @@ public:
         policy.ProhibitDynamicCode=1;
         (void)SetProcessMitigationPolicy(ProcessDynamicCodePolicy,&policy,sizeof(policy));
 #endif
-#ifdef OPT_PAGE_IMAGE_READING
+#if defined(OPT_PAGE_IMAGE_READING) && defined(_WIN32)
         if(argc==3 && wxString(argv[1])==wxString::FromAscii(opt::image_worker_switch)){
             worker_status_=opt::run_image_worker(wxString(argv[2]).ToStdString(),opt::read_bundled_image_model);
             return true;
@@ -55,9 +55,19 @@ public:
         controller_->start(pdf);
         return true;
     }
-#ifdef OPT_PAGE_IMAGE_READING
+#if defined(OPT_PAGE_IMAGE_READING) && defined(_WIN32)
     int OnRun() override {return worker_status_?*worker_status_:wxApp::OnRun();}
 #endif
     int OnExit() override {controller_.reset();return 0;}
 };
+#if defined(OPT_PAGE_IMAGE_READING) && defined(__APPLE__)
+wxIMPLEMENT_APP_NO_MAIN(ReaderApp);
+int main(int argc,char** argv){
+    // The worker has no windows and must avoid wx/AppKit initialization.
+    if(argc==3 && std::string_view(argv[1])==opt::image_worker_switch)
+        return opt::run_image_worker(argv[2],opt::read_bundled_image_model);
+    return wxEntry(argc,argv);
+}
+#else
 wxIMPLEMENT_APP(ReaderApp);
+#endif

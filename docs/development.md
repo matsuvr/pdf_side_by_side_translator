@@ -20,19 +20,19 @@ ctest --preset macos-arm64-release
 python scripts/package.py --target macos-arm64-release --model-file /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
 ```
 
-Windowsではtargetを `windows-x64-release` に変更し、P4X86モデルを用意します。
-0.3.0のWindows配布用ビルドでは、先に `python scripts/bootstrap_image_reading.py` を実行し、configureに `-DOPT_PAGE_IMAGE_READING=ON -DOPT_OCR_ASAN=OFF` を指定します。
+Windowsではtargetを `windows-x64-release` に変更し、下記の専用モデルを用意します。
+WindowsとMacの通常ビルドではOCRを有効にします。既存の依存にOCR用のソースとモデルを追加するには `python scripts/bootstrap_image_reading.py` を実行します。
 他に `windows-x64-debug`、`macos-arm64-debug` があります。
 Debugには対応するDebug依存を別に構築します。
 
-bootstrapは公式の固定ソースを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
-Windowsの推論エンジンはRustの静的ライブラリです。wxWidgets、SQLite、macOSのllama.cppはCMakeで静的に構築します。
+bootstrapは公式の固定ソースとOCRモデルを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
+wxWidgets・SQLiteとアプリを静的に構築します。Macのllama.cpp/MetalもCMakeで構築します。Windowsの推論はRust staticlibです。
 通常のCMake configure/buildはネットへ依存を取りに行きません。PDFiumと同じ固定LLVM compiler/linkerを使います。
 presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除外します。
 依存revision、モデルfixture、フォントhashは[dependency lock](deps/third_party.lock.json)にあります。
 macOS は `.work/src/llama.cpp` の公式コミットをそのまま使い、llama.cpp 標準の Metal バックエンドとシェーダーを実行ファイルに組み込みます。Apple Silicon では Metal を優先し、利用できない場合は上流の CPU バックエンドを使います。
 
-Windows x64 では PLaMo x86 S4 v7 専用 Rust 0.4.0 を静的リンクします。Rust 1.100.0（MSVC x64）をインストールし、従来どおり bootstrap を実行してください。bootstrap は Cargo.lock に固定された依存を開発時に取得します。CMake は `cargo build --locked --offline --lib` を実行し、モデル推論のための別プロセスやDLLを追加しません。macOS の CMake は従来の llama.cpp のみを使います。詳細は [Windows Rust 実験](plamo-rust-experiment.md) を参照してください。
+Windows x64 では PLaMo x86 S4 v7 専用 Rust 0.4.0 を静的リンクします。Rust 1.100.0（MSVC x64）をインストールし、従来どおり bootstrap を実行してください。bootstrap は Cargo.lock に固定された依存を開発時に取得します。CMake は `cargo build --locked --offline --lib` を実行し、モデル推論のための別プロセスやDLLを追加しません。macOS の CMake は従来の llama.cpp のみを使います。[Windows版の推論エンジン](windows-rust-engine.md)
 
 packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
 Releaseのpackageは、選択したOS用のモデルを固定SHA-256と照合し、アプリ・モデル・README・PLaMoライセンスを含むZIPを作ります。
@@ -114,7 +114,7 @@ ASan/UBSanを利用できるホストでは、関連するC++試験を両sanitiz
 Releaseでも試験を実行します。検証条件を `assert()` だけに置かず、`NDEBUG` が有効でも失敗が報告される形を維持します。
 メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。
 
-`.github/workflows/security.yml` はレイアウト・検索のASan/UBSan試験とlibFuzzer、セッションI/O・推論配信キューのTSan試験を実行します。固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で個別にも実行できます。
+固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で実行できます。
 
 ## 製品紹介・マニュアルのサイト
 

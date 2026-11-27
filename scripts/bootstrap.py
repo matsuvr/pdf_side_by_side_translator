@@ -10,6 +10,7 @@ import sys
 import zipfile
 
 from common import ROOT, WORK, TARGETS, checkout, depot_environment, download, lock, run, sha256
+from bootstrap_image_reading import prepare_image_reading
 
 
 def prepare_llama(spec, src, target):
@@ -61,6 +62,7 @@ def main():
     # Record observed hashes separately until reviewed and promoted into the lock.
     observed = {"SQLite": sha256(archive), "NotoSansCJKjp-Regular": sha256(font_path)}
     (WORK / "observed-download-hashes.json").write_text(json.dumps(observed, indent=2) + "\n")
+    prepare_image_reading()
     if args.skip_pdfium:
         return
     checkout(deps["depot_tools"], WORK / "src/depot_tools")

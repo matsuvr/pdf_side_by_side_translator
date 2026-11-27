@@ -5106,7 +5106,7 @@ SQLite 3.54.1 — declaration from the pinned sqlite3.c amalgamation
 
 
 ============================================================================
-Optional Windows page OCR / Tesseract and tessdata_fast
+Page OCR / Tesseract and tessdata_fast
 ============================================================================
 
 --- licenses/Tesseract-Apache-2.0.txt ---
@@ -5316,7 +5316,7 @@ Optional Windows page OCR / Tesseract and tessdata_fast
 
 
 ============================================================================
-Optional Windows page OCR / Leptonica
+Page OCR / Leptonica
 ============================================================================
 
 --- licenses/Leptonica.txt ---
@@ -5349,7 +5349,7 @@ Optional Windows page OCR / Leptonica
 
 
 ============================================================================
-Optional Windows page OCR / CLD2
+Page OCR / CLD2
 ============================================================================
 
 --- licenses/CLD2-Apache-2.0.txt ---

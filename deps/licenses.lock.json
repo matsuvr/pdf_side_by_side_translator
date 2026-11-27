@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "dependency_lock_sha256": "13671d518333e9c00a75b6fd9abe51efd89ab925bef4333028474ffcce95ae57",
-  "notices_sha256": "30b0dc73e0dd6bc8535feec66eb879a81242920cd110370b0c971fdcd143bc16",
+  "notices_sha256": "244f6a9a625100c7fc8333741645340ddb5f963405621bd538a1c685cc6c8729",
   "inputs": [
     {
       "component": "Application original source/resources",
@@ -263,21 +263,21 @@
       "sha256": "d481ef7de8dd9e15f90813a7f8ff4d05e18b9f66720206d89f52d92f7427726f"
     },
     {
-      "component": "Optional Windows page OCR / Tesseract and tessdata_fast",
+      "component": "Page OCR / Tesseract and tessdata_fast",
       "root": "project",
       "path": "licenses/Tesseract-Apache-2.0.txt",
       "encoding": "utf-8-sig",
       "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
     },
     {
-      "component": "Optional Windows page OCR / Leptonica",
+      "component": "Page OCR / Leptonica",
       "root": "project",
       "path": "licenses/Leptonica.txt",
       "encoding": "utf-8-sig",
       "sha256": "4d3065116f182e29760af0c901d5dbb2e1e16c42765dfc24e69b26805e2acb1e"
     },
     {
-      "component": "Optional Windows page OCR / CLD2",
+      "component": "Page OCR / CLD2",
       "root": "project",
       "path": "licenses/CLD2-Apache-2.0.txt",
       "encoding": "utf-8-sig",
