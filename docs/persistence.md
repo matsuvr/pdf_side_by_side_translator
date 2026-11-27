@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # ビューワーのメモリ内状態
 
 現在の仕様は [session-data.md](session-data.md) と [AGENTS.md](../AGENTS.md) を参照してください。

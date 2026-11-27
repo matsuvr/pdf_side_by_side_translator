@@ -1,257 +1,72 @@
-#!/usr/bin/env python3
-"""Package only a clean, matching build; inspect final relocated runtime imports.
-
-Default Mac output is ad-hoc signed. Release signing and notarization use
-identities already configured by the publisher on the packaging machine.
-"""
+"""Rebuild and verify the native release archive on the target OS."""
 import argparse
 import json
-import os
 from pathlib import Path
-import platform
-import plistlib
 import re
-import shutil
 import subprocess
 import tempfile
 import zipfile
+from build import MAC, ROOT, TARGET, PRODUCT, EXE, build, copy_model, stage_reader_files, run
+from common import sha256
 
-from common import ROOT,TARGETS,lock,run,sha256
-from write_build_info import build_info
-from audit_dependencies import audit_macho,audit_pe
-from bootstrap_image_reading import SOURCES as OCR_SOURCES, REVISION as TESSDATA_REVISION
-from image_reading_assets import catalog
-
-MODEL_LICENSE=ROOT/'licenses/PLaMo-Community-ja.txt'
-WINDOWS_MODEL_LICENSE=ROOT/'licenses/PLaMo-BF16-Community-ja.txt'
-
-def model_for_target(target, spec=None):
-    spec=lock() if spec is None else spec
-    return spec['windows_model_fixture' if target.startswith('windows-') else 'model_fixture']
-
-def companion_files(target,model_file):
-    files={MODEL_LICENSE.name:(WINDOWS_MODEL_LICENSE if target.startswith('windows-') else MODEL_LICENSE),'README.md':ROOT/'README.md',
-           'LICENSE':ROOT/'LICENSE','THIRD_PARTY_NOTICES.txt':ROOT/'THIRD_PARTY_NOTICES.txt'}
-    if target.startswith('windows-'):
-        files['Rust-1.100.0-COPYRIGHT-library.html']=ROOT/'licenses/Rust-1.100.0-COPYRIGHT-library.html'
-    if target.endswith('-release'):
-        model=model_for_target(target)
-        path=model_file or ROOT/model['filename']
-        if not path.is_file() or sha256(path)!=model['sha256']:
-            raise RuntimeError('Supply the pinned model for the chosen target with --model-file: '+str(path))
-        files[model['filename']]=path
-    return files
-
-def verify_companions(directory,expected):
-    for name,digest in expected.items():
-        path=directory/name
-        if not path.is_file() or sha256(path)!=digest:
-            raise RuntimeError('Missing or changed package file: '+str(path))
-
-def product():
-    values={}
-    for key,value in re.findall(r'set\((OPT_[A-Z_]+) "([^"]+)"\)',(ROOT/'cmake/Product.cmake').read_text()):values[key]=value
-    return values
-def sanitized(value):
-    if isinstance(value,str):return value.replace(str(ROOT),'${SOURCE_ROOT}')
-    if isinstance(value,list):return [sanitized(x) for x in value]
-    if isinstance(value,dict):return {k:sanitized(v) for k,v in value.items()}
-    return value
-def audit_bundle(bundle,arch):
-    reports=[]
-    for path in sorted(bundle.rglob('*')):
-        if path.is_symlink():raise RuntimeError('Unexpected bundle symlink: '+str(path.relative_to(bundle)))
-        if not path.is_file():continue
-        if path.suffix.lower() in {'.gguf','.p4x86','.safetensors','.py','.dll','.dylib','.metallib'}:raise RuntimeError('Unexpected runtime sidecar: '+path.name)
-        magic=path.read_bytes()[:4]
-        if magic in (b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca'):
-            report=audit_macho(path,arch,'14.0');report['file']=str(path.relative_to(bundle));reports.append(report)
-    if len(reports)!=1:raise RuntimeError('Expected exactly one product Mach-O')
-    if any(r['failures'] for r in reports):raise RuntimeError(json.dumps(reports,indent=2))
-    return reports
-def write_json(path,value):path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-
-def source_sbom(info, pdf):
-    spec = lock()
-    components = []
-    for name, entry in spec['dependencies'].items():
-        if info['target'].startswith('windows-') and name == 'llama.cpp':
-            continue
-        component = {'type': 'file' if name.startswith('Noto') else 'library', 'name': name,
-                     'version': entry.get('version') or entry['revision'],
-                     'externalReferences': [{'type': 'distribution', 'url': entry['url']}]}
-        if 'revision' in entry:
-            component['properties'] = [{'name': 'git:revision', 'value': entry['revision']}]
-        if 'sha256' in entry:
-            component['hashes'] = [{'alg': 'SHA-256', 'content': entry['sha256']}]
-        for patch in spec['patches']:
-            if patch['dependency'] == name and info['target'] in patch['targets']:
-                component['properties'].append({'name': 'git:patched-tree', 'value': patch['tree']})
-        components.append(component)
-    if info['target'].startswith('windows-'):
-        import tomllib
-        cargo_lock = ROOT / 'src/platform/windows/plamo-rs/Cargo.lock'
-        for crate in tomllib.loads(cargo_lock.read_text(encoding='utf-8'))['package']:
-            component = {'type': 'library', 'name': crate['name'], 'version': crate['version']}
-            if 'checksum' in crate:
-                component['hashes'] = [{'alg': 'SHA-256', 'content': crate['checksum']}]
-            components.append(component)
-    if info.get('image_reading'):
-        for name,(url,revision) in OCR_SOURCES.items():
-            components.append({'type':'library','name':name,'version':revision,
-                               'externalReferences':[{'type':'vcs','url':url}]})
-        _, models = catalog()
-        for key, _, _, bundled_sha in models:
-            components.append({'type':'machine-learning-model','name':key+'.traineddata',
-                               'version':TESSDATA_REVISION,'hashes':[{'alg':'SHA-256','content':bundled_sha}]})
-    for path, url, revision in re.findall(r'^([\w./-]+): (https://\S+)@([0-9a-f]{40})\s*$',
-                                          pdf['resolved_dependencies'], re.MULTILINE):
-        if path == 'pdfium':
-            continue
-        components.append({'type': 'library', 'name': path, 'version': revision,
-                           'externalReferences': [{'type': 'vcs', 'url': url}]})
-    if info['target'].endswith('-release'):
-        model = model_for_target(info['target'],spec)
-        components.append({'type': 'machine-learning-model', 'name': model['filename'],
-                           'version': model['revision'], 'hashes': [{'alg': 'SHA-256', 'content': model['sha256']}]})
-    return {'bomFormat': 'CycloneDX', 'specVersion': '1.6', 'version': 1,
-            'metadata': {'component': {'type': 'application', 'name': info['product'], 'version': info['version']},
-                         'lifecycles': [{'phase': 'build'}]}, 'components': components}
-
-def validate_static_windows(build,target):
-    entries=json.loads((build/'compile_commands.json').read_text())
-    expected='MTd' if target.endswith('-debug') else 'MT';count=0
-    for entry in entries:
-        if Path(entry['file']).suffix.lower() not in ('.c','.cc','.cpp','.cxx'):continue
-        flags=re.findall(r'(?:^|\s)[/-](M[DT]d?)(?=\s|$)',entry['command'])
-        if flags!=[expected]:raise RuntimeError('Unexpected CRT flags for '+Path(entry['file']).name+': '+str(flags))
-        count+=1
-    if not count:raise RuntimeError('No CRT compile evidence')
-    archive=build/'plamo-rust/x86_64-pc-windows-msvc/release/plamo3_translate_rs.lib'
-    if not archive.is_file():
-        raise RuntimeError('Missing Rust inference archive')
-    with archive.open('rb') as f:
-        if f.read(8)!=b'!<arch>\n':
-            raise RuntimeError('Invalid Rust static archive')
-    table=subprocess.check_output(['dumpbin','/nologo','/linkermember:1',str(archive)],text=True,errors='replace')
-    for name in ('opt_plamo_open','opt_plamo_close','opt_plamo_tokenize','opt_plamo_generate'):
-        if not re.search(r'\b'+name+r'\b',table):
-            raise RuntimeError('Incomplete Rust C ABI archive: '+name)
-
-
-def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--target',choices=TARGETS,required=True)
-    parser.add_argument('--model-file',type=Path,help='Pinned model for the chosen OS to include in a Release ZIP')
-    parser.add_argument('--windows-cert',help='SHA-1 thumbprint of an Authenticode signing certificate')
-    parser.add_argument('--mac-identity',help='Developer ID Application identity in the signing keychain')
-    parser.add_argument('--notary-profile',help='Submit the signed Mac app using this notarytool keychain profile')
-    args=parser.parse_args()
-    target=args.target;mac=target.startswith('macos-');values=product();version=values['OPT_VERSION'];name=values['OPT_PRODUCT_NAME'];exe=values['OPT_EXECUTABLE_NAME']
-    if mac!=(platform.system()=='Darwin'):raise SystemExit('Package on the target operating system')
-    if args.windows_cert and (mac or not re.fullmatch(r'[0-9a-fA-F]{40}',args.windows_cert)):
-        parser.error('--windows-cert requires a Windows target and a certificate thumbprint')
-    if (args.mac_identity or args.notary_profile) and not mac:parser.error('Apple signing requires a macOS target')
-    if args.notary_profile and not args.mac_identity:parser.error('--notary-profile requires --mac-identity')
-    signature=('Developer ID' if args.mac_identity else 'ad-hoc') if mac else ('Authenticode' if args.windows_cert else 'unsigned')
-    build=ROOT/'build'/target
-    info_file=build/'BUILD-INFO.json'
-    recorded=json.loads(info_file.read_text()) if info_file.is_file() else {}
-    info=build_info(target,version,recorded.get('image_reading',False))
-    if info['dirty']:raise SystemExit('Commit reviewed source before packaging; working tree is modified')
-    if recorded!=info:
-        raise SystemExit('Build identity is stale. Run cmake --build --preset '+target)
-    pdf=json.loads((ROOT/'.work/pdfium'/target/'pdfium-build-manifest.json').read_text())
-    if pdf['revision']!=lock()['dependencies']['PDFium']['revision'] or pdf['target']!=target:raise SystemExit('PDFium manifest differs from lock/target')
-    run([os.sys.executable,ROOT/'scripts/collect_notices.py','--check'])
-    binary=build/(name+'.app')/'Contents/MacOS'/name if mac else build/(exe+'.exe')
-    if ('OPT_BUILD_INFO:'+info['identity_sha256']).encode() not in binary.read_bytes():raise SystemExit('Executable does not contain the matching build identity')
-    companions=companion_files(target,args.model_file)
-    companion_hashes={name:sha256(path) for name,path in companions.items()}
-    dist=ROOT/'dist'/target;dist.mkdir(parents=True,exist_ok=True)
-    signing_variant='-notarized' if args.notary_profile else '-signed' if args.windows_cert or args.mac_identity else ''
-    unique=dist/(info['identity_sha256'][:12]+signing_variant)
-    if unique.exists():
-        verify_companions(unique,companion_hashes)
-        manifest=json.loads((unique/'package-manifest.json').read_text())
-        if (manifest.get('signing_identity')!=(args.windows_cert or args.mac_identity) or
-                manifest.get('signature')!=signature or manifest.get('notarized')!=bool(args.notary_profile)):
-            raise SystemExit('Existing package signing identity differs from the requested identity')
-        artifact=unique/manifest['artifact']
-        if artifact.parent!=unique or manifest.get('identity_sha256')!=info['identity_sha256'] or sha256(artifact)!=manifest['sha256']:
-            raise SystemExit('Existing package was changed; inspect it before replacing')
-        if mac:
-            audit_bundle(unique/(name+'.app'),'arm64' if 'arm64' in target else 'x86_64')
-            run(['codesign','--verify','--deep','--strict',unique/(name+'.app')])
-            if args.notary_profile:run(['xcrun','stapler','validate',unique/(name+'.app')])
-        elif audit_pe(unique/(exe+'.exe'))['failures']:raise SystemExit('Existing executable dependency audit failed')
-        elif args.windows_cert:run(['signtool','verify','/pa',unique/(exe+'.exe')])
-        print('Verified existing package',artifact);return
-    with tempfile.TemporaryDirectory(prefix='.package-',dir=dist) as temporary:
-        stage=Path(temporary);payload=stage/'payload';payload.mkdir()
-        # Publisher-only evidence must not become runtime sidecars in the ZIP.
-        evidence=stage/'evidence';evidence.mkdir()
-        for filename,path in companions.items():shutil.copyfile(path,payload/filename)
-        sbom=source_sbom(info,pdf)
-        write_json(evidence/'SBOM.cdx.json',sbom)
-        if mac:
-            bundle=payload/(name+'.app');shutil.copytree(build/(name+'.app'),bundle)
-            resources=bundle/'Contents/Resources'
-            shutil.copyfile(ROOT/'resources/help-ja.txt',resources/'HELP-ja.txt')
-            shutil.copyfile(ROOT/'THIRD_PARTY_NOTICES.txt',resources/'LICENSES.txt')
-            write_json(evidence/'BUILD-INFO.json',{**info,'signature':signature})
-            write_json(evidence/'DEPENDENCIES.json',sanitized(pdf))
-            with (bundle/'Contents/Info.plist').open('rb') as source:plist=plistlib.load(source)
-            if plist.get('CFBundleIdentifier')!=values['OPT_BUNDLE_ID'] or plist.get('CFBundleShortVersionString')!=version:raise RuntimeError('Bundle identity/version mismatch')
-            if sha256(resources/'NotoSansCJKjp-Regular.otf')!=lock()['dependencies']['NotoSansCJKjp-Regular']['sha256']:raise RuntimeError('Bundled font mismatch')
-            if not (resources/'app-icon.icns').is_file():raise RuntimeError('Product icon missing')
-            arch='arm64' if 'arm64' in target else 'x86_64';reports=audit_bundle(bundle,arch)
-            run(['codesign','--force','--options','runtime','--sign',args.mac_identity or '-',
-                 '--timestamp' if args.mac_identity else '--timestamp=none',bundle])
+def package(args):
+    if args.target != TARGET + "-release":
+        raise ValueError("Package on the target operating system.")
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
+        raise ValueError("Commit reviewed changes before creating a release archive.")
+    if (args.mac_identity or args.notary_profile) and not MAC:
+        raise ValueError("Apple signing requires a Mac.")
+    if args.notary_profile and not args.mac_identity:
+        raise ValueError("Notarization requires --mac-identity.")
+    if args.windows_cert and (MAC or not re.fullmatch(r"[A-Fa-f0-9]{40}", args.windows_cert)):
+        raise ValueError("Expected a Windows certificate thumbprint.")
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    dist = ROOT / "dist" / args.target / revision[:12]
+    dist.mkdir(parents=True, exist_ok=True)
+    destination = dist / ("offline-pdf-translator-" + args.target + ".zip")
+    if destination.exists(): raise FileExistsError(destination)
+    with tempfile.TemporaryDirectory(dir=dist) as temp:
+        stage = Path(temp) / "payload"
+        build(stage)
+        copy_model(args.model_file, stage)
+        stage_reader_files(stage)
+        (stage / "BUILD-INFO.json").write_text(json.dumps({"commit": revision, "target": args.target,
+            "cargo_lock_sha256": sha256(ROOT / "Cargo.lock")}, indent=2) + "\n")
+        bundle = stage / (PRODUCT + ".app")
+        if MAC and args.mac_identity:
+            for item in [bundle / "Contents/Frameworks/libpdf_reader.dylib", bundle]:
+                run(["codesign", "--force", "--options", "runtime", "--timestamp", "--sign", args.mac_identity, item])
             if args.notary_profile:
-                submission=stage/'notary.zip'
-                run(['ditto','-c','-k','--keepParent',bundle,submission])
-                result=json.loads(run(['xcrun','notarytool','submit',submission,'--keychain-profile',
-                                       args.notary_profile,'--wait','--output-format','json'],capture=True))
-                if result.get('status')!='Accepted':raise RuntimeError('Apple notarization was not accepted')
-                run(['xcrun','stapler','staple',bundle])
-            run(['codesign','--verify','--deep','--strict','--verbose=2',bundle])
+                submission = Path(temp) / "notary.zip"
+                run(["ditto", "-c", "-k", "--keepParent", bundle, submission])
+                run(["xcrun", "notarytool", "submit", submission, "--keychain-profile", args.notary_profile, "--wait"])
+                run(["xcrun", "stapler", "staple", bundle])
+        if args.windows_cert:
+            for binary in [stage / (EXE + ".exe"), stage / "pdf_reader.dll"]:
+                run(["signtool", "sign", "/sha1", args.windows_cert, "/fd", "SHA256", binary])
+                run(["signtool", "verify", "/pa", binary])
+        archive = Path(temp) / "release.zip"
+        restored = Path(temp) / "restored"
+        if MAC:
+            run(["ditto", "-c", "-k", stage, archive])
+            run(["ditto", "-x", "-k", archive, restored])
+            run(["codesign", "--verify", "--deep", "--strict", restored / bundle.name])
         else:
-            validate_static_windows(build,target)
-            staged_binary=payload/(exe+'.exe');shutil.copyfile(binary,staged_binary)
-            if args.windows_cert:
-                run(['signtool','sign','/sha1',args.windows_cert,'/fd','SHA256',staged_binary])
-            reports=[audit_pe(staged_binary)]
-            if reports[0]['failures']:raise RuntimeError(json.dumps(reports,indent=2))
-            reports[0]['file']=staged_binary.name
-            write_json(evidence/'BUILD-INFO.json',info);write_json(evidence/'DEPENDENCIES.json',sanitized(pdf))
-        verify_companions(payload,companion_hashes)
-        archive_name=f'{exe}-{version}-{target}.zip';archive=stage/archive_name
-        extracted=stage/'extracted'
-        if mac:
-            run(['ditto','-c','-k','--sequesterRsrc',payload,archive])
-            run(['ditto','-x','-k',archive,extracted])
-            restored=extracted/bundle.name;run(['codesign','--verify','--deep','--strict','--verbose=2',restored]);audit_bundle(restored,arch)
-            if args.notary_profile:run(['xcrun','stapler','validate',restored])
-            restored_binary=restored/'Contents/MacOS'/name
-        else:
-            with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as output:
-                for path in sorted(payload.iterdir()):output.write(path,path.name)
-            with zipfile.ZipFile(archive) as output:output.extractall(extracted)
-            restored_binary=extracted/binary.name
-            if audit_pe(restored_binary)['failures']:raise RuntimeError('Extracted executable dependency audit failed')
-            if args.windows_cert:run(['signtool','verify','/pa',restored_binary])
-        verify_companions(extracted,companion_hashes)
-        packaged_binary=bundle/'Contents/MacOS'/name if mac else staged_binary
-        if sha256(restored_binary)!=sha256(packaged_binary):raise RuntimeError('ZIP round-trip changed executable')
-        shutil.move(str(archive),str(payload/archive_name));artifact=payload/archive_name
-        manifest={**info,'artifact':artifact.name,'size':artifact.stat().st_size,'sha256':sha256(artifact),
-          'files':{name:{'sha256':companion_hashes[name],'size':path.stat().st_size} for name,path in companions.items()},
-          'runtime_audit':reports,'model_included':target.endswith('-release'),'clean_machine_execution':'not implied by packaging',
-          'signature':signature,'signing_identity':args.windows_cert or args.mac_identity,'notarized':bool(args.notary_profile)}
-        # Only after archiving: keep build/audit evidence alongside the ZIP.
-        for path in evidence.iterdir():shutil.move(str(path),str(payload/path.name))
-        write_json(payload/'package-manifest.json',manifest)
-        (payload/(artifact.name+'.sha256')).write_text(manifest['sha256']+'  '+artifact.name+'\n')
-        shutil.move(str(payload),str(unique))
-    print('Created',unique/manifest['artifact']);print('SHA-256',manifest['sha256'])
-if __name__=='__main__':main()
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+                for file in stage.rglob("*"):
+                    if file.is_file(): z.write(file, file.relative_to(stage))
+            with zipfile.ZipFile(archive) as z: z.extractall(restored)
+        for file in stage.rglob("*"):
+            if file.is_file() and sha256(file) != sha256(restored / file.relative_to(stage)):
+                raise RuntimeError("Archive verification failed: " + file.name)
+        archive.rename(destination)
+    print(destination)
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--target", default=TARGET + "-release")
+    p.add_argument("--model-file", required=True, type=Path)
+    p.add_argument("--windows-cert")
+    p.add_argument("--mac-identity")
+    p.add_argument("--notary-profile")
+    package(p.parse_args())

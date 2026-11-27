@@ -1,0 +1,15 @@
+[package]
+name = "plamo3-translate-rs"
+version = "0.4.0"
+edition = "2024"
+description = "CPU-only PLaMo 3 Translate 0.8B P4X86 v7 inference"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+force-avx2 = [] # developer test: exercise the path without AVX512
+
+[dependencies]
+rayon = "1.10"
+serde_json = "1"

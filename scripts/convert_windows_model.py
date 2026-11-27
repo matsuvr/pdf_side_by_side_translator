@@ -10,7 +10,7 @@ def main():
     ap.add_argument('--source-dir',type=Path,required=True)
     ap.add_argument('--output',type=Path,required=True)
     a=ap.parse_args()
-    spec=lock()['windows_model_fixture']
+    spec=lock()['windows']
     src=a.source_dir.resolve()
     dst=a.output.resolve()
     if dst.exists():
@@ -19,7 +19,7 @@ def main():
         p=src/name
         if not p.is_file() or sha256(p)!=digest:
             raise SystemExit('Missing or mismatched pinned source: '+name)
-    crate=ROOT/'src/platform/windows/plamo-rs'
+    crate=ROOT/'crates/plamo'
     run(['cargo','+1.100.0','run','--release','--locked','--offline','--example','convert_x86','--',src,dst],cwd=crate)
     if dst.stat().st_size!=spec['bytes'] or sha256(dst)!=spec['sha256']:
         raise SystemExit('Converted file differs from the pinned v7 bytes. Do not package it.')

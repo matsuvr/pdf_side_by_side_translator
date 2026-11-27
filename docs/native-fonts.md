@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # Native font and Unicode evidence
 
 The PDF worker installs a small adapter through the pinned public

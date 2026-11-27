@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # セッションデータと安全性
 
 この仕様は、安全性監査の [#1–#10](https://github.com/matsuvr/pdf_side_by_side_translator/issues/11) と追加検査の [#14–#17](implementation-status.md#privacy-and-responsiveness-follow-up) に対応する変更です。

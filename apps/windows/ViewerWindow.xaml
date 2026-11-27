@@ -1,0 +1,37 @@
+<Window x:Class="OfflinePdf.ViewerWindow" Title="Offline PDF Translator"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <Grid x:Name="Root" RowDefinitions="Auto,*,Auto" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+  <StackPanel Orientation="Horizontal" Spacing="8" Margin="12,8">
+   <Button Content="PDFを開く" Click="Pick"/>
+   <Button x:Name="Previous" Content="‹" AutomationProperties.Name="前のページ" Click="Prev" IsEnabled="False"/>
+   <TextBox x:Name="PageNumber" Width="72" AutomationProperties.Name="ページ番号" KeyDown="PageEntered" IsEnabled="False" TextAlignment="Center"/>
+   <TextBlock x:Name="PageCount" VerticalAlignment="Center"/>
+   <Button x:Name="Next" Content="›" AutomationProperties.Name="次のページ" Click="Forward" IsEnabled="False"/>
+   <Button x:Name="FindButton" Content="検索" Click="ShowFind" IsEnabled="False"/>
+   <TextBox x:Name="Query" Width="180" PlaceholderText="PDF内を検索" Visibility="Collapsed" KeyDown="SearchEntered"/>
+  </StackPanel>
+  <Grid Grid.Row="1" ColumnDefinitions="*,1,*">
+   <Grid RowDefinitions="Auto,*">
+    <StackPanel Orientation="Horizontal" Margin="16,0,8,6" Spacing="12">
+     <TextBlock Text="原文" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center"/>
+     <ToggleButton x:Name="SourceMode" Content="本文" AutomationProperties.Name="選択できる原文を表示" Click="ToggleSource" IsEnabled="False"/>
+    </StackPanel>
+    <ScrollViewer x:Name="PaperScroll" Grid.Row="1" ZoomMode="Enabled" MinZoomFactor="0.5" MaxZoomFactor="4" HorizontalScrollBarVisibility="Auto" Background="{ThemeResource LayerFillColorDefaultBrush}">
+     <Image x:Name="Paper" Stretch="Uniform" VerticalAlignment="Top" AutomationProperties.Name="現在のPDFページ"/>
+    </ScrollViewer>
+    <ScrollViewer x:Name="SourceScroll" Grid.Row="1" Visibility="Collapsed" Padding="16">
+     <TextBlock x:Name="Source" TextWrapping="Wrap" IsTextSelectionEnabled="True" FontSize="16"/>
+    </ScrollViewer>
+   </Grid>
+   <Border Grid.Column="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+   <Grid Grid.Column="2" RowDefinitions="Auto,*">
+    <TextBlock Text="日本語訳" Margin="16,4,16,10" Style="{ThemeResource SubtitleTextBlockStyle}"/>
+    <ScrollViewer x:Name="TranslationScroll" Grid.Row="1" Padding="16,4,16,16">
+     <TextBlock x:Name="Translation" TextWrapping="Wrap" IsTextSelectionEnabled="True" Style="{ThemeResource BodyTextBlockStyle}"/>
+    </ScrollViewer>
+   </Grid>
+  </Grid>
+  <TextBlock Grid.Row="2" x:Name="Status" Text="PDFを開いてください。" Margin="16,6" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+ </Grid>
+</Window>

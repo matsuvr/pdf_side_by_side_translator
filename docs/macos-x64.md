@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 > Historical validation through v0.1.0. Current behavior and release checks: [implementation status](implementation-status.md).
 
 # macOS x86_64 cross-build and Rosetta evidence

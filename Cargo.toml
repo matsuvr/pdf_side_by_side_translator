@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/reader", "crates/plamo"]
+default-members = ["crates/reader"]
+resolver = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # M0 evidence — macOS arm64
 
 Validation date: 2026-11-10. This is a dependency probe, not the finished product.

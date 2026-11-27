@@ -154,6 +154,18 @@ def main():
     transformed = write_transformed_text_pdf(root / "P13-text-transforms.pdf")
     expected["P13-text-transforms.pdf"] = {"page_count": 20, "ordered_markers": transformed,
                                          "same_text_as_first_page": True}
+    # Each painted Roman glyph cluster is tagged with its logical text.
+    # The Arabic word on the right is read first; the clipped line is invisible.
+    content = b"""BT /F1 16 Tf 48 720 Td /Span <</ActualText <FEFF53E3>>> BDC (mouth) Tj EMC ET
+BT /F1 16 Tf 48 680 Td /Span <</ActualText <FEFF0628064A062A>>> BDC (abc) Tj EMC
+( ) Tj /Span <</ActualText <FEFF062806270628>>> BDC (def) Tj EMC ET
+q 20 20 40 40 re W n BT /F1 16 Tf 48 600 Td (HIDDEN) Tj ET Q"""
+    objects_pdf(root / "P14-logical-text.pdf", [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        stream(content), b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"])
+    expected["P14-logical-text.pdf"] = {"contains": ["口", "باب بيت"], "excludes": ["mouth", "abc", "HIDDEN"]}
     (root / "pdf-ground-truth.json").write_text(json.dumps(expected, indent=2) + "\n")
 
 

@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # Windows CPU 翻訳の検証（2026-11-23）
 
 llama.cpp を公式 `master` の `8d60873dfb8619f2b5ed31adfbab07cccb40db5c` に更新した。`plamo3translate-tune` の `e300919cc` 向けパッチ5本を、Windows x64 の単一実行ファイルとアプリのデコーダーに合わせて移植した。[上流コミット](https://github.com/ggml-org/llama.cpp/commit/8d60873dfb8619f2b5ed31adfbab07cccb40db5c)

@@ -1,131 +1,46 @@
-# 開発
+# ネイティブ版のビルドとテスト
 
-## 開発者向けビルド
+開発時に依存パッケージを取得します。実行時のPDF処理・OCR・推論はオフラインです。ビルドは各OSでリポジトリのルートから行います。Python 3.9以降、Git、rustupが必要です。Rustは `rust-toolchain.toml` に固定しています。
 
-Pythonは依存取得・ビルド補助にだけ使います。製品へ同梱しません。
-Python 3.11以降、Git、CMake、NinjaとOSの開発SDKを用意します。
-Macで検証した環境はXcode 27.2 / SDK 27.2です。
-WindowsはVisual StudioのC++ Build ToolsとWindows SDKを用意し、対応する開発者用shellで実行します。
-PDFiumの固定版が要求するSDK/toolchain条件に従います。
+## Windows x64
 
-```sh
-python3 -m venv .tools/venv
-# Mac: source .tools/venv/bin/activate
-# Windows PowerShell: .tools\venv\Scripts\Activate.ps1
-python -m pip install -r deps/build-tools.txt
-python scripts/bootstrap.py --target macos-arm64-release
-cmake --preset macos-arm64-release
-cmake --build --preset macos-arm64-release
-ctest --preset macos-arm64-release
-python scripts/package.py --target macos-arm64-release --model-file /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
-```
-
-Windowsではtargetを `windows-x64-release` に変更し、下記の専用モデルを用意します。
-WindowsとMacの通常ビルドではOCRを有効にします。既存の依存にOCR用のソースとモデルを追加するには `python scripts/bootstrap_image_reading.py` を実行します。
-他に `windows-x64-debug`、`macos-arm64-debug` があります。
-Debugには対応するDebug依存を別に構築します。
-
-bootstrapは公式の固定ソースとOCRモデルを `.work/` へ取得し、PDFiumをGN/Ninjaで構築します。
-wxWidgets・SQLiteとアプリを静的に構築します。Macのllama.cpp/MetalもCMakeで構築します。Windowsの推論はRust staticlibです。
-通常のCMake configure/buildはネットへ依存を取りに行きません。PDFiumと同じ固定LLVM compiler/linkerを使います。
-presetは開発機固有の `CPATH` / `LIBRARY_PATH` 等を子ビルドから除外します。
-依存revision、モデルfixture、フォントhashは[dependency lock](deps/third_party.lock.json)にあります。
-macOS は `.work/src/llama.cpp` の公式コミットをそのまま使い、llama.cpp 標準の Metal バックエンドとシェーダーを実行ファイルに組み込みます。Apple Silicon では Metal を優先し、利用できない場合は上流の CPU バックエンドを使います。
-
-Windows x64 では PLaMo x86 S4 v7 専用 Rust 0.4.0 を静的リンクします。Rust 1.100.0（MSVC x64）をインストールし、従来どおり bootstrap を実行してください。bootstrap は Cargo.lock に固定された依存を開発時に取得します。CMake は `cargo build --locked --offline --lib` を実行し、モデル推論のための別プロセスやDLLを追加しません。macOS の CMake は従来の llama.cpp のみを使います。[Windows版の推論エンジン](windows-rust-engine.md)
-
-packageは、コミット済みのcleanなソースと一致するbuild identityを持つ実行ファイルだけを受け付けます。
-Releaseのpackageは、選択したOS用のモデルを固定SHA-256と照合し、アプリ・モデル・README・PLaMoライセンスを含むZIPを作ります。
-最終Mach-O / PEの通常・delay importを検査し、Macは署名後のZIPを再展開して再検査します。
-生成物とhash・依存検査・ソース識別情報は `dist/<target>/` 以下へ保存します。
-製品の起動にREADME、Python、ビルド用manifestや個別ライブラリの配布は不要です。
-
-## Windows S4 v7 のモデル準備
-
-配布された v7 ファイルを利用するか、[固定の元モデル](https://huggingface.co/pfnet/plamo-3-translate-0.8b/tree/c5a33c561bc6a4fbac38c3460bbb384e15c0b231)の
-`model.safetensors`、`config.json`、`tokenizer.jsonl`を開発用フォルダーに置き、bootstrap後に変換します。
-入力3ファイルと変換結果をそれぞれ固定SHA-256で検証します。変換は開発時だけ実行し、モデルファイルをGitへコミットしません。
+Visual StudioのMSVC x64ビルドツール、Windows SDK、.NET 8以降のSDKを使用します。WinUIと.NETランタイムはビルド時に配布フォルダーへ配置します。
 
 ```powershell
-rustup toolchain install 1.100.0 --profile minimal
-rustup target add --toolchain 1.100.0 x86_64-pc-windows-msvc
-python scripts/bootstrap.py --target windows-x64-release
-python scripts/convert_windows_model.py --source-dir C:/models/pfnet-bf16 --output C:/models/plamo3-translate-0.8b-x86-s4tile-v7.p4x86
-cmake --preset windows-x64-release
-cmake --build --preset windows-x64-release
-ctest --preset windows-x64-release
-python scripts/package.py --target windows-x64-release --model-file C:/models/plamo3-translate-0.8b-x86-s4tile-v7.p4x86
+python scripts/build.py --model-file G:\Models\plamo3-translate-0.8b-x86-s4tile-v7.p4x86
+.\build\native\windows-x64\offline-pdf-translator.exe
 ```
 
-モデルのファイル名・SHA-256・ライセンスは `deps/third_party.lock.json` の `windows_model_fixture` で管理します。
-macOS向けには従来どおり `model_fixture` の公式GGUFを使用します。配布は元モデルの利用条件に従います。
+`--model-file` は開発時に検証済みモデルを配置するための引数です。省略するとアプリのみをビルドします。元のBF16から変換する場合は `scripts/convert_windows_model.py --help` を参照してください。
 
-## 試験と構造
+```powershell
+$env:PDF_READER_TEST_MODEL = (Resolve-Path build/native/windows-x64/*.p4x86).Path
+$env:OPT_P4X86_TEST_MODEL = $env:PDF_READER_TEST_MODEL
+cargo test --locked --release --workspace -- --include-ignored
+powershell -NoProfile -File tests/native/WindowsViewerTest.ps1 -Exe build/native/windows-x64/offline-pdf-translator.exe
+```
+
+## macOS / Apple Silicon
+
+XcodeコマンドラインツールとCMakeが必要です。ビルドスクリプトが固定リビジョンのllama.cppを `.work` に取得し、Metalライブラリを埋め込みます。Rust側のC APIは同じチェックアウトのヘッダーから生成します。
 
 ```sh
-# 実ネイティブ長文試験プログラムも構築する場合
-cmake --preset macos-arm64-release -DOPT_BUILD_GUI_PROBE=ON
-cmake --build --preset macos-arm64-release
-build/macos-arm64-release/native_text_test.app/Contents/MacOS/native_text_test
+python3 scripts/build.py --model-file "$HOME/Models/plamo-3-translate-0.8b-Q4_K_M.gguf"
+open "build/native/macos-arm64/Offline PDF Translator.app"
+export MACOSX_DEPLOYMENT_TARGET=14.0
+export PDF_READER_TEST_MODEL="$PWD/build/native/macos-arm64/plamo-3-translate-0.8b-Q4_K_M.gguf"
+cargo test --locked --release -p pdf-reader -- --include-ignored
 ```
 
-このネイティブ試験は、フォーカスを持てるデスクトップsessionで実行します。
-`OPT_BUILD_GUI_PROBE=ON` のときはネイティブ試験をCTestにも登録します。実モデル試験には別途OS用のローカルモデルを指定します。
-fixtureはこのプロジェクトのために新規作成したPDFです。フォント内蔵のUnicode fixtureの再生成だけは
-`deps/fixture-test-tools.txt` の開発用依存を使います。
-公式tokenizer比較fixtureの生成手順と固定版は[翻訳の記録](docs/translation.md)を参照してください。
-
-- `src/pdf/`: PDFium専用worker、段階的tile描画、layoutと原文mapping
-- `src/inference/`: 推論専用worker、PFML3、実token長に基づく分割
-- `src/translation/`: page attempt、再開・ページ単位の翻訳
-- `src/storage/`: I/O専用worker、メモリ内state/cache、同一open objectのhash。ディスクへの書込は行わない
-- `src/platform/`: native path・font・IME・text viewportの小さなOS差分
-- `tests/`: 所有権・競合・cache・Unicode・大判PDF・実モデルの試験
-
-
-## セッションデータの回帰試験
-
-文書データの自動永続化は行いません。[現在の仕様](session-data.md)を参照してください。
-`store_test` はSQLiteの割当失敗を注入し、構築途中の例外後に割当量が元に戻ることも確認します。
-`io_service_test` はメモリ内の状態、ファイルを変更しないfingerprint計算、読書位置の復元、キューの上限、作業ファイルを作らないことを確認します。
-`native_text_test` は実際の読み取り専用コントロールで選択とコピーができ、入力・貼り付け・切り取り・削除・Undoで本文を変更できないことを確認します。Windowsではネイティブメッセージによる変更操作も検査します。
-`file_snapshot_test` はFIFO・ディレクトリ・デバイスの拒否と通常ファイルの別名を確認します。FIFO試験自体にもwatchdogを設けています。
-`layout_test` は両方向の検索結果を従来の意味と照合し、反復文字列と前処理・探索中のキャンセルも確認します。
-`pdf_async_test` はキャンセルした検索の後に新しい検索と描画を続けられることを確認します。
-`pdf_page_failure_test` は1ページ目だけ壊れたPDFでも文書を開き、次のページを表示できることを確認します。
-
-layoutと安全なファイルreadの単体試験はPDFiumなしでも構築できます。
-PDFiumを使う統合試験は、固定版の依存を用意した通常のpresetで実行してください。
-実モデル試験は `inference_probe` にlockと一致するOS用モデルを渡して行い（準備処理のみは末尾に `--prepare-only` を追加）、長大入力の容量判定・キャンセルとPFML3の参照token列も確認します。
-推論スレッド数は既定で `min(8, hw - 1)` です。検証目的で `OPT_INFERENCE_THREADS` を1以上の値に設定すると、利用可能な論理CPU数の範囲で上書きできます。設定ファイルや保存データは作りません。
-
-生成中のモデル変更は、次の専用試験で確認します。
+SwiftUIのウィンドウから、訳文の表示・選択・標準フォント・ページ移動・終了処理を確認するテストは次のコマンドで実行します。テスト実行ファイルもモデルの隣に置きます。
 
 ```sh
-build/macos-arm64-release/model_input_change_test /absolute/path/to/plamo-3-translate-0.8b-Q4_K_M.gguf
-# Windows: build/windows-x64-release/model_input_change_test.exe <P4X86の絶対パス>
+out="$PWD/build/native/macos-arm64"
+lib="$out/Offline PDF Translator.app/Contents/Frameworks"
+swiftc -swift-version 5 -parse-as-library -DVIEWER_UI_TEST -target arm64-apple-macosx14.0 \
+  -I crates/reader/include -L "$lib" -lpdf_reader -Xlinker -rpath -Xlinker "$lib" \
+  apps/macos/Viewer.swift tests/native/MacViewerTest.swift -o "$out/mac-viewer-test"
+"$out/mac-viewer-test" "$PWD/tests/fixtures/P01-simple.pdf"
 ```
 
-この試験は専用の一時ディレクトリへモデルをコピーし、最初の差分配信時にそのコピーだけを切り詰めようとします。
-Windowsでは書き込みが拒否されて翻訳が続き、モデルを閉じた後に書き込めることを確認します。macOSでは変更を検出して部分訳を保持し、変更済みモデルの再利用を拒否することを検査します。
-製品アプリにモデルのコピー処理を追加するものではありません。
-
-ASan/UBSanを利用できるホストでは、関連するC++試験を両sanitizer付きで実行します。
-Releaseでも試験を実行します。検証条件を `assert()` だけに置かず、`NDEBUG` が有効でも失敗が報告される形を維持します。
-メモリ検査と通常のCTest結果は、Windows/macOSのネイティブGUI・Metal・最終配布物の検証と区別して記録します。
-
-固定依存のアドバイザリ照合は `python scripts/check_advisories.py` で実行できます。
-
-## 製品紹介・マニュアルのサイト
-
-GitHub Pagesの公開元は `main` ブランチの `/docs` です。`index.html` が製品紹介、`manual.html` が利用者向けマニュアル、`assets/` が共通CSSとアプリアイコンです。`.nojekyll` により静的ファイルをそのまま配信します。ビルドや外部JavaScript・フォントは不要です。
-
-ローカルで表示を確認するには、リポジトリのルートから次を実行します。
-
-```sh
-python -m http.server 8765 --bind 127.0.0.1 --directory docs
-```
-
-`http://127.0.0.1:8765/` と `/manual.html` を確認します。公開前にPC・スマートフォン幅での表示、相互リンク、目次、画像、リリースページへの導線を確認してください。機能・メニュー名・対応OS・配布ファイル名は現行ソースとリリース情報に合わせます。紹介ページの対訳例は説明用の文章であり、実画面や実モデルの出力ではありません。
-
-ダウンロードの導線はリリース一覧（`https://github.com/matsuvr/pdf_side_by_side_translator/releases`）へ統一し、版やタグを固定したURL・ファイル名をページへ書かないでください。新しい版を公開するたびにサイトを直さなくて済むようにします。ZIP名はAssets欄の説明としてだけ触れます。
+モデル不要の回帰テストには `cargo test --locked --release -p pdf-reader` を使います。Macの初回は先に `python3 scripts/prepare_llama.py` を実行してください。ビルド、fixture生成、署名、ZIP作成はすべて開発マシンで行います。

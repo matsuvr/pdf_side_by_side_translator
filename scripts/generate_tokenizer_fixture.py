@@ -37,7 +37,7 @@ def translation_vector(tokenizer, source, form):
 
 
 def main():
-    spec = lock()["model_fixture"]
+    spec = lock()["macos"]
     revision = spec["tokenizer_revision"]
     base = "https://huggingface.co/" + spec["tokenizer_repository"] + "/resolve/" + revision + "/"
     local = WORK / "reference-tokenizer"

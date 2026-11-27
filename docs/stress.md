@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # PDF stress and delivery evidence
 
 The original fixtures now cover P01–P12 from DESIGN.md. `generate_fixtures.py`

@@ -1,125 +1,67 @@
-#!/usr/bin/env python3
-"""Collect pinned dependency notices with canonical LF line endings.
-
---check detects source/notice drift while allowing Git's Windows CRLF checkout.
-
-The set follows the PDFium GN closure and the wx core/base + llama static link
-closure, rather than every downloaded build tool. Some platform-conditional
-components are included for both distribution targets. Model terms accompany
-the target-specific model bundled in Release packages.
-"""
+"""Collect the actual target's Rust, embedded asset and native runtime notices."""
 import argparse
-import hashlib
 import json
 from pathlib import Path
+import subprocess
+from build import ROOT, MAC
+from prepare_llama import REV
 
-ROOT=Path(__file__).resolve().parents[1]
-ROOTS={'project':ROOT,'pdfium':ROOT/'.work/pdfium-workspace/pdfium','wx':ROOT/'.work/src/wxWidgets','llama':ROOT/'.work/src/llama.cpp','resources':ROOT/'.work/resources'}
-# Full upstream documents, without removing disclaimers or exception clauses.
-PLAN=[
- ('Application original source/resources','project',['LICENSE']),
- ('PDFium, including embedded Foxit font/CMap data','pdfium',['LICENSE']),
- ('Chromium support and PartitionAlloc','project',['licenses/Chromium-BSD.txt']),
- ('PDFium / Anti-Grain Geometry 2.3','pdfium',['third_party/agg23/copying']),
- ('PDFium / Abseil','pdfium',['third_party/abseil-cpp/LICENSE']),
- ('PDFium / Brotli decoder','pdfium',['third_party/brotli/LICENSE']),
- ('PDFium / Dragonbox (Boost alternative selected)','pdfium',['third_party/dragonbox/src/LICENSE-Boost']),
- ('PDFium / fast_float (MIT alternative selected)','pdfium',['third_party/fast_float/src/LICENSE-MIT']),
- ('PDFium / FreeType (FTL alternative selected)','pdfium',['third_party/freetype/FTL.TXT']),
- ('PDFium / Little CMS','pdfium',['third_party/lcms/src/LICENSE']),
- ('PDFium / OpenJPEG','pdfium',['third_party/libopenjpeg/src/LICENSE']),
- ('PDFium / HarfBuzz','pdfium',['third_party/harfbuzz/src/COPYING','third_party/harfbuzz/src/src/ms-use/COPYING']),
- ('PDFium / Highway','pdfium',['third_party/highway/src/LICENSE']),
- ('PDFium / ICU and Unicode data','pdfium',['third_party/icu/LICENSE']),
- ('PDFium / libjpeg-turbo','pdfium',['third_party/libjpeg_turbo/LICENSE.md','third_party/libjpeg_turbo/README.ijg']),
- ('PDFium / libyuv','pdfium',['third_party/libyuv/LICENSE']),
- ('PDFium / zlib','pdfium',['third_party/zlib/LICENSE']),
- ('PDFium / LLVM libc++','pdfium',['third_party/libc++/src/LICENSE.TXT']),
- ('PDFium / LLVM libc++abi','pdfium',['third_party/libc++abi/src/LICENSE.TXT']),
- ('PDFium / LLVM libc subset','pdfium',['third_party/llvm-libc/src/LICENSE.TXT']),
- ('LLVM compiler runtime','project',['licenses/LLVM-compiler-rt.txt']),
- ('wxWidgets core/base (wxWindows exception applies)','wx',['docs/licence.txt','docs/lgpl.txt']),
- ('wxWidgets / PCRE2','wx',['3rdparty/pcre/LICENCE.md','3rdparty/pcre/deps/sljit/LICENSE']),
- ('wxWidgets / libpng','wx',['src/png/LICENSE']),
- ('wxWidgets / libtiff','wx',['src/tiff/LICENSE.md']),
- ('wxWidgets / Independent JPEG Group','wx',['src/jpeg/README']),
- ('wxWidgets / zlib','wx',['src/zlib/LICENSE']),
- ('wxWidgets / libwebp and SharpYUV','wx',['3rdparty/libwebp/COPYING']),
- ('llama.cpp and ggml','llama',['LICENSE']),
- ('llama.cpp / xxHash','llama',['vendor/hash/xxhash/LICENSE']),
- ('llama.cpp / SHA-256','llama',['vendor/hash/sha256/LICENSE']),
- ('llama.cpp / rotate-bits','llama',['vendor/hash/rotate-bits/LICENSE.md']),
- ('SQLite public-domain declaration','project',['licenses/SQLite-public-domain.txt']),
- ('Page OCR / Tesseract and tessdata_fast','project',['licenses/Tesseract-Apache-2.0.txt']),
- ('Page OCR / Leptonica','project',['licenses/Leptonica.txt']),
- ('Page OCR / CLD2','project',['licenses/CLD2-Apache-2.0.txt']),
- ('Noto Sans CJK JP Regular font','resources',['NotoSansCJK-LICENSE.txt']),
- ('Windows PLaMo Rust dependencies (locked crates)','project',['licenses/Plamo-Rust-crates.txt']),
- ('PLaMo Community License for the macOS bundled model','project',['licenses/PLaMo-Community-ja.txt','licenses/PLaMo-Community-en.txt']),
- ('PLaMo Community License for Windows derived S4 model','project',['licenses/PLaMo-BF16-Community-ja.txt','licenses/PLaMo-BF16-Community-en.txt']),
-]
+def license_files(directory):
+    names = ("license", "licence", "copying", "notice", "thirdpartynotices", "copyright")
+    return sorted(p for p in directory.rglob("*") if p.is_file() and
+                  (p.name.lower().startswith(names) or "_license" in p.name.lower())
+                  and p.suffix.lower() not in (".rs", ".cs", ".cpp", ".h", ".json", ".py")
+                  and ".git" not in p.parts)
 
-def read_lf(path):
-    return path.read_bytes().replace(b'\r\n',b'\n')
+def collect():
+    target = "aarch64-apple-darwin" if MAC else "x86_64-pc-windows-msvc"
+    def cargo(*args):
+        return subprocess.check_output(["cargo", *args], cwd=ROOT, encoding="utf-8")
+    selected = set(cargo("tree", "--locked", "-p", "pdf-reader", "--target", target, "--edges",
+                         "normal", "--prefix", "none", "--format", "{p}", "--no-dedupe").splitlines())
+    packages = json.loads(cargo("metadata", "--locked", "--filter-platform", target, "--format-version", "1"))
+    notices = {}
+    inventory = []
+    def add(label, files):
+        for path in files:
+            text = path.read_text(encoding="utf-8-sig", errors="replace").strip()
+            if text:
+                owners = notices.setdefault(text, [])
+                if label not in owners:
+                    owners.append(label)
+    for p in sorted(packages["packages"], key=lambda p: p["name"]):
+        if not p["source"]: continue
+        label = f"{p['name']} v{p['version']}"
+        if label not in selected: continue
+        inventory.append(label + "  " + str(p["license"]))
+        add(label, license_files(Path(p["manifest_path"]).parent))
+    if MAC:
+        upstream = ROOT / ".work" / ("llama-" + REV)
+        add("llama.cpp / ggml " + REV, [upstream / "LICENSE", *license_files(upstream / "licenses")])
+        add("Apple clang compiler-rt", [ROOT / "licenses/LLVM-compiler-rt.txt"])
+    else:
+        assets = json.loads((ROOT / "apps/windows/obj/project.assets.json").read_text(encoding="utf-8-sig"))
+        folders = [Path(p) for p in assets["packageFolders"]]
+        for label, pkg in sorted(assets["libraries"].items()):
+            if pkg["type"] != "package": continue
+            directory = next(f / pkg["path"] for f in folders if (f / pkg["path"]).is_dir())
+            add(label, license_files(directory))
+        # .NET's self-contained framework packs are SDK downloads and may be
+        # outside project.assets.json's resolved package libraries.
+        runtime = json.loads((ROOT / "apps/windows/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/offline-pdf-translator.runtimeconfig.json").read_text())
+        for framework in runtime["runtimeOptions"].get("includedFrameworks", []):
+            name, version = framework["name"], framework["version"]
+            for folder in folders:
+                directory = folder / (name.lower() + ".runtime.win-x64") / version
+                if directory.is_dir():
+                    add(name + " " + version, license_files(directory))
+                    break
+    sections = ["Offline PDF Translator — Built with PLaMo", target, "\n".join(inventory)]
+    sections.extend("--- " + ", ".join(owners) + " ---\n" + text for text, owners in notices.items())
+    return "\n\n".join(sections) + "\n"
 
-def outputs():
-    lock=json.loads((ROOT/'deps/third_party.lock.json').read_text())
-    heading='''Offline PDF Translator — Licenses and third-party notices
-
-Original application source, fixtures and icon: MIT License (see below).
-Third-party components retain their own licenses. Release ZIPs include PLaMo
-model weights under the PLaMo Community License reproduced below.
-
-Built with PLaMo
-Bundled models: PLaMo 3 Translate 0.8B Q4_K_M (pfnet, macOS) and
-PLaMo 3 Translate 0.8B x86 S4 v7 (derived from pfnet BF16, Windows).
-The Windows ZIP also includes Rust-1.100.0-COPYRIGHT-library.html, the Rust
-standard library copyright notices from the pinned compiler distribution.
-Model use and publication/provision of model outputs are subject to the PLaMo
-Community License reproduced at the end for offline reference. In particular,
-models trained using outputs are subject to that agreement. Consult the full
-terms and the official model distribution before use.
-
-This software is based in part on the work of the Independent JPEG Group.
-Portions of this software are copyright © The FreeType Project
-(www.freetype.org). All rights reserved.
-PDFium's embedded font and CMap source includes original code copyright
-2014 Foxit Software Inc., under PDFium's stated license.
-
-The following documents are reproduced verbatim from the recorded inputs.
-Optional alternatives are explicitly identified in the section names.
-Pinned source revisions are recorded in deps/third_party.lock.json; PDFium's
-transitive commits follow that revision's DEPS. Complete input hashes and
-source paths are recorded in deps/licenses.lock.json. Windows uses the
-PLaMo Rust engine; macOS uses upstream llama.cpp with Metal.
-'''
-    records=[];text=[heading]
-    for component,root,files in PLAN:
-        text.extend(['\n'+'='*76+'\n',component+'\n','='*76+'\n'])
-        for name in files:
-            data=read_lf(ROOTS[root]/name)
-            encoding='iso-8859-1' if (root,name)==('pdfium','third_party/freetype/FTL.TXT') else 'utf-8-sig'
-            body=data.decode(encoding)
-            records.append({'component':component,'root':root,'path':name,'encoding':encoding,'sha256':hashlib.sha256(data).hexdigest()})
-            text.extend(['\n--- '+name+' ---\n\n',body,'\n'])
-    notice=''.join(text).encode('utf-8')
-    manifest={'schema':1,'dependency_lock_sha256':hashlib.sha256(read_lf(ROOT/'deps/third_party.lock.json')).hexdigest(),
-      'notices_sha256':hashlib.sha256(notice).hexdigest(),'inputs':records,
-      'extra_notice_assets':{'licenses/Rust-1.100.0-COPYRIGHT-library.html':hashlib.sha256(read_lf(ROOT/'licenses/Rust-1.100.0-COPYRIGHT-library.html')).hexdigest()},
-      'origins':{'pdfium':lock['dependencies']['PDFium'],'wx':lock['dependencies']['wxWidgets'],'llama':lock['dependencies']['llama.cpp'],
-       'LLVM-compiler-rt':'https://raw.githubusercontent.com/llvm/llvm-project/e063be79/compiler-rt/LICENSE.TXT',
-       'Chromium-BSD':'https://chromium.googlesource.com/chromium/src/+/refs/heads/main/LICENSE (text SHA-256 fixed in inputs)',
-       'model_license':{'repository':lock['model_fixture']['repository'],'revision':lock['model_fixture']['revision'],'paths':['LICENSE/ja','LICENSE/en']},
-       'windows_model_license':{'repository':lock['windows_model_fixture']['repository'],'revision':lock['windows_model_fixture']['revision'],'paths':['LICENSE/ja','LICENSE/en']},
-       'rust_std':'Rust 1.100.0 official share/doc/rust/COPYRIGHT-library.html'}}
-    return notice,(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode('utf-8')
-
-def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--check',action='store_true');args=parser.parse_args()
-    notice,manifest=outputs()
-    for path,data in [(ROOT/'THIRD_PARTY_NOTICES.txt',notice),(ROOT/'deps/licenses.lock.json',manifest)]:
-        if args.check:
-            if not path.exists() or read_lf(path)!=data:raise SystemExit(f'Notice/input drift: {path.name}; inspect licenses before regenerating')
-        else:path.write_bytes(data)
-    print(f'Verified {sum(len(files) for _,_,files in PLAN)} license inputs; notices {len(notice)} bytes')
-if __name__=='__main__':main()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path)
+    args = parser.parse_args()
+    args.output.write_text(collect(), encoding="utf-8")

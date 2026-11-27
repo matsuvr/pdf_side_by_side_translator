@@ -1,3 +1,5 @@
+> 旧版の実装・検証記録です。現行版の構成は[設計](../DESIGN.md)、ビルド方法は[開発手順](development.md)を参照してください。
+
 # Windows版の標準推論エンジン
 
 Windows x64 では元のPLaMo 3 Translate 0.8B BF16から生成した P4X86 v7 専用ウェイトと

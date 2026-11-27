@@ -21,4 +21,7 @@ __pycache__/
 *.pfx
 *.key
 
-/src/platform/windows/plamo-rs/target/
+
+/target/
+/apps/windows/bin/
+/apps/windows/obj/
