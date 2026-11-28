@@ -48,7 +48,7 @@ pub(crate) fn tile8(src:&[u8],n:usize,m:usize)->Vec<u8>{
       }}
     });buf
 }
-fn parse_tokenizer(text:&[u8])->Result<HashMap<String,Value>>{
+pub(crate) fn parse_tokenizer(text:&[u8])->Result<HashMap<String,Value>>{
     let text=std::str::from_utf8(text)?;
     let mut tokens=Vec::with_capacity(107520);let mut scores=Vec::with_capacity(107520);let mut types=Vec::with_capacity(107520);
     for line in text.lines(){

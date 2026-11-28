@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/reader", "crates/plamo"]
+exclude = ["experiments/metal-q4"]
 default-members = ["crates/reader"]
 resolver = "3"
 

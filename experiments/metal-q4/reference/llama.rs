@@ -33,8 +33,7 @@ impl Drop for Context {
 }
 pub struct Translator {
     model: NonNull<sys::llama_model>,
-    stream: Stream,
-    gpu: bool,
+    _stream: Stream,
 }
 impl Drop for Translator {
     fn drop(&mut self) {
@@ -70,26 +69,19 @@ impl Translator {
             sys::llama_log_set(Some(quiet), std::ptr::null_mut());
             sys::llama_backend_init();
         });
-        for gpu in [true, false] {
-            if let Some(model) = Self::load(&stream, gpu) {
-                return Ok(Self { model, stream, gpu });
-            }
+        if !unsafe { sys::llama_supports_gpu_offload() } {
+            return Err("Metal GPU required for the reference benchmark".into());
         }
-        Err("翻訳モデルを読み込めません。".into())
-    }
-    fn load(stream: &Stream, gpu: bool) -> Option<NonNull<sys::llama_model>> {
         let mut params = unsafe { sys::llama_model_default_params() };
-        let mut no_devices = std::ptr::null_mut();
-        if !gpu {
-            params.devices = &mut no_devices;
-        }
-        params.n_gpu_layers = if gpu { -1 } else { 0 };
+        params.n_gpu_layers = -1;
         params.load_mode = sys::llama_load_mode_LLAMA_LOAD_MODE_NONE;
-        unsafe {
-            libc::rewind(stream.0.as_ptr());
-        }
-        NonNull::new(unsafe {
+        let model = NonNull::new(unsafe {
             sys::llama_model_load_from_file_ptr(stream.0.as_ptr().cast(), params)
+        })
+        .ok_or("翻訳モデルを読み込めません。")?;
+        Ok(Self {
+            model,
+            _stream: stream,
         })
     }
 
@@ -117,10 +109,10 @@ impl Translator {
     pub fn translate(
         &mut self,
         source: &str,
-        easy: bool,
         cancelled: impl Fn() -> bool,
-        mut publish: impl FnMut(&str),
-    ) -> Result<String, String> {
+        mut observe: Option<&mut dyn FnMut(&[f32], &[f32]) -> Result<(), String>>,
+    ) -> Result<plamo_metal_q4::Translation, String> {
+        let start = std::time::Instant::now();
         if source.contains("<|plamo:") {
             return Err("モデルの予約文字列が本文に含まれています。".into());
         }
@@ -130,12 +122,11 @@ impl Translator {
             true,
         )?;
         tokens.extend(self.tokenize(source, false, false)?);
-        let output = if easy {
-            "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja-easy<|plamo:msg|>"
-        } else {
-            "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>"
-        };
-        tokens.extend(self.tokenize(output, false, true)?);
+        tokens.extend(self.tokenize(
+            "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja<|plamo:key|>form<|plamo:val|>plain<|plamo:msg|>",
+            false,
+            true,
+        )?);
         let capacity =
             unsafe { sys::llama_model_n_ctx_train(self.model.as_ptr()) }.clamp(0, 32768) as usize;
         if tokens.len() >= capacity {
@@ -146,23 +137,16 @@ impl Translator {
             .min(capacity - tokens.len());
         let mut params = unsafe { sys::llama_context_default_params() };
         params.n_ctx = (tokens.len() + limit) as u32;
+        if observe.is_some() {
+            params.embeddings = true;
+            params.pooling_type = sys::llama_pooling_type_LLAMA_POOLING_TYPE_NONE;
+        }
         params.n_batch = 128;
         params.n_ubatch = 128;
-        let create_context = |model: NonNull<sys::llama_model>| {
-            NonNull::new(unsafe { sys::llama_init_from_model(model.as_ptr(), params) })
-        };
-        let mut context = create_context(self.model);
-        if context.is_none()
-            && self.gpu
-            && !cancelled()
-            && let Some(cpu) = Self::load(&self.stream, false)
-        {
-            unsafe { sys::llama_model_free(self.model.as_ptr()) };
-            self.model = cpu;
-            self.gpu = false;
-            context = create_context(cpu);
-        }
-        let ctx = Context(context.ok_or("推論用のメモリを確保できません。")?);
+        let ctx = Context(
+            NonNull::new(unsafe { sys::llama_init_from_model(self.model.as_ptr(), params) })
+                .ok_or("推論用のメモリを確保できません。")?,
+        );
         let evaluate = |ids: &mut [i32]| {
             if cancelled() {
                 return Err("cancelled");
@@ -179,6 +163,7 @@ impl Translator {
         }
         let vocab = unsafe { sys::llama_model_get_vocab(self.model.as_ptr()) };
         let n_vocab = unsafe { sys::llama_vocab_n_tokens(vocab) } as usize;
+        let mut first_scores = std::time::Duration::ZERO;
         let mut result = Vec::new();
         let mut valid = 0;
         for generated in 0..=limit {
@@ -187,7 +172,19 @@ impl Translator {
             }
             let ptr = NonNull::new(unsafe { sys::llama_get_logits_ith(ctx.0.as_ptr(), -1) })
                 .ok_or("推論結果を取得できません。")?;
+            if generated == 0 {
+                first_scores = start.elapsed();
+            }
             let scores = unsafe { std::slice::from_raw_parts(ptr.as_ptr(), n_vocab) };
+            if let Some(callback) = observe.as_mut() {
+                let hidden =
+                    NonNull::new(unsafe { sys::llama_get_embeddings_ith(ctx.0.as_ptr(), -1) })
+                        .ok_or("missing output activation")?;
+                callback(
+                    unsafe { std::slice::from_raw_parts(hidden.as_ptr(), 1536) },
+                    scores,
+                )?;
+            }
             let mut best = f32::NEG_INFINITY;
             let mut winner = None;
             for (i, &score) in scores.iter().enumerate() {
@@ -241,18 +238,20 @@ impl Translator {
             }
             let (token, bytes) = winner.ok_or("訳文の文字を復号できません。")?;
             if bytes.is_empty() {
-                return String::from_utf8(result).map_err(|e| e.to_string());
+                return Ok(plamo_metal_q4::Translation {
+                    text: String::from_utf8(result).map_err(|e| e.to_string())?,
+                    input: tokens.len(),
+                    output: generated,
+                    prefill: first_scores,
+                    total: start.elapsed(),
+                });
             }
             if generated == limit {
                 break;
             }
             result.extend(bytes);
-            let previous = valid;
-            valid += std::str::from_utf8(&result[previous..])
+            valid += std::str::from_utf8(&result[valid..])
                 .map_or_else(|e| e.valid_up_to(), |s| s.len());
-            if valid != previous {
-                publish(std::str::from_utf8(&result[previous..valid]).map_err(|e| e.to_string())?);
-            }
             evaluate(&mut [token])?;
         }
         Err("ページの翻訳が生成上限に達しました。".into())

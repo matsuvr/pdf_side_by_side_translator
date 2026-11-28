@@ -10,7 +10,7 @@ PDFを開く、原文を読む、ページをめくる。この操作に現在�
 | Macのウィンドウ、本文表示、ファイル選択 | SwiftUI / AppKit。訳文は `NSFont.preferredFont(forTextStyle: .body)` を使う読み取り専用NSTextView |
 | PDFと閲覧セッション | Rustの `crates/reader`。hayroによる描画、グリフの読順整理、検索、OCRの呼び出し、ページ要求の世代管理、翻訳キャッシュ |
 | Windowsの推論 | Rustの `crates/plamo`。同梱モデルを検証し、P4X86 S4のCPUカーネルを直接呼び出す |
-| Macの推論 | 固定リビジョンの上流llama.cppを静的リンクし、ヘッダーからRustバインディングを生成する |
+| Macの推論 | Rustで実装した4bit推論。ビルド時にMetalライブラリを生成し、Apple SiliconのGPUで実行する |
 
 UIが渡せる文書操作はPDFを開く、ページを選ぶ、本文を検索する、の三つ。C ABIのスナップショットにはページ番号、画像、抽出本文、訳文、処理状態をまとめる。各UIはスナップショットの所有期間内に必要なデータを取り出す。翻訳の入力はRustが表示中のPDFから取得する。
 

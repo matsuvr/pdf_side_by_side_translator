@@ -4,7 +4,7 @@
 
 ## Quintによる形式検証
 
-Node.js 18以降、npm、JDK 21を用意し、リポジトリのルートで実行します。初回はQuintの開発依存とモデル検査器を取得します。macOSでは下記のllama.cppの準備を先に行い、Pythonのコマンドには `python3` を使います。
+Node.js 18以降、npm、JDK 21を用意し、リポジトリのルートで実行します。初回はQuintの開発依存とモデル検査器を取得します。macOSではPythonのコマンドには `python3` を使います。
 
 ```sh
 npm ci --prefix formal
@@ -35,13 +35,13 @@ powershell -NoProfile -File tests/native/WindowsViewerTest.ps1 -Exe build/native
 
 ## macOS / Apple Silicon
 
-XcodeコマンドラインツールとCMakeが必要です。ビルドスクリプトが固定リビジョンのllama.cppを `.work` に取得し、Metalライブラリを埋め込みます。Rust側のC APIは同じチェックアウトのヘッダーから生成します。
+XcodeとMetal Toolchainを使って、専用のMetalシェーダーをmacOS 14向けのMetalライブラリにコンパイルします。モデルの作り方と測定条件は[Metal版の検証記録](../experiments/metal-q4/README.md)を参照してください。
 
 ```sh
-python3 scripts/build.py --model-file "$HOME/Models/plamo-3-translate-0.8b-Q4_K_M.gguf"
+python3 scripts/build.py --model-file "$HOME/Models/plamo3-translate-0.8b-metal-q4.safetensors"
 open "build/native/macos-arm64/Offline PDF Translator.app"
 export MACOSX_DEPLOYMENT_TARGET=14.0
-export PDF_READER_TEST_MODEL="$PWD/build/native/macos-arm64/plamo-3-translate-0.8b-Q4_K_M.gguf"
+export PDF_READER_TEST_MODEL="$PWD/build/native/macos-arm64/plamo3-translate-0.8b-metal-q4.safetensors"
 cargo test --locked --release -p pdf-reader -- --include-ignored
 ```
 
@@ -56,4 +56,4 @@ swiftc -swift-version 5 -parse-as-library -DVIEWER_UI_TEST -target arm64-apple-m
 "$out/mac-viewer-test" "$PWD/tests/fixtures/P01-simple.pdf"
 ```
 
-モデル不要の回帰テストには `cargo test --locked --release -p pdf-reader` を使います。Macの初回は先に `python3 scripts/prepare_llama.py` を実行してください。ビルド、fixture生成、署名、ZIP作成はすべて開発マシンで行います。
+モデル不要の回帰テストには `cargo test --locked --release -p pdf-reader` を使います。ビルド、fixture生成、署名、ZIP作成はすべて開発マシンで行います。

@@ -14,15 +14,24 @@ pub struct Tokenizer {
 }
 impl Tokenizer {
     pub(crate) fn load(g: &Weights) -> Result<Self> {
-        let tokens = match g.meta.get("tokenizer.ggml.tokens") {
+        Self::from_metadata(&g.meta)
+    }
+
+    /// Read the official vocabulary bundled alongside platform-specific weights.
+    pub fn from_jsonl(bytes: &[u8]) -> Result<Self> {
+        Self::from_metadata(&crate::model::parse_tokenizer(bytes)?)
+    }
+
+    fn from_metadata(meta: &HashMap<String, Value>) -> Result<Self> {
+        let tokens = match meta.get("tokenizer.ggml.tokens") {
             Some(Value::Strings(t)) => t.clone(),
             _ => return Err(err("missing tokens")),
         };
-        let scores = match g.meta.get("tokenizer.ggml.scores") {
+        let scores = match meta.get("tokenizer.ggml.scores") {
             Some(Value::Floats(t)) => t,
             _ => return Err(err("missing scores")),
         };
-        let types = match g.meta.get("tokenizer.ggml.token_type") {
+        let types = match meta.get("tokenizer.ggml.token_type") {
             Some(Value::Ints(t)) => t.clone(),
             _ => return Err(err("missing token types")),
         };
@@ -191,7 +200,7 @@ impl Tokenizer {
             i = j;
         }
     }
-    pub(crate) fn output_piece(&self, id: u32) -> Option<Vec<u8>> {
+    pub fn output_piece(&self, id: u32) -> Option<Vec<u8>> {
         let i = id as usize;
         let token = self.tokens.get(i)?;
         if matches!(self.types[i], 2 | 3 | 5) || token.starts_with("<|plamo:") { return None; }
