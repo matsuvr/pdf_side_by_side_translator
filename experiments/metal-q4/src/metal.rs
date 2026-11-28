@@ -5,11 +5,70 @@ use objc2_foundation::NSString;
 use objc2_metal::*;
 use std::ptr::NonNull;
 
-include!(concat!(env!("OUT_DIR"), "/symbols.rs"));
-
 type Object<T> = Retained<ProtocolObject<T>>;
 pub type Pipeline = Object<dyn MTLComputePipelineState>;
+
 pub struct Buffer(Object<dyn MTLBuffer>);
+
+/// A slice view into a Metal buffer at a 16-byte-aligned byte offset.
+#[derive(Clone, Copy)]
+pub struct BufferSlice<'a> {
+    pub buffer: &'a Buffer,
+    pub offset: usize,
+}
+
+impl Buffer {
+    pub fn slice(&self, offset: usize) -> BufferSlice<'_> {
+        BufferSlice {
+            buffer: self,
+            offset,
+        }
+    }
+    pub fn as_slice(&self) -> BufferSlice<'_> {
+        BufferSlice {
+            buffer: self,
+            offset: 0,
+        }
+    }
+    /// Safety: Caller must ensure no GPU work is currently accessing this buffer.
+    pub unsafe fn bytes_mut(&self) -> &mut [u8] {
+        let ptr = self.0.contents().cast::<u8>();
+        unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), self.0.length()) }
+    }
+    /// Safety: Caller must ensure no GPU work is currently writing to this buffer.
+    pub unsafe fn bytes(&self) -> &[u8] {
+        let ptr = self.0.contents().cast::<u8>();
+        unsafe { std::slice::from_raw_parts(ptr.as_ptr(), self.0.length()) }
+    }
+    pub fn write_slice<T: bytemuck::Pod>(&self, data: &[T]) {
+        let src = bytemuck::cast_slice::<T, u8>(data);
+        assert!(src.len() <= self.0.length());
+        unsafe {
+            self.bytes_mut()[..src.len()].copy_from_slice(src);
+        }
+    }
+    pub fn read_slice<T: bytemuck::Pod>(&self, count: usize) -> Vec<T> {
+        let byte_len = count * std::mem::size_of::<T>();
+        assert!(byte_len <= self.0.length());
+        let bytes = unsafe { &self.bytes()[..byte_len] };
+        bytemuck::cast_slice(bytes).to_vec()
+    }
+    pub fn read_u32_at(&self, index: usize) -> u32 {
+        let ptr = self.0.contents().cast::<u32>();
+        assert!((index + 1) * 4 <= self.0.length());
+        unsafe { *ptr.as_ptr().add(index) }
+    }
+    pub fn write_u32_at(&self, index: usize, value: u32) {
+        let ptr = self.0.contents().cast::<u32>();
+        assert!((index + 1) * 4 <= self.0.length());
+        unsafe {
+            *ptr.as_ptr().add(index) = value;
+        }
+    }
+    pub fn read_scores(&self) -> Vec<f32> {
+        self.read_slice(self.0.length() / 4)
+    }
+}
 
 pub struct Gpu {
     device: Object<dyn MTLDevice>,
@@ -41,15 +100,14 @@ impl Gpu {
             states: Default::default(),
         })
     }
+
     pub fn pipeline(&self, name: &str) -> Result<Pipeline> {
         if let Some(state) = self.states.borrow().get(name) {
             return Ok(state.clone());
         }
         let fun = self
             .library
-            .newFunctionWithName(&NSString::from_str(
-                symbol(name).context("unknown Metal kernel")?,
-            ))
+            .newFunctionWithName(&NSString::from_str(name))
             .with_context(|| format!("missing Metal function {name}"))?;
         let state = self
             .device
@@ -64,9 +122,8 @@ impl Gpu {
             .insert(name.to_owned(), state.clone());
         Ok(state)
     }
+
     pub fn upload(&self, bytes: &[u8]) -> Result<Buffer> {
-        // Metal copies the entire slice before returning. Shared storage is
-        // CPU-visible on Apple Silicon and remains owned by the Metal buffer.
         let ptr = NonNull::from(bytes).cast();
         Ok(Buffer(
             unsafe {
@@ -79,13 +136,23 @@ impl Gpu {
             .context("Metal upload allocation failed")?,
         ))
     }
+
     pub fn empty(&self, bytes: usize) -> Result<Buffer> {
         Ok(Buffer(
             self.device
-                .newBufferWithLength_options(bytes, MTLResourceOptions::StorageModeShared)
+                .newBufferWithLength_options(bytes.max(16), MTLResourceOptions::StorageModeShared)
                 .context("Metal buffer allocation failed")?,
         ))
     }
+
+    pub fn empty_private(&self, bytes: usize) -> Result<Buffer> {
+        Ok(Buffer(
+            self.device
+                .newBufferWithLength_options(bytes.max(16), MTLResourceOptions::StorageModePrivate)
+                .context("Metal private buffer allocation failed")?,
+        ))
+    }
+
     pub fn submit(&self, record: impl FnOnce(&Commands)) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
             let command = self
@@ -95,7 +162,6 @@ impl Gpu {
             let encoder = command
                 .computeCommandEncoder()
                 .context("Metal encoder unavailable")?;
-            // The default serial encoder enforces all producer/consumer dependencies.
             record(&Commands(encoder.clone()));
             encoder.endEncoding();
             command.commit();
@@ -108,43 +174,33 @@ impl Gpu {
         })
     }
 }
-impl Buffer {
-    // Only called after the submitting command has completed, with exclusive
-    // access to this translation session. Each buffer was allocated at offset zero.
-    pub fn read_scores(&self) -> Vec<f32> {
-        let ptr = self.0.contents().cast::<f32>();
-        unsafe { std::slice::from_raw_parts(ptr.as_ptr(), self.0.length() / 4) }.to_vec()
-    }
-}
 
 pub struct Commands(Object<dyn MTLComputeCommandEncoder>);
+
 impl Commands {
-    pub fn dispatch(
+    pub fn dispatch<P: bytemuck::Pod>(
         &self,
         pipeline: &Pipeline,
         groups: (usize, usize),
         threads: usize,
-        buffers: &[&Buffer],
-        scalar: Option<u32>,
+        buffers: &[BufferSlice<'_>],
+        params: Option<&P>,
     ) {
         self.0.setComputePipelineState(pipeline);
         for (i, b) in buffers.iter().enumerate() {
-            // Bindings follow the argument order of the generated kernel.
             unsafe {
-                self.0.setBuffer_offset_atIndex(Some(&b.0), 0, i);
+                self.0.setBuffer_offset_atIndex(Some(&b.buffer.0), b.offset, i);
             }
         }
-        // CubeCL groups scalar arguments into an 8-byte-aligned info block.
-        // The fixed-grid kernels compute all addresses from validated model
-        // dimensions and never index variable tensor metadata.
-        let mut info = [0u32; 10];
-        info[0] = scalar.unwrap_or(0);
-        unsafe {
-            self.0.setBytes_length_atIndex(
-                NonNull::from(&info).cast(),
-                std::mem::size_of_val(&info),
-                buffers.len(),
-            );
+        if let Some(p) = params {
+            let bytes = bytemuck::bytes_of(p);
+            unsafe {
+                self.0.setBytes_length_atIndex(
+                    NonNull::from(bytes).cast(),
+                    bytes.len(),
+                    buffers.len(),
+                );
+            }
         }
         self.0.dispatchThreadgroups_threadsPerThreadgroup(
             MTLSize {

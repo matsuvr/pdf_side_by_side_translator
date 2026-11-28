@@ -17,26 +17,60 @@ mod baseline {
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let [cmd, gguf, tok, out] = args.as_slice()
+        && cmd == "convert"
+    {
+        return convert::convert(gguf.as_ref(), tok.as_ref(), out.as_ref());
+    }
     if let [cmd, dir, out] = args.as_slice()
         && cmd == "convert"
     {
-        return convert::convert(dir.as_ref(), out.as_ref());
+        let dir = Path::new(dir);
+        return convert::convert(
+            &dir.join("plamo-3-translate-0.8b-Q4_K_M.gguf"),
+            &dir.join("tokenizer.jsonl"),
+            out.as_ref(),
+        );
+    }
+    #[cfg(feature = "reference")]
+    if let [cmd, q4_model, gguf_model, tsv_path] = args.as_slice()
+        && cmd == "compare-tsv"
+    {
+        let e = Engine::open(Path::new(q4_model))?;
+        let mut r = baseline::Translator::open(Path::new(gguf_model)).map_err(anyhow::Error::msg)?;
+        let content = std::fs::read_to_string(tsv_path)?;
+        for line in content.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((lang, src)) = line.split_once('\t') else {
+                continue;
+            };
+            let ref_out = r
+                .translate(src, || false, None)
+                .map_err(anyhow::Error::msg)?
+                .text
+                .replace('\n', "\\n");
+            let q4_out = e.translate(src, || false)?.text.replace('\n', "\\n");
+            let eq = if ref_out == q4_out { "EQ" } else { "DIFF" };
+            println!("{lang}\t{eq}\t{src}\t{ref_out}\t{q4_out}");
+        }
+        return Ok(());
     }
     let [method, model, pdf, page, runs] = args.as_slice() else {
         bail!(
-            "usage: plamo-metal-q4 convert BF16_DIRECTORY OUTPUT | q4|reference MODEL PDF PAGE RUNS | compare-head Q4_MODEL PDF PAGE GGUF_MODEL"
+            "usage: plamo-metal-q4 convert GGUF TOKENIZER OUTPUT | q4|verify-head|reference MODEL PDF PAGE RUNS | compare-head Q4_MODEL PDF PAGE GGUF_MODEL"
         );
     };
     let page: usize = page.to_str().unwrap_or("").parse()?;
     #[cfg(feature = "reference")]
     let reference_path = (method == "compare-head").then(|| Path::new(runs));
-    let runs: usize = if method == "compare-head" {
+    let runs: usize = if method == "compare-head" || method == "verify-head" {
         1
     } else {
         runs.to_str().unwrap_or("").parse()?
     };
     ensure!(page > 0 && runs > 0);
-    // Development benchmark. Both engines receive exactly the same PDF extraction.
     let page = page.to_string();
     let pdf = std::fs::canonicalize(pdf)?;
     let extraction = Command::new("pdftotext")
@@ -52,6 +86,21 @@ fn main() -> Result<()> {
     let page_text = std::str::from_utf8(&extraction.stdout)?.trim();
     ensure!(!page_text.is_empty());
     let opened = Instant::now();
+    if method == "verify-head" {
+        let e = Engine::open(Path::new(model))?;
+        let fast = e.translate(page_text, || false)?;
+        let full = e.translate_full_head(page_text, || false)?;
+        let exact = fast.text == full.text;
+        println!(
+            "verify-head exact_match={exact} fast_out={} ({:.4}s) full_out={} ({:.4}s)",
+            fast.output,
+            fast.total.as_secs_f64(),
+            full.output,
+            full.total.as_secs_f64()
+        );
+        ensure!(exact, "2-stage lm_head differed from full lm_head!");
+        return Ok(());
+    }
     #[cfg(feature = "reference")]
     if let Some(reference_path) = reference_path {
         let e = Engine::open(Path::new(model))?;

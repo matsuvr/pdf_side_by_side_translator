@@ -3,5 +3,5 @@ mod metal;
 
 pub use engine::{Engine, Translation};
 pub const MODEL_FILENAME: &str = "plamo3-translate-0.8b-metal-q4.safetensors";
-pub const MODEL_BYTES: usize = 504729523;
-pub const MODEL_SHA256: &str = "c57e25b3c25b5f2ad4bfecb4f70155a276a854f5d1dc375bd26613b515d385f8";
+pub const MODEL_BYTES: usize = 606167971;
+pub const MODEL_SHA256: &str = "61a174371a5163e7a86fe90307e1e06e46c194646ebcef88e8ebd2a20e87b3d0";

@@ -35,7 +35,7 @@ powershell -NoProfile -File tests/native/WindowsViewerTest.ps1 -Exe build/native
 
 ## macOS / Apple Silicon
 
-XcodeとMetal Toolchainを使って、RustのGPUカーネルをmacOS 14向けのMetalライブラリにコンパイルします。モデルの作り方と測定条件は[Metal版の検証記録](../experiments/metal-q4/README.md)を参照してください。
+XcodeとMetal Toolchainを使って、専用のMetalシェーダーをmacOS 14向けのMetalライブラリにコンパイルします。モデルの作り方と測定条件は[Metal版の検証記録](../experiments/metal-q4/README.md)を参照してください。
 
 ```sh
 python3 scripts/build.py --model-file "$HOME/Models/plamo3-translate-0.8b-metal-q4.safetensors"

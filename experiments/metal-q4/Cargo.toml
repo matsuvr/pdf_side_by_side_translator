@@ -27,11 +27,6 @@ optional = true
 version = "0.72"
 optional = true
 
-[build-dependencies]
-cubecl = { package = "cubecl-core", version = "=0.11.4", default-features = false, features = ["std"] }
-cubecl-cpp = { version = "=0.11.4", default-features = false, features = ["std","metal"] }
-half = "2"
-
 [dependencies.objc2]
 version = "0.6"
 [dependencies.objc2-metal]
